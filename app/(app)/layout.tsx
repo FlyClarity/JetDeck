@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { CreateOrganization, OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import { getTenantContext } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
 export default async function AppLayout({
   children,
@@ -26,6 +28,29 @@ export default async function AppLayout({
     );
   }
 
+  const operator = await prisma.operator.findUnique({
+    where: { clerkOrgId },
+  });
+
+  if (!operator) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+        <span className="text-sm font-medium tracking-wide text-accent">
+          JETDECK
+        </span>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Setting up your operator…
+        </h1>
+        <p className="max-w-md text-muted-foreground">
+          This usually takes a few seconds.
+        </p>
+        <Link href="/dashboard" className="text-sm font-medium text-primary underline underline-offset-4">
+          Refresh
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-1 flex-col">
       <header className="flex items-center justify-between border-b border-border px-6 py-3">
@@ -33,6 +58,12 @@ export default async function AppLayout({
           JETDECK
         </span>
         <div className="flex items-center gap-4">
+          <Link
+            href="/settings"
+            className="text-sm text-muted-foreground hover:text-foreground"
+          >
+            Settings
+          </Link>
           <OrganizationSwitcher />
           <UserButton />
         </div>

@@ -17,6 +17,7 @@ model Operator {
   termsText        String? // shown on client quote page (clickwrap)
   termsVersion     String? // hash of current terms, stored on acceptance
   notifyEmail      String? // internal notification address
+  replyToEmail     String? // operator's charter inbox — Reply-To header on outbound quote emails, routes client replies back through triage
   depositPercent   Float    @default(0.25) // 25% card hold default
   inboundEmail     String? // e.g. requests-clarity@inbound.jetdeck.app
 
