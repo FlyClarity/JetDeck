@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
   output   = "../lib/generated/prisma"
@@ -10,4 +5,279 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+model Operator {
+  id               String   @id @default(cuid())
+  clerkOrgId       String   @unique
+  slug             String   @unique // used in intake URL: /intake/[slug]
+  name             String
+  logoUrl          String?
+  wireInstructions String? // shown on confirmed booking
+  termsText        String? // shown on client quote page (clickwrap)
+  termsVersion     String? // hash of current terms, stored on acceptance
+  notifyEmail      String? // internal notification address
+  depositPercent   Float    @default(0.25) // 25% card hold default
+  inboundEmail     String? // e.g. requests-clarity@inbound.jetdeck.app
+
+  // Operator type controls which modules and UI are shown
+  operatorType String @default("part135")
+  // "part135" -- owns/manages aircraft, full platform
+  // "broker"  -- no fleet, sources third-party aircraft only
+  // "hybrid"  -- owns fleet AND brokers when unavailable (Clarity Aviation model)
+
+  createdAt DateTime @default(now())
+
+  aircraft           Aircraft[]
+  contacts           Contact[]
+  tripRequests       TripRequest[]
+  quotes             Quote[]
+  trips              Trip[]
+  preferredOperators PreferredOperator[]
+  inboundEmails      InboundEmail[]
+}
+
+model Contact {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  firstName  String
+  lastName   String
+  email      String
+  phone      String?
+  company    String?
+  type       String // "direct" | "broker"
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  tripRequests TripRequest[]
+  quotes       Quote[]
+}
+
+model Aircraft {
+  id             String   @id @default(cuid())
+  operatorId     String
+  operator       Operator @relation(fields: [operatorId], references: [id])
+  tailNumber     String
+  make           String
+  model          String
+  category       String // "light" | "midsize" | "super_midsize" | "heavy" | "ultra_long"
+  seats          Int
+  homeBase       String // ICAO
+  currentBase    String? // updated as trips complete (for positioning)
+  hourlyRate     Float
+  repoRate       Float? // if different from hourly (often discounted)
+  minHoursPerDay Float    @default(2.0)
+  hasWifi        Boolean  @default(false)
+  rangeNm        Int?
+  status         String   @default("active")
+  createdAt      DateTime @default(now())
+
+  quotes Quote[]
+}
+
+model TripRequest {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  contactId  String?
+  contact    Contact? @relation(fields: [contactId], references: [id])
+
+  // Source
+  source       String // "email_inbound" | "intake_form" | "manual"
+  rawEmailBody String? // original email text (for email_inbound)
+  rawEmailFrom String? // sender email address
+
+  // Requestor info
+  requestorName    String
+  requestorEmail   String
+  requestorPhone   String?
+  requestorCompany String?
+  requestorType    String // "direct" | "broker"
+
+  // Trip details (AI-extracted or form-entered)
+  tripType        String // "one_way" | "round_trip" | "multi_leg"
+  legs            Json // [{ depAirport, arrAirport, date, timePref, timeFlexible, passengerCount }]
+  aircraftPref    String?
+  budgetMentioned Float?
+  specialRequests String?
+  urgency         String? // "asap" | "normal" | "flexible"
+
+  // AI scoring
+  opportunityScore  String? // "high" | "medium" | "low" | "pass"
+  scoreReason       String?
+  positioningNote   String?
+  historyNote       String?
+  recommendedAction String? // "quote_now" | "review" | "pass"
+  aiProcessedAt     DateTime?
+
+  status String @default("new")
+  // "new" | "scoring" | "ready" | "quoted" | "passed" | "closed"
+
+  createdAt DateTime @default(now())
+  quotes    Quote[]
+}
+
+model Quote {
+  id            String       @id @default(cuid())
+  operatorId    String
+  operator      Operator     @relation(fields: [operatorId], references: [id])
+  quoteNumber   String // "Q-2024-0042"
+  tripRequestId String?
+  tripRequest   TripRequest? @relation(fields: [tripRequestId], references: [id])
+  contactId     String?
+  contact       Contact?     @relation(fields: [contactId], references: [id])
+  aircraftId    String?
+  aircraft      Aircraft?    @relation(fields: [aircraftId], references: [id])
+
+  // Own fleet vs brokered
+  fleetSource String @default("own_fleet")
+  // "own_fleet" -- aircraft from operator's own managed fleet
+  // "brokered"  -- third-party aircraft sourced for this trip
+  brokeredAircraftId String?
+  brokeredAircraft   BrokeredAircraft? @relation(fields: [brokeredAircraftId], references: [id])
+
+  // Itinerary
+  itinerary Json // [{ depAirport, arrAirport, depDt, arrDt, flightHours }]
+
+  // Pricing
+  flightHours    Float
+  hourlyRate     Float
+  repoHours      Float   @default(0)
+  repoRate       Float   @default(0)
+  landingFees    Float   @default(0)
+  handlingFees   Float   @default(0)
+  additionalFees Json    @default("[]") // [{ label, amount }]
+  fetTax         Float   @default(0)
+  discount       Float   @default(0)
+  discountNote   String?
+  subtotal       Float
+  total          Float
+  depositAmount  Float? // calculated from total * operator.depositPercent
+
+  // Brokered trip cost tracking (only populated when fleetSource = "brokered")
+  wholesaleCost Float? // what operator pays the third-party operator
+  brokerMargin  Float? // total - wholesaleCost (calculated, stored for reporting)
+
+  // AI pricing recommendation
+  aiPriceSuggestion Float?
+  aiPriceReasoning  String?
+
+  internalNotes String?
+  validUntil    DateTime
+
+  // Client-facing
+  token  String @unique @default(cuid())
+  status String @default("draft")
+  // "draft" | "sent" | "accepted" | "declined" | "expired" | "converted"
+
+  sentAt DateTime?
+
+  // Legal acceptance record
+  acceptedAt        DateTime?
+  acceptedIp        String?
+  acceptedUserAgent String?
+  acceptedTermsHash String? // hash of exact terms shown at acceptance
+
+  declinedAt DateTime?
+
+  // Stripe
+  stripePaymentIntentId String?
+  cardHoldStatus        String? // "pending" | "authorized" | "released" | "captured"
+
+  createdBy String // Clerk user ID
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  trip Trip?
+}
+
+model Trip {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  tripNumber String // "T-2024-0018"
+  quoteId    String   @unique
+  quote      Quote    @relation(fields: [quoteId], references: [id])
+
+  status String @default("confirmed")
+  // "confirmed" | "awaiting_payment" | "ops_review" | "crew_assigned"
+  // | "pre_flight" | "in_flight" | "completed" | "invoiced" | "closed"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Trusted third-party operators — the operator's sourcing network
+model PreferredOperator {
+  id           String   @id @default(cuid())
+  operatorId   String
+  operator     Operator @relation(fields: [operatorId], references: [id])
+
+  name         String // Company name, e.g. "East Coast Jets"
+  contactName  String?
+  contactEmail String
+  contactPhone String?
+  notes        String? // e.g. "Great King Airs, reliable, responds fast"
+  isActive     Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+
+  brokeredAircraft BrokeredAircraft[]
+}
+
+// A specific tail sourced from a preferred operator for a brokered trip
+model BrokeredAircraft {
+  id                  String            @id @default(cuid())
+  operatorId          String // the JetDeck tenant doing the brokering
+  preferredOperatorId String
+  preferredOperator   PreferredOperator @relation(fields: [preferredOperatorId], references: [id])
+
+  tailNumber String
+  make       String?
+  model      String?
+  category   String? // "light" | "midsize" | etc.
+  seats      Int?
+  homeBase   String?
+
+  createdAt DateTime @default(now())
+
+  quotes Quote[]
+}
+
+model InboundEmail {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+
+  // Raw email data from Postmark
+  fromEmail  String
+  fromName   String?
+  toEmail    String
+  subject    String?
+  bodyText   String
+  bodyHtml   String?
+  receivedAt DateTime
+
+  // AI triage result
+  classification           String
+  classificationConfidence String? // "high" | "medium" | "low"
+  classificationReason     String?
+  aiProcessedAt            DateTime?
+
+  // Action taken
+  status String @default("processing")
+  // "processing" | "trip_request_created" | "attached_to_quote"
+  // | "logged_as_inquiry" | "discarded" | "needs_review" | "manually_resolved"
+
+  // Links to what was created/matched
+  tripRequestId String?
+  quoteId       String?
+
+  // Human correction if AI misclassified
+  reviewedBy      String? // Clerk user ID
+  reviewedAt      DateTime?
+  correctedAction String?
+
+  createdAt DateTime @default(now())
 }
