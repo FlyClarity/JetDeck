@@ -48,8 +48,10 @@ export default async function AppLayout({
           Setting up your operator…
         </h1>
         <p className="max-w-md text-muted-foreground">
-          This usually takes a few seconds.
+          This usually takes a few seconds. If this is the wrong organization,
+          switch below.
         </p>
+        <OrganizationSwitcher hidePersonal />
         <Link href="/dashboard" className="text-sm font-medium text-primary underline underline-offset-4">
           Refresh
         </Link>
