@@ -59,6 +59,20 @@ export default async function AppLayout({
         </span>
         <div className="flex items-center gap-4">
           <Link
+            href="/dashboard"
+            className="text-sm text-muted-foreground hover:text-foreground"
+          >
+            Dashboard
+          </Link>
+          {operator.operatorType !== "broker" && (
+            <Link
+              href="/fleet"
+              className="text-sm text-muted-foreground hover:text-foreground"
+            >
+              Fleet
+            </Link>
+          )}
+          <Link
             href="/settings"
             className="text-sm text-muted-foreground hover:text-foreground"
           >
