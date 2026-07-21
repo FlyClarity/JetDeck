@@ -22,6 +22,15 @@ export const SCORE_BADGES: Record<string, { emoji: string; label: string }> = {
   pass: { emoji: "🔴", label: "PASS" },
 };
 
+export const STATUS_LABELS: Record<string, string> = {
+  new: "New",
+  scoring: "Scoring",
+  ready: "Ready to Quote",
+  quoted: "Quoted",
+  passed: "Passed",
+  closed: "Closed",
+};
+
 export function routeSummary(
   legs: unknown,
   tripType: string

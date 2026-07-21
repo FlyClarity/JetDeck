@@ -2,26 +2,38 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { TripRequest } from "@/lib/generated/prisma/client";
-import { SOURCE_BADGES, SCORE_BADGES, relativeTime, routeSummary, paxCount } from "@/lib/queue";
+import {
+  SOURCE_BADGES,
+  SCORE_BADGES,
+  STATUS_LABELS,
+  relativeTime,
+  routeSummary,
+  paxCount,
+} from "@/lib/queue";
 import { categoryLabel } from "@/lib/aircraft";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const REAL_TABS = [
-  { key: "new", label: "New" },
-  { key: "scoring", label: "Scoring" },
+const VIEWS = [
   { key: "ready", label: "Ready to Quote" },
-  { key: "passed", label: "Declined / Expired / Passed" },
-] as const;
-
-const QUOTE_TABS = [
+  { key: "all", label: "All Requests" },
   { key: "draft", label: "Draft" },
   { key: "sent", label: "Sent" },
   { key: "accepted", label: "Accepted" },
 ] as const;
 
-type RealTabKey = (typeof REAL_TABS)[number]["key"];
-type TabKey = RealTabKey | (typeof QUOTE_TABS)[number]["key"];
+const STATUS_FILTERS = [
+  { key: "all", label: "All" },
+  { key: "new", label: "New" },
+  { key: "scoring", label: "Scoring" },
+  { key: "ready", label: "Ready" },
+  { key: "passed", label: "Passed" },
+] as const;
+
+type ViewKey = (typeof VIEWS)[number]["key"];
+type StatusFilterKey = (typeof STATUS_FILTERS)[number]["key"];
+
+const PLACEHOLDER_VIEWS: ViewKey[] = ["draft", "sent", "accepted"];
 
 export function QuoteQueue({
   tripRequests,
@@ -30,29 +42,29 @@ export function QuoteQueue({
   tripRequests: TripRequest[];
   passAction: (id: string) => Promise<void>;
 }) {
-  const [activeTab, setActiveTab] = useState<TabKey>("new");
+  const [activeView, setActiveView] = useState<ViewKey>("ready");
+  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const grouped = useMemo(
-    () => ({
-      new: tripRequests.filter((t) => t.status === "new"),
-      scoring: tripRequests.filter((t) => t.status === "scoring"),
-      ready: tripRequests.filter((t) => t.status === "ready"),
-      passed: tripRequests.filter((t) => t.status === "passed"),
-    }),
+  const readyCount = useMemo(
+    () => tripRequests.filter((t) => t.status === "ready").length,
     [tripRequests]
   );
 
-  const isQuoteTab = activeTab === "draft" || activeTab === "sent" || activeTab === "accepted";
-  const currentList = useMemo(
-    () => (isQuoteTab ? [] : grouped[activeTab as RealTabKey]),
-    [isQuoteTab, grouped, activeTab]
-  );
+  const isPlaceholderView = PLACEHOLDER_VIEWS.includes(activeView);
+
+  const currentList = useMemo(() => {
+    if (isPlaceholderView) return [];
+    if (activeView === "ready") return tripRequests.filter((t) => t.status === "ready");
+    if (statusFilter === "all") return tripRequests;
+    return tripRequests.filter((t) => t.status === statusFilter);
+  }, [isPlaceholderView, activeView, statusFilter, tripRequests]);
+
   const selected = currentList.find((t) => t.id === selectedId) ?? null;
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (isQuoteTab || currentList.length === 0) return;
+      if (isPlaceholderView || currentList.length === 0) return;
       const target = e.target as HTMLElement;
       if (["INPUT", "TEXTAREA"].includes(target.tagName)) return;
 
@@ -77,37 +89,57 @@ export function QuoteQueue({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentList, selectedId, isQuoteTab, passAction]);
+  }, [currentList, selectedId, isPlaceholderView, passAction]);
 
   return (
     <div className="flex flex-1">
       <div className="flex flex-1 flex-col border-r border-border">
-        <div className="flex gap-1 overflow-x-auto border-b border-border px-4 py-2">
-          {[...REAL_TABS, ...QUOTE_TABS].map((tab) => {
-            const count = tab.key in grouped ? grouped[tab.key as RealTabKey].length : 0;
-            return (
+        <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
+          <div className="flex gap-1 overflow-x-auto">
+            {VIEWS.map((view) => (
               <button
-                key={tab.key}
+                key={view.key}
                 onClick={() => {
-                  setActiveTab(tab.key);
+                  setActiveView(view.key);
                   setSelectedId(null);
                 }}
                 className={cn(
                   "shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                  activeTab === tab.key
+                  activeView === view.key
                     ? "bg-muted text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                {tab.label}
-                {count > 0 && <span className="ml-1.5 text-xs text-muted-foreground">{count}</span>}
+                {view.label}
+                {view.key === "ready" && readyCount > 0 && (
+                  <span className="ml-1.5 text-xs text-muted-foreground">{readyCount}</span>
+                )}
               </button>
-            );
-          })}
+            ))}
+          </div>
+
+          {activeView === "all" && (
+            <div className="flex shrink-0 gap-1 rounded-lg bg-muted p-1">
+              {STATUS_FILTERS.map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => setStatusFilter(f.key)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                    statusFilter === f.key
+                      ? "bg-background text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {isQuoteTab ? (
+          {isPlaceholderView ? (
             <p className="p-6 text-sm text-muted-foreground">
               No quotes yet — the quote builder lands in a later step.
             </p>
@@ -143,8 +175,15 @@ export function QuoteQueue({
                         </span>
                       )}
                     </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {relativeTime(tr.createdAt)}
+                    <span className="flex shrink-0 items-center gap-2">
+                      {activeView === "all" && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                          {STATUS_LABELS[tr.status] ?? tr.status}
+                        </span>
+                      )}
+                      <span className="text-xs text-muted-foreground">
+                        {relativeTime(tr.createdAt)}
+                      </span>
                     </span>
                   </div>
                   {tr.scoreReason && (
