@@ -23,7 +23,7 @@ const VIEWS = [
 ] as const;
 
 const STATUS_FILTERS = [
-  { key: "all", label: "All" },
+  { key: "active", label: "Active" },
   { key: "new", label: "New" },
   { key: "scoring", label: "Scoring" },
   { key: "ready", label: "Ready" },
@@ -43,11 +43,16 @@ export function QuoteQueue({
   passAction: (id: string) => Promise<void>;
 }) {
   const [activeView, setActiveView] = useState<ViewKey>("ready");
-  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("active");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const readyCount = useMemo(
     () => tripRequests.filter((t) => t.status === "ready").length,
+    [tripRequests]
+  );
+
+  const passedCount = useMemo(
+    () => tripRequests.filter((t) => t.status === "passed").length,
     [tripRequests]
   );
 
@@ -56,7 +61,10 @@ export function QuoteQueue({
   const currentList = useMemo(() => {
     if (isPlaceholderView) return [];
     if (activeView === "ready") return tripRequests.filter((t) => t.status === "ready");
-    if (statusFilter === "all") return tripRequests;
+    // "Active" hides passed/declined by default — the brief's own tab groups
+    // Passed with Declined/Expired, and in practice most requests end up here,
+    // so surfacing it by default would bury everything actionable under it.
+    if (statusFilter === "active") return tripRequests.filter((t) => t.status !== "passed");
     return tripRequests.filter((t) => t.status === statusFilter);
   }, [isPlaceholderView, activeView, statusFilter, tripRequests]);
 
@@ -132,6 +140,9 @@ export function QuoteQueue({
                   )}
                 >
                   {f.label}
+                  {f.key === "passed" && passedCount > 0 && (
+                    <span className="ml-1 text-muted-foreground">{passedCount}</span>
+                  )}
                 </button>
               ))}
             </div>
