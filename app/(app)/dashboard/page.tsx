@@ -1,12 +1,39 @@
-export default function DashboardPage() {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">
-        You&apos;re in.
-      </h1>
-      <p className="text-muted-foreground">
-        The quoting queue lands here in a later step.
-      </p>
-    </div>
-  );
+import { revalidatePath } from "next/cache";
+import { getTenantContext } from "@/lib/auth";
+import { getCurrentOperator } from "@/lib/operator";
+import { prisma } from "@/lib/prisma";
+import { QuoteQueue } from "@/components/queue/quote-queue";
+
+async function passTripRequest(id: string) {
+  "use server";
+
+  const { clerkOrgId } = await getTenantContext();
+  if (!clerkOrgId) return;
+
+  const operator = await prisma.operator.findUnique({ where: { clerkOrgId } });
+  if (!operator) return;
+
+  const tripRequest = await prisma.tripRequest.findFirst({
+    where: { id, operatorId: operator.id },
+  });
+  if (!tripRequest) return;
+
+  await prisma.tripRequest.update({
+    where: { id },
+    data: { status: "passed", recommendedAction: "pass" },
+  });
+
+  revalidatePath("/dashboard");
+}
+
+export default async function DashboardPage() {
+  const operator = await getCurrentOperator();
+  if (!operator) return null;
+
+  const tripRequests = await prisma.tripRequest.findMany({
+    where: { operatorId: operator.id },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return <QuoteQueue tripRequests={tripRequests} passAction={passTripRequest} />;
 }
