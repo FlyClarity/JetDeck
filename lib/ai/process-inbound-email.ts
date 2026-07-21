@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { classifyEmail, type EmailClassificationResult } from "@/lib/ai/classify-email";
 import { parseEmailToTripRequest } from "@/lib/ai/parse-email";
+import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 
 type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
   include: { operator: true };
@@ -143,6 +144,8 @@ async function handleNewTripRequest(inboundEmail: InboundEmailWithOperator) {
     where: { id: inboundEmail.id },
     data: { status: "trip_request_created", tripRequestId: tripRequest.id },
   });
+
+  await scoreOpportunity(tripRequest.id);
 }
 
 async function handleQuoteResponse(

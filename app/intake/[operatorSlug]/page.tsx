@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
+import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -57,7 +58,7 @@ async function submitTripRequest(operatorSlug: string, formData: FormData) {
   const requestorEmail = String(formData.get("requestorEmail") ?? "");
   const aircraftPref = String(formData.get("aircraftPref") ?? "no_preference");
 
-  await prisma.tripRequest.create({
+  const tripRequest = await prisma.tripRequest.create({
     data: {
       operatorId: operator.id,
       source: "intake_form",
@@ -72,6 +73,8 @@ async function submitTripRequest(operatorSlug: string, formData: FormData) {
       specialRequests: String(formData.get("specialRequests") ?? "") || null,
     },
   });
+
+  await scoreOpportunity(tripRequest.id);
 
   const firstLeg = normalizedLegs[0] as
     | { depAirport?: string; arrAirport?: string; date?: string }
