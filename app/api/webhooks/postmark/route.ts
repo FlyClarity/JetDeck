@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { processInboundEmail } from "@/lib/ai/process-inbound-email";
 
 function isAuthorized(req: NextRequest) {
   const secret = process.env.POSTMARK_WEBHOOK_SECRET;
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
     return new Response("No matching operator", { status: 200 });
   }
 
-  await prisma.inboundEmail.create({
+  const inboundEmail = await prisma.inboundEmail.create({
     data: {
       operatorId: operator.id,
       fromEmail,
@@ -64,6 +65,12 @@ export async function POST(req: NextRequest) {
       status: "processing",
     },
   });
+
+  try {
+    await processInboundEmail(inboundEmail.id);
+  } catch (err) {
+    console.error("Failed to process inbound email", inboundEmail.id, err);
+  }
 
   return new Response("OK", { status: 200 });
 }
