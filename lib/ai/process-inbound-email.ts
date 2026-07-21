@@ -5,7 +5,7 @@ import { classifyEmail, type EmailClassificationResult } from "@/lib/ai/classify
 import { parseEmailToTripRequest } from "@/lib/ai/parse-email";
 import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 
-type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
+export type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
   include: { operator: true };
 }>;
 
@@ -42,11 +42,11 @@ export async function processInboundEmail(inboundEmailId: string) {
       return;
 
     case "general_inquiry":
-      await handleGeneralInquiry(inboundEmail, result);
+      await logInboundEmailAsInquiry(inboundEmail);
       return;
 
     case "new_trip_request":
-      await handleNewTripRequest(inboundEmail);
+      await createTripRequestFromInboundEmail(inboundEmail);
       return;
 
     case "quote_response_accepted":
@@ -64,10 +64,11 @@ export async function processInboundEmail(inboundEmailId: string) {
   }
 }
 
-async function handleGeneralInquiry(
-  inboundEmail: InboundEmailWithOperator,
-  result: EmailClassificationResult
-) {
+/**
+ * Matches/creates a Contact and logs the inquiry against it. Shared by the
+ * automatic AI-routing path and the manual "Log as Inquiry" review action.
+ */
+export async function logInboundEmailAsInquiry(inboundEmail: InboundEmailWithOperator) {
   const existing = await prisma.contact.findFirst({
     where: { operatorId: inboundEmail.operatorId, email: inboundEmail.fromEmail },
   });
@@ -80,7 +81,7 @@ async function handleGeneralInquiry(
       data: { notes: existing.notes ? `${existing.notes}\n${noteLine}` : noteLine },
     });
   } else {
-    const displayName = result.senderName ?? inboundEmail.fromName ?? inboundEmail.fromEmail;
+    const displayName = inboundEmail.fromName ?? inboundEmail.fromEmail;
     const [firstName, ...rest] = displayName.split(" ");
     await prisma.contact.create({
       data: {
@@ -108,16 +109,19 @@ async function handleGeneralInquiry(
   }
 }
 
-async function handleNewTripRequest(inboundEmail: InboundEmailWithOperator) {
+/**
+ * Extracts trip data and creates + scores a TripRequest from an inbound
+ * email. Shared by the automatic AI-routing path and the manual "Create
+ * Trip Request" review action. Extraction runs when ANTHROPIC_API_KEY is
+ * configured; when it's not (or parsing fails), this still creates a
+ * bare-bones TripRequest from the raw email fields rather than failing —
+ * a human explicitly asked for this one, so it should always produce
+ * something to work with, even if AI couldn't fill in the details.
+ */
+export async function createTripRequestFromInboundEmail(
+  inboundEmail: InboundEmailWithOperator
+) {
   const extracted = await parseEmailToTripRequest(inboundEmail.bodyText);
-
-  if (!extracted) {
-    await prisma.inboundEmail.update({
-      where: { id: inboundEmail.id },
-      data: { status: "needs_review" },
-    });
-    return;
-  }
 
   const tripRequest = await prisma.tripRequest.create({
     data: {
@@ -126,17 +130,17 @@ async function handleNewTripRequest(inboundEmail: InboundEmailWithOperator) {
       rawEmailBody: inboundEmail.bodyText,
       rawEmailFrom: inboundEmail.fromEmail,
       requestorName:
-        extracted.requestorName || inboundEmail.fromName || inboundEmail.fromEmail,
-      requestorEmail: extracted.requestorEmail || inboundEmail.fromEmail,
-      requestorPhone: extracted.requestorPhone,
-      requestorCompany: extracted.requestorCompany,
-      requestorType: extracted.requestorType || "direct",
-      tripType: extracted.tripType || "one_way",
-      legs: extracted.legs,
-      aircraftPref: extracted.aircraftCategory,
-      budgetMentioned: extracted.budgetMentioned,
-      specialRequests: extracted.specialRequests,
-      urgency: extracted.urgency,
+        extracted?.requestorName || inboundEmail.fromName || inboundEmail.fromEmail,
+      requestorEmail: extracted?.requestorEmail || inboundEmail.fromEmail,
+      requestorPhone: extracted?.requestorPhone ?? null,
+      requestorCompany: extracted?.requestorCompany ?? null,
+      requestorType: extracted?.requestorType || "direct",
+      tripType: extracted?.tripType || "one_way",
+      legs: extracted?.legs ?? [],
+      aircraftPref: extracted?.aircraftCategory ?? null,
+      budgetMentioned: extracted?.budgetMentioned ?? null,
+      specialRequests: extracted?.specialRequests ?? inboundEmail.bodyText,
+      urgency: extracted?.urgency ?? null,
     },
   });
 
@@ -146,6 +150,8 @@ async function handleNewTripRequest(inboundEmail: InboundEmailWithOperator) {
   });
 
   await scoreOpportunity(tripRequest.id);
+
+  return tripRequest;
 }
 
 async function handleQuoteResponse(

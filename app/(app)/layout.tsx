@@ -32,6 +32,12 @@ export default async function AppLayout({
     where: { clerkOrgId },
   });
 
+  const needsReviewCount = operator
+    ? await prisma.inboundEmail.count({
+        where: { operatorId: operator.id, status: "needs_review" },
+      })
+    : 0;
+
   if (!operator) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 py-16 text-center">
@@ -72,6 +78,17 @@ export default async function AppLayout({
               Fleet
             </Link>
           )}
+          <Link
+            href="/inbox/review"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            Needs Review
+            {needsReviewCount > 0 && (
+              <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-xs font-medium text-accent-foreground">
+                {needsReviewCount}
+              </span>
+            )}
+          </Link>
           <Link
             href="/settings"
             className="text-sm text-muted-foreground hover:text-foreground"
