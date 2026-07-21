@@ -28,3 +28,21 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   (trip creation) land. Also relevant to the brief's role hierarchy
   (Sales vs. Dispatch as distinct operator roles) — may eventually
   want role-based routing/defaults, not just a shared nav link.
+
+- **Automate flight/repositioning time calculation** (raised after
+  Step 13 — major, user is compiling fuller notes before we scope
+  this properly): Quote Builder currently requires manually typing
+  flight hours, which is real friction and error-prone. Direction:
+  compute it instead of asking for it. Would need:
+  - Real performance data on Aircraft (cruise speed at minimum,
+    possibly fuel burn) — currently only `rangeNm` exists
+  - A way to resolve airport locations (ICAO → lat/long) to compute
+    distance — either a bundled airport database or an aviation API
+  - Flight hours and repositioning hours become calculated fields,
+    not manual entry
+  - Would also sharpen opportunity scoring's positioning logic, which
+    is currently qualitative ("requires repositioning from X") rather
+    than an actual hours estimate
+  General theme to keep in mind going forward: reduce manual data
+  entry everywhere automation is realistically possible, not just
+  here — revisit other steps with this lens too once this is scoped.
