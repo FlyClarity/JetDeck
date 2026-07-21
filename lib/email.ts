@@ -8,6 +8,7 @@ export async function sendEmail(params: {
   to: string;
   subject: string;
   html: string;
+  replyTo?: string;
 }) {
   if (!resend) {
     console.warn(
@@ -21,5 +22,6 @@ export async function sendEmail(params: {
     to: params.to,
     subject: params.subject,
     html: params.html,
+    ...(params.replyTo ? { replyTo: params.replyTo } : {}),
   });
 }

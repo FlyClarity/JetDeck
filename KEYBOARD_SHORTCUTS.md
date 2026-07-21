@@ -15,6 +15,7 @@ implement in one deliberate pass later (naturally fits Step 20,
 | `Enter` | Open the detail pane for the first item (if nothing selected) |
 | `Esc` | Close the detail pane |
 | `p` | Pass the selected request |
+| `q` | Open the quote builder for the selected request |
 
 ## Planned — global
 
@@ -32,7 +33,6 @@ implement in one deliberate pass later (naturally fits Step 20,
 
 | Key | Action | Notes |
 |---|---|---|
-| `q` | Open quote builder for selected request | Brief-specified. Blocked on Step 13 (Quote Builder) existing |
 | `a` | Assign to teammate | Brief-specified. Blocked — no assignee concept on TripRequest yet; needs a schema decision first |
 | `n` | Add internal note | Brief-specified. Blocked — TripRequest has no notes field (Quote has internalNotes, Contact has notes, TripRequest doesn't) |
 | `1` `2` `3` `4` | Jump directly to a tab (Ready / All / Draft / Sent, etc.) | |
@@ -59,7 +59,7 @@ now). Once added:
 | `j` / `k` | Move between rows |
 | `Enter` | Edit selected aircraft |
 
-## Planned — Quote Builder (Step 13, not built yet)
+## Planned — Quote Builder (`/quotes/new`, `/quotes/[id]`)
 
 | Key | Action |
 |---|---|

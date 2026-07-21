@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { TripRequest } from "@/lib/generated/prisma/client";
 import {
   SOURCE_BADGES,
@@ -42,6 +44,7 @@ export function QuoteQueue({
   tripRequests: TripRequest[];
   passAction: (id: string) => Promise<void>;
 }) {
+  const router = useRouter();
   const [activeView, setActiveView] = useState<ViewKey>("ready");
   const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("active");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -92,12 +95,14 @@ export function QuoteQueue({
         setSelectedId(null);
       } else if (e.key === "p" && selectedId) {
         passAction(selectedId);
+      } else if (e.key === "q" && selectedId) {
+        router.push(`/quotes/new?tripRequestId=${selectedId}`);
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentList, selectedId, isPlaceholderView, passAction]);
+  }, [currentList, selectedId, isPlaceholderView, passAction, router]);
 
   return (
     <div className="flex flex-1">
@@ -256,17 +261,22 @@ export function QuoteQueue({
             </div>
           )}
 
-          {selected.status !== "passed" && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="self-start"
-              onClick={() => passAction(selected.id)}
-            >
-              Pass (P)
+          <div className="flex gap-2">
+            <Button type="button" size="sm" className="self-start" asChild>
+              <Link href={`/quotes/new?tripRequestId=${selected.id}`}>Quote Now (Q)</Link>
             </Button>
-          )}
+            {selected.status !== "passed" && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="self-start"
+                onClick={() => passAction(selected.id)}
+              >
+                Pass (P)
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </div>
