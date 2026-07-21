@@ -5,14 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { LegsField } from "@/components/intake/legs-field";
+import { TripPlanner } from "@/components/intake/trip-planner";
+import { PillField } from "@/components/intake/pill-field";
+
+const REQUESTOR_TYPES = [
+  { value: "direct", label: "Direct Client" },
+  { value: "broker", label: "Broker" },
+] as const;
 
 const AIRCRAFT_PREFS = [
   { value: "no_preference", label: "No preference" },
@@ -20,7 +19,15 @@ const AIRCRAFT_PREFS = [
   { value: "midsize", label: "Midsize" },
   { value: "super_midsize", label: "Super-Midsize" },
   { value: "heavy", label: "Heavy" },
-];
+] as const;
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+      {children}
+    </span>
+  );
+}
 
 async function submitTripRequest(operatorSlug: string, formData: FormData) {
   "use server";
@@ -127,87 +134,78 @@ export default async function IntakePage({
   const submitWithSlug = submitTripRequest.bind(null, operatorSlug);
 
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10">
+    <div className="mx-auto w-full max-w-xl px-6 py-12">
       <span className="text-sm font-medium tracking-wide text-accent">
         {operator.name.toUpperCase()}
       </span>
-      <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-balance">
         Request a Charter
       </h1>
+      <p className="mt-2 text-muted-foreground">
+        Tell us where you&apos;re headed — we&apos;ll follow up with a quote.
+      </p>
 
-      <form action={submitWithSlug} className="mt-8 flex flex-col gap-6">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="requestorName">Full name</Label>
-            <Input id="requestorName" name="requestorName" required />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="requestorCompany">Company (optional)</Label>
-            <Input id="requestorCompany" name="requestorCompany" />
-          </div>
-        </div>
+      <form action={submitWithSlug} className="mt-10 flex flex-col gap-10">
+        <section className="flex flex-col gap-4">
+          <SectionLabel>Trip</SectionLabel>
+          <TripPlanner />
+        </section>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="requestorEmail">Email</Label>
-            <Input id="requestorEmail" name="requestorEmail" type="email" required />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="requestorPhone">Phone (optional)</Label>
-            <Input id="requestorPhone" name="requestorPhone" type="tel" />
-          </div>
-        </div>
+        <section className="flex flex-col gap-4">
+          <SectionLabel>Contact</SectionLabel>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="requestorType">I am a</Label>
-            <Select name="requestorType" defaultValue="direct">
-              <SelectTrigger id="requestorType">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="direct">Direct Client</SelectItem>
-                <SelectItem value="broker">Broker</SelectItem>
-              </SelectContent>
-            </Select>
+          <PillField name="requestorType" options={REQUESTOR_TYPES} defaultValue="direct" />
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="requestorName">Name</Label>
+              <Input id="requestorName" name="requestorName" required />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="requestorEmail">Email</Label>
+              <Input id="requestorEmail" name="requestorEmail" type="email" required />
+            </div>
           </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="tripType">Trip type</Label>
-            <Select name="tripType" defaultValue="one_way">
-              <SelectTrigger id="tripType">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="one_way">One-Way</SelectItem>
-                <SelectItem value="round_trip">Round Trip</SelectItem>
-                <SelectItem value="multi_leg">Multi-Leg</SelectItem>
-              </SelectContent>
-            </Select>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="requestorCompany">Company</Label>
+              <Input id="requestorCompany" name="requestorCompany" placeholder="Optional" />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="requestorPhone">Phone</Label>
+              <Input
+                id="requestorPhone"
+                name="requestorPhone"
+                type="tel"
+                placeholder="Optional"
+              />
+            </div>
           </div>
-        </div>
+        </section>
 
-        <LegsField />
+        <section className="flex flex-col gap-4">
+          <SectionLabel>Preferences</SectionLabel>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="aircraftPref">Aircraft category preference</Label>
-          <Select name="aircraftPref" defaultValue="no_preference">
-            <SelectTrigger id="aircraftPref">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {AIRCRAFT_PREFS.map((p) => (
-                <SelectItem key={p.value} value={p.value}>
-                  {p.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+          <div className="flex flex-col gap-2">
+            <Label>Aircraft category</Label>
+            <PillField
+              name="aircraftPref"
+              options={AIRCRAFT_PREFS}
+              defaultValue="no_preference"
+            />
+          </div>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="specialRequests">Special requests (optional)</Label>
-          <Textarea id="specialRequests" name="specialRequests" rows={3} />
-        </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="specialRequests">Special requests</Label>
+            <Textarea
+              id="specialRequests"
+              name="specialRequests"
+              rows={3}
+              placeholder="Catering, ground transport, pets — anything we should know"
+            />
+          </div>
+        </section>
 
         <Button type="submit" size="lg" className="self-start">
           Submit Request
