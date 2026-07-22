@@ -2,6 +2,26 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Buy a domain + finish Postmark setup** (raised after Step 13):
+  inbound email (Step 7) is built but not actually live — `jetdeck.app`
+  is hardcoded in the code (Clerk webhook's inbound address generation,
+  outbound sender fallback) but isn't a domain anyone owns yet. Needed,
+  in order:
+  1. Buy a domain (not necessarily `jetdeck.app` specifically — just
+     needs to be decided)
+  2. Point it at the Vercel project (currently only reachable via the
+     `.vercel.app` preview URL)
+  3. Create a Postmark account, set up an Inbound stream
+  4. Add an MX record for an inbound subdomain (e.g.
+     `inbound.<domain>`) pointing at Postmark's inbound mail servers
+  5. Configure Postmark's inbound webhook → `/api/webhooks/postmark`
+     with Basic Auth matching `POSTMARK_WEBHOOK_SECRET`
+  Once a domain is picked, the hardcoded `jetdeck.app` references need
+  to be swapped for it (and made configurable via env var instead of
+  hardcoded again). This also blocks testing real inbound sources like
+  NBAA Air Mail, since nothing can forward mail to an address that
+  doesn't resolve anywhere yet.
+
 - **Aircraft photos + expanded amenities** (raised after Step 5): Fleet
   currently only tracks `hasWifi` as a boolean. Eventually needs:
   - Photo upload/gallery per aircraft (Vercel Blob is the natural fit
