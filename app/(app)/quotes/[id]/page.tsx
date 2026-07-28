@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { routeSummary } from "@/lib/queue";
 import { calculateQuoteTotals, formatCurrency } from "@/lib/quote";
+import { getAirportsByIcao } from "@/lib/airport-server";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { Button } from "@/components/ui/button";
 
@@ -64,12 +65,27 @@ async function updateQuote(id: string, formData: FormData) {
     discount,
   });
 
+  let legsJson: unknown[] = [];
+  try {
+    legsJson = JSON.parse(String(formData.get("legsJson") ?? "[]"));
+  } catch {
+    legsJson = [];
+  }
+  const itinerary = (legsJson as Record<string, unknown>[]).map((leg) => ({
+    billAs: String(leg.billAs ?? "revenue"),
+    depAirport: leg.depAirport ? String(leg.depAirport) : null,
+    arrAirport: leg.arrAirport ? String(leg.arrAirport) : null,
+    date: leg.date ? String(leg.date) : null,
+    flightHours: Number(leg.flightHours) || 0,
+  }));
+
   const validUntil = String(formData.get("validUntil") ?? "");
 
   await prisma.quote.update({
     where: { id: quote.id },
     data: {
       aircraftId: aircraftId || null,
+      itinerary,
       flightHours,
       hourlyRate,
       repoHours,
@@ -144,6 +160,34 @@ export default async function QuotePage({
         .join(" · ")
     : "";
 
+  // Quotes created before per-leg tracking shipped stored itinerary as
+  // { depAirport, arrAirport, depDt, arrDt, flightHours } with no billAs/date.
+  type StoredLeg = {
+    billAs?: string;
+    depAirport?: string | null;
+    arrAirport?: string | null;
+    date?: string | null;
+    depDt?: string | null;
+    flightHours?: number;
+  };
+  const storedLegs = (quote.itinerary as StoredLeg[]) ?? [];
+  const icaosToResolve = [
+    ...storedLegs.flatMap((l) => [l.depAirport, l.arrAirport].filter(Boolean) as string[]),
+    ...aircraftList.map((a) => a.homeBase),
+  ];
+  const resolvedAirports = await getAirportsByIcao(icaosToResolve);
+  const airportsByIcao = Object.fromEntries(resolvedAirports.map((a) => [a.icao, a]));
+
+  const savedLegs = storedLegs.map((l) => ({
+    billAs: (l.billAs === "repositioning" ? "repositioning" : "revenue") as
+      | "revenue"
+      | "repositioning",
+    dep: l.depAirport ? airportsByIcao[l.depAirport] ?? { icao: l.depAirport } : null,
+    arr: l.arrAirport ? airportsByIcao[l.arrAirport] ?? { icao: l.arrAirport } : null,
+    date: l.date ?? (l.depDt ? l.depDt.slice(0, 10) : ""),
+    flightHours: l.flightHours ?? 0,
+  }));
+
   const updateQuoteWithId = updateQuote.bind(null, quote.id);
   const sendQuoteWithId = sendQuote.bind(null, quote.id);
 
@@ -172,14 +216,18 @@ export default async function QuotePage({
           routeSummaryText={routeSummaryText}
           requestorLine={requestorLine}
           aircraftList={aircraftList}
+          airportsByIcao={airportsByIcao}
           initialValues={{
             aircraftId: quote.aircraftId,
-            flightHours: quote.flightHours,
+            requestedLegs: [],
+            legs: savedLegs,
             hourlyRate: quote.hourlyRate,
-            repoHours: quote.repoHours,
             repoRate: quote.repoRate,
             returnsToHomeBase: quote.returnsToHomeBase,
-            overnightNights: quote.overnightNights,
+            // Nights are recomputed from the reloaded legs' dates below; we
+            // only stored the combined total at save time, not the auto vs.
+            // manual split, so "extra" resets to 0 on reload.
+            extraNightsAway: 0,
             landingFees: quote.landingFees,
             handlingFees: quote.handlingFees,
             additionalFees: (quote.additionalFees as { label: string; amount: number }[]) ?? [],
@@ -192,6 +240,7 @@ export default async function QuotePage({
           priceSuggestion={null}
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}
+          defaultBlockTimeBufferHours={operator.defaultBlockTimeBufferHours}
           action={updateQuoteWithId}
           submitLabel="Save Changes"
         />

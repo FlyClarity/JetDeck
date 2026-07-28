@@ -1,8 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ArrowRight } from "lucide-react";
 import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
+import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
+import type { AirportOption } from "@/lib/airport-server";
+import { AirportCombobox } from "@/components/quote/airport-combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,15 +18,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+
+export type QuoteLegInput = {
+  dep: AirportOption | { icao: string } | null;
+  arr: AirportOption | { icao: string } | null;
+  date: string;
+  flightHours?: number;
+};
+
+export type SavedLegInput = {
+  billAs: "revenue" | "repositioning";
+  dep: AirportOption | { icao: string } | null;
+  arr: AirportOption | { icao: string } | null;
+  date: string;
+  flightHours: number;
+};
 
 export type QuoteBuilderInitialValues = {
   aircraftId: string | null;
-  flightHours: number;
+  // For a brand-new quote: only the customer-requested legs are known, and
+  // repositioning legs get derived (home base + aircraft cruise speed).
+  requestedLegs: QuoteLegInput[];
+  // For an existing quote: the full previously-saved leg breakdown, loaded
+  // as-is instead of re-derived. Takes precedence over requestedLegs.
+  legs?: SavedLegInput[];
   hourlyRate: number;
-  repoHours: number;
   repoRate: number;
   returnsToHomeBase: boolean;
-  overnightNights: number;
+  extraNightsAway: number;
   landingFees: number;
   handlingFees: number;
   additionalFees: AdditionalFee[];
@@ -33,35 +57,127 @@ export type QuoteBuilderInitialValues = {
   validUntil: string;
 };
 
+type LegAirport = { icao: string; iata?: string | null; name?: string; lat?: number; lon?: number };
+
+type LegRow = {
+  id: string;
+  billAs: "revenue" | "repositioning";
+  auto: boolean;
+  dep: LegAirport | null;
+  arr: LegAirport | null;
+  date: string;
+  flightHours: string;
+  dirty: boolean;
+};
+
+function rowId() {
+  return Math.random().toString(36).slice(2);
+}
+
+function computeLegHours(
+  dep: LegAirport | null,
+  arr: LegAirport | null,
+  cruiseSpeedKts: number | null | undefined,
+  blockTimeBufferHours: number
+): number | null {
+  if (!dep?.lat || !dep?.lon || !arr?.lat || !arr?.lon || !cruiseSpeedKts) return null;
+  const distanceNm = greatCircleDistanceNm(dep.lat, dep.lon, arr.lat, arr.lon);
+  return estimateFlightHours(distanceNm, cruiseSpeedKts, blockTimeBufferHours);
+}
+
+function needsRepositioning(a: LegAirport | null, b: LegAirport | null) {
+  if (!a || !b) return true;
+  return a.icao !== b.icao;
+}
+
+function buildInitialLegs(
+  requestedLegs: QuoteLegInput[],
+  cruiseSpeedKts: number | null | undefined,
+  homeBase: LegAirport | null,
+  returnsToHomeBase: boolean,
+  blockTimeBufferHours: number
+): LegRow[] {
+  const rows: LegRow[] = [];
+  const firstLeg = requestedLegs[0];
+  const lastLeg = requestedLegs[requestedLegs.length - 1];
+
+  if (homeBase && firstLeg?.dep && needsRepositioning(homeBase, firstLeg.dep)) {
+    const hrs = computeLegHours(homeBase, firstLeg.dep, cruiseSpeedKts, blockTimeBufferHours);
+    rows.push({
+      id: rowId(),
+      billAs: "repositioning",
+      auto: true,
+      dep: homeBase,
+      arr: firstLeg.dep,
+      date: firstLeg.date,
+      flightHours: hrs !== null ? hrs.toFixed(1) : "",
+      dirty: false,
+    });
+  }
+
+  requestedLegs.forEach((leg) => {
+    const hrs =
+      leg.flightHours ?? computeLegHours(leg.dep, leg.arr, cruiseSpeedKts, blockTimeBufferHours);
+    rows.push({
+      id: rowId(),
+      billAs: "revenue",
+      auto: true,
+      dep: leg.dep,
+      arr: leg.arr,
+      date: leg.date,
+      flightHours: hrs !== null && hrs !== undefined ? Number(hrs).toFixed(1) : "",
+      dirty: false,
+    });
+  });
+
+  if (returnsToHomeBase && homeBase && lastLeg?.arr && needsRepositioning(lastLeg.arr, homeBase)) {
+    const hrs = computeLegHours(lastLeg.arr, homeBase, cruiseSpeedKts, blockTimeBufferHours);
+    rows.push({
+      id: rowId(),
+      billAs: "repositioning",
+      auto: true,
+      dep: lastLeg.arr,
+      arr: homeBase,
+      date: lastLeg.date,
+      flightHours: hrs !== null ? hrs.toFixed(1) : "",
+      dirty: false,
+    });
+  }
+
+  return rows;
+}
+
 export function QuoteBuilderForm({
   routeSummaryText,
   requestorLine,
   aircraftList,
+  airportsByIcao,
   initialValues,
   priceSuggestion,
   depositPercent,
   defaultOvernightFee,
+  defaultBlockTimeBufferHours,
   action,
   submitLabel,
 }: {
   routeSummaryText: string;
   requestorLine: string;
   aircraftList: Aircraft[];
+  airportsByIcao: Record<string, AirportOption>;
   initialValues: QuoteBuilderInitialValues;
   priceSuggestion: { suggestedPrice: number; reasoning: string } | null;
   depositPercent: number;
   defaultOvernightFee: number;
+  defaultBlockTimeBufferHours: number;
   action: (formData: FormData) => Promise<void>;
   submitLabel: string;
 }) {
   const [aircraftId, setAircraftId] = useState(initialValues.aircraftId ?? "");
-  const [flightHours, setFlightHours] = useState(String(initialValues.flightHours || ""));
   const [hourlyRate, setHourlyRate] = useState(String(initialValues.hourlyRate || ""));
-  const [repoHours, setRepoHours] = useState(String(initialValues.repoHours || ""));
   const [repoRate, setRepoRate] = useState(String(initialValues.repoRate || ""));
   const [returnsToHomeBase, setReturnsToHomeBase] = useState(initialValues.returnsToHomeBase);
-  const [overnightNights, setOvernightNights] = useState(
-    String(initialValues.overnightNights || "")
+  const [extraNightsAway, setExtraNightsAway] = useState(
+    String(initialValues.extraNightsAway || "")
   );
   const [landingFees, setLandingFees] = useState(String(initialValues.landingFees || ""));
   const [handlingFees, setHandlingFees] = useState(String(initialValues.handlingFees || ""));
@@ -71,6 +187,150 @@ export function QuoteBuilderForm({
   const [fetTax, setFetTax] = useState(initialValues.fetTax);
   const [discount, setDiscount] = useState(String(initialValues.discount || ""));
   const [discountNote, setDiscountNote] = useState(initialValues.discountNote);
+
+  const selectedAircraft = aircraftList.find((a) => a.id === aircraftId);
+  const homeBaseAirport: LegAirport | null = selectedAircraft
+    ? airportsByIcao[selectedAircraft.homeBase] ?? { icao: selectedAircraft.homeBase }
+    : null;
+
+  const [legs, setLegs] = useState<LegRow[]>(() => {
+    if (initialValues.legs && initialValues.legs.length > 0) {
+      const savedLegs = initialValues.legs;
+      return savedLegs.map((leg, idx) => ({
+        id: rowId(),
+        billAs: leg.billAs,
+        auto: leg.billAs === "repositioning" && (idx === 0 || idx === savedLegs.length - 1),
+        dep: leg.dep,
+        arr: leg.arr,
+        date: leg.date,
+        flightHours: leg.flightHours ? leg.flightHours.toFixed(1) : "",
+        dirty: false,
+      }));
+    }
+    return buildInitialLegs(
+      initialValues.requestedLegs,
+      selectedAircraft?.cruiseSpeedKts,
+      homeBaseAirport,
+      returnsToHomeBase,
+      defaultBlockTimeBufferHours
+    );
+  });
+
+  // Re-derive flight hours for non-dirty legs (new cruise speed), and refresh
+  // auto repositioning legs' airports (new home base), whenever the selected
+  // aircraft changes. The outbound repositioning leg is always index 0.
+  const [syncedAircraftId, setSyncedAircraftId] = useState(aircraftId);
+  if (aircraftId !== syncedAircraftId) {
+    setSyncedAircraftId(aircraftId);
+    setLegs((prev) =>
+      prev
+        .map((leg, idx) => {
+          let dep = leg.dep;
+          let arr = leg.arr;
+          if (leg.auto && leg.billAs === "repositioning") {
+            const isOutbound = idx === 0;
+            dep = isOutbound ? homeBaseAirport : leg.dep;
+            arr = isOutbound ? leg.arr : homeBaseAirport;
+          }
+          if (leg.dirty) return { ...leg, dep, arr };
+          const hrs = computeLegHours(
+            dep,
+            arr,
+            selectedAircraft?.cruiseSpeedKts,
+            defaultBlockTimeBufferHours
+          );
+          return { ...leg, dep, arr, flightHours: hrs !== null ? hrs.toFixed(1) : leg.flightHours };
+        })
+        // Dropping the aircraft onto a plane already based at this leg's
+        // airport makes an auto repositioning leg redundant (0nm).
+        .filter(
+          (leg) =>
+            !(leg.auto && leg.billAs === "repositioning" && !needsRepositioning(leg.dep, leg.arr))
+        )
+    );
+  }
+
+  function toggleReturnsToHomeBase(checked: boolean) {
+    setReturnsToHomeBase(checked);
+    setLegs((prev) => {
+      if (checked) {
+        const lastRevenue = [...prev].reverse().find((l) => l.billAs === "revenue") ?? prev[prev.length - 1];
+        if (!lastRevenue?.arr || !needsRepositioning(lastRevenue.arr, homeBaseAirport)) return prev;
+        const hrs = computeLegHours(
+          lastRevenue.arr,
+          homeBaseAirport,
+          selectedAircraft?.cruiseSpeedKts,
+          defaultBlockTimeBufferHours
+        );
+        return [
+          ...prev,
+          {
+            id: rowId(),
+            billAs: "repositioning",
+            auto: true,
+            dep: lastRevenue.arr,
+            arr: homeBaseAirport,
+            date: lastRevenue.date,
+            flightHours: hrs !== null ? hrs.toFixed(1) : "",
+            dirty: false,
+          },
+        ];
+      }
+      const last = prev[prev.length - 1];
+      if (last && last.auto && last.billAs === "repositioning") return prev.slice(0, -1);
+      return prev;
+    });
+  }
+
+  function updateLeg(id: string, patch: Partial<LegRow>) {
+    setLegs((prev) =>
+      prev.map((leg) => {
+        if (leg.id !== id) return leg;
+        const updated = { ...leg, ...patch };
+        if ("dep" in patch || "arr" in patch) {
+          const hrs = computeLegHours(
+            updated.dep,
+            updated.arr,
+            selectedAircraft?.cruiseSpeedKts,
+            defaultBlockTimeBufferHours
+          );
+          if (!updated.dirty && hrs !== null) updated.flightHours = hrs.toFixed(1);
+        }
+        return updated;
+      })
+    );
+  }
+
+  function recalcLeg(id: string) {
+    setLegs((prev) =>
+      prev.map((leg) => {
+        if (leg.id !== id) return leg;
+        const hrs = computeLegHours(
+          leg.dep,
+          leg.arr,
+          selectedAircraft?.cruiseSpeedKts,
+          defaultBlockTimeBufferHours
+        );
+        return { ...leg, dirty: false, flightHours: hrs !== null ? hrs.toFixed(1) : leg.flightHours };
+      })
+    );
+  }
+
+  function addLeg() {
+    setLegs((prev) => [
+      ...prev,
+      {
+        id: rowId(),
+        billAs: "revenue",
+        auto: false,
+        dep: null,
+        arr: null,
+        date: "",
+        flightHours: "",
+        dirty: true,
+      },
+    ]);
+  }
 
   function handleAircraftChange(id: string) {
     setAircraftId(id);
@@ -87,14 +347,39 @@ export function QuoteBuilderForm({
     );
   }
 
-  const overnightFee = returnsToHomeBase ? 0 : (Number(overnightNights) || 0) * defaultOvernightFee;
+  const revenueLegs = legs.filter((l) => l.billAs === "revenue");
+  const repoLegs = legs.filter((l) => l.billAs === "repositioning");
+
+  const flightHours = revenueLegs.reduce((sum, l) => sum + (Number(l.flightHours) || 0), 0);
+  const repoHours = repoLegs.reduce((sum, l) => sum + (Number(l.flightHours) || 0), 0);
+
+  const autoNightsAway = useMemo(() => {
+    let nights = 0;
+    for (let i = 0; i < revenueLegs.length - 1; i++) {
+      nights += nightsBetween(revenueLegs[i].date, revenueLegs[i + 1].date);
+    }
+    return nights;
+  }, [revenueLegs]);
+
+  const totalNightsAway = returnsToHomeBase ? 0 : autoNightsAway + (Number(extraNightsAway) || 0);
+  const overnightFee = totalNightsAway * defaultOvernightFee;
+
+  const legsJson = JSON.stringify(
+    legs.map((l) => ({
+      billAs: l.billAs,
+      depAirport: l.dep?.icao ?? null,
+      arrAirport: l.arr?.icao ?? null,
+      date: l.date,
+      flightHours: Number(l.flightHours) || 0,
+    }))
+  );
 
   const totals = useMemo(
     () =>
       calculateQuoteTotals({
-        flightHours: Number(flightHours) || 0,
+        flightHours,
         hourlyRate: Number(hourlyRate) || 0,
-        repoHours: Number(repoHours) || 0,
+        repoHours,
         repoRate: Number(repoRate) || 0,
         overnightFee,
         landingFees: Number(landingFees) || 0,
@@ -117,7 +402,10 @@ export function QuoteBuilderForm({
       <input type="hidden" name="additionalFeesJson" value={JSON.stringify(additionalFees)} />
       <input type="hidden" name="fetTax" value={fetTax ? "on" : ""} />
       <input type="hidden" name="returnsToHomeBase" value={returnsToHomeBase ? "on" : ""} />
-      <input type="hidden" name="overnightNights" value={overnightNights} />
+      <input type="hidden" name="overnightNights" value={totalNightsAway} />
+      <input type="hidden" name="flightHours" value={flightHours} />
+      <input type="hidden" name="repoHours" value={repoHours} />
+      <input type="hidden" name="legsJson" value={legsJson} />
 
       <div className="flex flex-1 flex-col gap-6">
         <div>
@@ -144,6 +432,7 @@ export function QuoteBuilderForm({
               {aircraftList.map((a) => (
                 <SelectItem key={a.id} value={a.id}>
                   {a.tailNumber} — {a.make} {a.model}
+                  {!a.cruiseSpeedKts && " (no cruise speed set)"}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -151,19 +440,6 @@ export function QuoteBuilderForm({
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="flightHours">Flight hours</Label>
-            <Input
-              id="flightHours"
-              name="flightHours"
-              type="number"
-              min={0}
-              step="0.1"
-              value={flightHours}
-              onChange={(e) => setFlightHours(e.target.value)}
-              required
-            />
-          </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="hourlyRate">Hourly rate ($)</Label>
             <Input
@@ -175,21 +451,6 @@ export function QuoteBuilderForm({
               value={hourlyRate}
               onChange={(e) => setHourlyRate(e.target.value)}
               required
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="repoHours">Repositioning hours</Label>
-            <Input
-              id="repoHours"
-              name="repoHours"
-              type="number"
-              min={0}
-              step="0.1"
-              value={repoHours}
-              onChange={(e) => setRepoHours(e.target.value)}
             />
           </div>
           <div className="flex flex-col gap-2">
@@ -206,6 +467,104 @@ export function QuoteBuilderForm({
           </div>
         </div>
 
+        <div className="flex flex-col gap-3">
+          <Label>Legs</Label>
+          {legs.map((leg, i) => (
+            <div key={leg.id} className="flex flex-col gap-2 rounded-md border border-border p-3">
+              <div className="flex items-center justify-between">
+                <span
+                  className={cn(
+                    "text-xs font-medium tracking-wide uppercase",
+                    leg.billAs === "repositioning" ? "text-muted-foreground" : "text-accent"
+                  )}
+                >
+                  {leg.billAs === "repositioning" ? "Repositioning" : `Leg ${i + 1}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setLegs((prev) => prev.filter((l) => l.id !== leg.id))}
+                  className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                >
+                  Remove
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">From</Label>
+                  <AirportCombobox
+                    value={leg.dep}
+                    onSelect={(airport) => updateLeg(leg.id, { dep: airport })}
+                  />
+                </div>
+                <ArrowRight className="mb-2.5 size-4 shrink-0 text-muted-foreground" />
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">To</Label>
+                  <AirportCombobox
+                    value={leg.arr}
+                    onSelect={(airport) => updateLeg(leg.id, { arr: airport })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">Date</Label>
+                  <Input
+                    type="date"
+                    className="w-36"
+                    value={leg.date}
+                    onChange={(e) => updateLeg(leg.id, { date: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    className="w-20"
+                    value={leg.flightHours}
+                    onChange={(e) =>
+                      updateLeg(leg.id, { flightHours: e.target.value, dirty: true })
+                    }
+                  />
+                  <span className="text-sm text-muted-foreground">hrs</span>
+                  {leg.dirty && (leg.dep as LegAirport)?.lat && (leg.arr as LegAirport)?.lat && (
+                    <button
+                      type="button"
+                      onClick={() => recalcLeg(leg.id)}
+                      className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                    >
+                      Reset to auto
+                    </button>
+                  )}
+                </div>
+
+                <div className="ml-auto flex gap-1 rounded-lg bg-muted p-1">
+                  {(["revenue", "repositioning"] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => updateLeg(leg.id, { billAs: option })}
+                      className={cn(
+                        "rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                        leg.billAs === option
+                          ? "bg-background text-foreground shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {option === "revenue" ? "Revenue" : "Repositioning"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+          <Button type="button" variant="outline" size="sm" className="self-start" onClick={addLeg}>
+            Add leg
+          </Button>
+        </div>
+
         <div className="flex flex-col gap-2 rounded-md border border-border p-3">
           <div className="flex items-center gap-2">
             <input
@@ -213,7 +572,7 @@ export function QuoteBuilderForm({
               type="checkbox"
               className="size-4 rounded border-input"
               checked={returnsToHomeBase}
-              onChange={(e) => setReturnsToHomeBase(e.target.checked)}
+              onChange={(e) => toggleReturnsToHomeBase(e.target.checked)}
             />
             <Label htmlFor="returnsToHomeBaseCheckbox">
               Aircraft returns to home base after this trip
@@ -221,18 +580,25 @@ export function QuoteBuilderForm({
           </div>
           {!returnsToHomeBase && (
             <div className="flex flex-col gap-2 pl-6">
-              <Label htmlFor="overnightNightsInput">Nights away</Label>
+              {autoNightsAway > 0 && (
+                <p className="text-sm text-muted-foreground">
+                  {autoNightsAway} night{autoNightsAway === 1 ? "" : "s"} away calculated from leg
+                  dates
+                </p>
+              )}
+              <Label htmlFor="extraNightsAwayInput">Additional nights away</Label>
               <Input
-                id="overnightNightsInput"
+                id="extraNightsAwayInput"
                 type="number"
                 min={0}
                 step="1"
                 className="w-32"
-                value={overnightNights}
-                onChange={(e) => setOvernightNights(e.target.value)}
+                value={extraNightsAway}
+                onChange={(e) => setExtraNightsAway(e.target.value)}
               />
               <p className="text-sm text-muted-foreground">
-                {formatCurrency(defaultOvernightFee)}/night — set in Settings
+                {totalNightsAway} night{totalNightsAway === 1 ? "" : "s"} total ×{" "}
+                {formatCurrency(defaultOvernightFee)}/night — rate set in Settings
               </p>
             </div>
           )}
@@ -377,11 +743,11 @@ export function QuoteBuilderForm({
       <div className="w-72 shrink-0">
         <div className="sticky top-6 flex flex-col gap-2 rounded-md border border-border p-4 text-sm">
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Flight</span>
+            <span className="text-muted-foreground">Flight ({flightHours.toFixed(1)} hrs)</span>
             <span>{formatCurrency(totals.flightCost)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Repositioning</span>
+            <span className="text-muted-foreground">Repositioning ({repoHours.toFixed(1)} hrs)</span>
             <span>{formatCurrency(totals.repoCost)}</span>
           </div>
           {overnightFee > 0 && (

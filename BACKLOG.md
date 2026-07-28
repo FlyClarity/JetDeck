@@ -50,32 +50,44 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   want role-based routing/defaults, not just a shared nav link.
 
 - **Automate flight/repositioning time calculation** (raised after
-  Step 13; foundations built after Step 13.5 — still blocked on the
-  airport dataset). Direction the user gave: compute block time
-  instead of asking for it, default repositioning to return-to-home-base,
-  charge an overnight fee instead when it doesn't. What's built:
-  - `Aircraft.cruiseSpeedKts` — manual cruise speed field (fleet
-    forms), manufacturer spec, entered once per tail
-  - `Operator.defaultBlockTimeBufferHours` (default 0.2 hrs/leg,
-    editable in Settings) — buffer for climb/descent/taxi on top of
-    raw cruise-speed flight time
-  - `Operator.defaultOvernightFee` (default $1,500/night, editable in
-    Settings) — applied when a quote doesn't return to home base
-  - `Quote.returnsToHomeBase` (defaults true), `Quote.overnightNights`,
-    `Quote.overnightFee` — Quote Builder now has a "returns to home
-    base" toggle; unchecking it reveals a nights-away input and adds
-    the overnight fee to the total instead of a return repositioning
-    leg
-  - Empty `Airport` model (icao/iata/name/lat/lon/elevation/timezone)
-    scaffolded, ready for the dataset
-  Still blocked: the actual distance/flight-time calculation. Needs
-  the user's airport dataset imported into `Airport`, then: distance
-  between dep/arr ICAOs (great-circle) → raw flight time from
-  `cruiseSpeedKts` → + `defaultBlockTimeBufferHours` per leg →
-  flight hours becomes a calculated field instead of manual entry.
-  Would also sharpen opportunity scoring's positioning logic, which
-  is currently qualitative ("requires repositioning from X") rather
-  than an actual hours estimate.
-  General theme to keep in mind going forward: reduce manual data
-  entry everywhere automation is realistically possible, not just
-  here — revisit other steps with this lens too once this is scoped.
+  Step 13; shipped after Step 13.5 once the user provided the airport
+  dataset). Quote Builder is now leg-based and self-computing:
+  - `Airport` table seeded with 10,420 real airports (OurAirports
+    dataset, user-provided) — icao/iata/name/lat/lon/elevation
+  - `lib/geo.ts` — haversine great-circle distance + estimated flight
+    hours (`distance / cruiseSpeedKts + defaultBlockTimeBufferHours`)
+  - `AirportCombobox` — searchable, autofilling airport picker
+    (`lib/airport-server.ts`'s `searchAirports`, debounced, ICAO/IATA/
+    name prefix match)
+  - Quote Builder renders one editable row per leg (dep, arr, date,
+    flight hours, revenue-vs-repositioning), prefilled from the trip
+    request's requested legs plus auto-added repositioning legs
+    (home base → first departure, last arrival → home base — skipped
+    entirely when they'd be a 0nm no-op, e.g. aircraft already at the
+    departure airport)
+  - Flight hours auto-recompute live as airports/aircraft change,
+    unless the user directly edits a leg's hours (marks it "dirty";
+    a "Reset to auto" link reverts it)
+  - "Returns to home base" toggle: on (default) adds the trailing
+    return leg, no overnight fee; off drops that leg and
+    auto-calculates nights away from the gaps between requested legs'
+    dates (`nightsBetween` in `lib/geo.ts`), billed at
+    `defaultOvernightFee`/night, with an editable "additional nights"
+    field for open-ended cases
+  - `Quote.itinerary` now stores the full per-leg breakdown (billAs,
+    airports, date, flightHours) instead of a single repeated total;
+    old quotes created before this shipped are read back
+    compatibly (missing `billAs`/`date` default to revenue/derived
+    from `depDt`)
+  Known gap: the live airport search-as-you-type couldn't be verified
+  in this sandbox (no route to the live Neon DB locally, same
+  limitation as everywhere else in this project) — the math and
+  layout were verified with mocked airport data instead. Worth a
+  quick smoke test on the deployed app: type a partial ICAO/name into
+  a leg's airport field and confirm results appear.
+  Not done: repositioning always assumes `Aircraft.homeBase`, never
+  `currentBase` (the "updated as trips complete" field already in the
+  schema) — so back-to-back trips don't yet chain repositioning from
+  wherever the aircraft actually ended up last. Also, opportunity
+  scoring's positioning logic is still qualitative text, not tied to
+  this new hours math yet.

@@ -7,6 +7,7 @@ import { suggestPrice } from "@/lib/ai/suggest-price";
 import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 import { routeSummary } from "@/lib/queue";
 import { calculateQuoteTotals } from "@/lib/quote";
+import { getAirportsByIcao } from "@/lib/airport-server";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { NewLeadForm } from "@/components/quote/new-lead-form";
 
@@ -118,13 +119,18 @@ async function createQuote(tripRequestId: string, formData: FormData) {
     discount,
   });
 
-  const legs = (tripRequest.legs as { depAirport?: string; arrAirport?: string; date?: string }[]) ?? [];
-  const itinerary = legs.map((leg) => ({
-    depAirport: leg.depAirport ?? null,
-    arrAirport: leg.arrAirport ?? null,
-    depDt: leg.date ? `${leg.date}T00:00:00.000Z` : null,
-    arrDt: null,
-    flightHours,
+  let legsJson: unknown[] = [];
+  try {
+    legsJson = JSON.parse(String(formData.get("legsJson") ?? "[]"));
+  } catch {
+    legsJson = [];
+  }
+  const itinerary = (legsJson as Record<string, unknown>[]).map((leg) => ({
+    billAs: String(leg.billAs ?? "revenue"),
+    depAirport: leg.depAirport ? String(leg.depAirport) : null,
+    arrAirport: leg.arrAirport ? String(leg.arrAirport) : null,
+    date: leg.date ? String(leg.date) : null,
+    flightHours: Number(leg.flightHours) || 0,
   }));
 
   const quoteNumber = await generateQuoteNumber(operator.id);
@@ -206,6 +212,21 @@ export default async function NewQuotePage({
     .filter(Boolean)
     .join(" · ");
 
+  const tripLegs =
+    (tripRequest.legs as { depAirport?: string; arrAirport?: string; date?: string }[]) ?? [];
+  const icaosToResolve = [
+    ...tripLegs.flatMap((l) => [l.depAirport, l.arrAirport].filter(Boolean) as string[]),
+    ...aircraftList.map((a) => a.homeBase),
+  ];
+  const resolvedAirports = await getAirportsByIcao(icaosToResolve);
+  const airportsByIcao = Object.fromEntries(resolvedAirports.map((a) => [a.icao, a]));
+
+  const requestedLegs = tripLegs.map((l) => ({
+    dep: l.depAirport ? airportsByIcao[l.depAirport] ?? { icao: l.depAirport } : null,
+    arr: l.arrAirport ? airportsByIcao[l.arrAirport] ?? { icao: l.arrAirport } : null,
+    date: l.date ?? "",
+  }));
+
   const priceSuggestion = defaultAircraft
     ? await suggestPrice({
         routeSummary: routeSummaryText,
@@ -227,14 +248,14 @@ export default async function NewQuotePage({
           routeSummaryText={routeSummaryText}
           requestorLine={requestorLine}
           aircraftList={aircraftList}
+          airportsByIcao={airportsByIcao}
           initialValues={{
             aircraftId: defaultAircraft?.id ?? null,
-            flightHours: 0,
+            requestedLegs,
             hourlyRate: defaultAircraft?.hourlyRate ?? 0,
-            repoHours: 0,
             repoRate: defaultAircraft?.repoRate ?? defaultAircraft?.hourlyRate ?? 0,
             returnsToHomeBase: true,
-            overnightNights: 0,
+            extraNightsAway: 0,
             landingFees: 0,
             handlingFees: 0,
             additionalFees: [],
@@ -247,6 +268,7 @@ export default async function NewQuotePage({
           priceSuggestion={priceSuggestion}
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}
+          defaultBlockTimeBufferHours={operator.defaultBlockTimeBufferHours}
           action={createQuoteWithId}
           submitLabel="Create Quote"
         />
