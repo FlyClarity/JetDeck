@@ -43,6 +43,9 @@ async function updateAircraft(id: string, formData: FormData) {
       hourlyRate: Number(formData.get("hourlyRate") ?? 0),
       repoRate: formData.get("repoRate") ? Number(formData.get("repoRate")) : null,
       rangeNm: formData.get("rangeNm") ? Number(formData.get("rangeNm")) : null,
+      cruiseSpeedKts: formData.get("cruiseSpeedKts")
+        ? Number(formData.get("cruiseSpeedKts"))
+        : null,
       hasWifi: formData.get("hasWifi") === "on",
       status: String(formData.get("status") ?? "active"),
     },
@@ -208,15 +211,30 @@ export default async function EditAircraftPage({
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="rangeNm">Range (nm, optional)</Label>
-          <Input
-            id="rangeNm"
-            name="rangeNm"
-            type="number"
-            min={0}
-            defaultValue={aircraft.rangeNm ?? ""}
-          />
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="rangeNm">Range (nm, optional)</Label>
+            <Input
+              id="rangeNm"
+              name="rangeNm"
+              type="number"
+              min={0}
+              defaultValue={aircraft.rangeNm ?? ""}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="cruiseSpeedKts">Cruise speed (kts, optional)</Label>
+            <Input
+              id="cruiseSpeedKts"
+              name="cruiseSpeedKts"
+              type="number"
+              min={0}
+              defaultValue={aircraft.cruiseSpeedKts ?? ""}
+            />
+            <p className="text-sm text-muted-foreground">
+              From the manufacturer&apos;s spec sheet — drives flight-time estimates.
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">

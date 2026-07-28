@@ -3,7 +3,7 @@ import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { routeSummary } from "@/lib/queue";
-import { formatCurrency } from "@/lib/quote";
+import { calculateQuoteTotals, formatCurrency } from "@/lib/quote";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { Button } from "@/components/ui/button";
 
@@ -35,6 +35,9 @@ async function updateQuote(id: string, formData: FormData) {
   const hourlyRate = Number(formData.get("hourlyRate") ?? 0);
   const repoHours = Number(formData.get("repoHours") ?? 0);
   const repoRate = Number(formData.get("repoRate") ?? 0);
+  const returnsToHomeBase = formData.get("returnsToHomeBase") === "on";
+  const overnightNights = returnsToHomeBase ? 0 : Number(formData.get("overnightNights") ?? 0);
+  const overnightFee = overnightNights * scoped.operator.defaultOvernightFee;
   const landingFees = Number(formData.get("landingFees") ?? 0);
   const handlingFees = Number(formData.get("handlingFees") ?? 0);
   const fetTaxEnabled = formData.get("fetTax") === "on";
@@ -48,13 +51,18 @@ async function updateQuote(id: string, formData: FormData) {
     additionalFees = [];
   }
 
-  const flightCost = flightHours * hourlyRate;
-  const repoCost = repoHours * repoRate;
-  const feesTotal = additionalFees.reduce((sum, f) => sum + (f.amount || 0), 0);
-  const subtotal = flightCost + repoCost + landingFees + handlingFees + feesTotal;
-  const discountedSubtotal = Math.max(subtotal - discount, 0);
-  const fetAmount = fetTaxEnabled ? discountedSubtotal * 0.075 : 0;
-  const total = discountedSubtotal + fetAmount;
+  const { subtotal, total, fetAmount } = calculateQuoteTotals({
+    flightHours,
+    hourlyRate,
+    repoHours,
+    repoRate,
+    overnightFee,
+    landingFees,
+    handlingFees,
+    additionalFees,
+    fetTax: fetTaxEnabled,
+    discount,
+  });
 
   const validUntil = String(formData.get("validUntil") ?? "");
 
@@ -66,6 +74,9 @@ async function updateQuote(id: string, formData: FormData) {
       hourlyRate,
       repoHours,
       repoRate,
+      returnsToHomeBase,
+      overnightNights,
+      overnightFee,
       landingFees,
       handlingFees,
       additionalFees,
@@ -167,6 +178,8 @@ export default async function QuotePage({
             hourlyRate: quote.hourlyRate,
             repoHours: quote.repoHours,
             repoRate: quote.repoRate,
+            returnsToHomeBase: quote.returnsToHomeBase,
+            overnightNights: quote.overnightNights,
             landingFees: quote.landingFees,
             handlingFees: quote.handlingFees,
             additionalFees: (quote.additionalFees as { label: string; amount: number }[]) ?? [],
@@ -178,6 +191,7 @@ export default async function QuotePage({
           }}
           priceSuggestion={null}
           depositPercent={operator.depositPercent}
+          defaultOvernightFee={operator.defaultOvernightFee}
           action={updateQuoteWithId}
           submitLabel="Save Changes"
         />

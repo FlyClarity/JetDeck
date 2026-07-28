@@ -21,6 +21,10 @@ model Operator {
   depositPercent   Float    @default(0.25) // 25% card hold default
   inboundEmail     String? // e.g. requests-clarity@inbound.jetdeck.app
 
+  // Quote Builder pricing defaults — editable per operator
+  defaultBlockTimeBufferHours Float @default(0.2) // added per leg on top of raw distance/cruise-speed time (climb/descent/taxi)
+  defaultOvernightFee         Float @default(1500) // $/night when the aircraft doesn't return to home base after the trip
+
   // Operator type controls which modules and UI are shown
   operatorType String @default("part135")
   // "part135" -- owns/manages aircraft, full platform
@@ -71,10 +75,24 @@ model Aircraft {
   minHoursPerDay Float    @default(2.0)
   hasWifi        Boolean  @default(false)
   rangeNm        Int?
+  cruiseSpeedKts Float? // true cruise airspeed — manufacturer spec, entered once per aircraft; drives flight-time estimation
   status         String   @default("active")
   createdAt      DateTime @default(now())
 
   quotes Quote[]
+}
+
+// Reference data for flight-time/distance calculations. Empty until a real
+// airport dataset (e.g. OurAirports/FAA) is imported — see BACKLOG.md.
+model Airport {
+  icao      String   @id
+  iata      String?
+  name      String
+  lat       Float
+  lon       Float
+  elevation Int? // feet
+  timezone  String? // IANA tz name, e.g. "America/New_York"
+  createdAt DateTime @default(now())
 }
 
 model TripRequest {
@@ -146,6 +164,9 @@ model Quote {
   hourlyRate     Float
   repoHours      Float   @default(0)
   repoRate       Float   @default(0)
+  returnsToHomeBase Boolean @default(true) // if false, overnightFee applies instead of a return repositioning leg
+  overnightNights   Int     @default(0)
+  overnightFee      Float   @default(0) // computed: overnightNights * operator.defaultOvernightFee at time of quote
   landingFees    Float   @default(0)
   handlingFees   Float   @default(0)
   additionalFees Json    @default("[]") // [{ label, amount }]

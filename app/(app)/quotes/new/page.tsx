@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { generateQuoteNumber } from "@/lib/quote-server";
 import { suggestPrice } from "@/lib/ai/suggest-price";
 import { routeSummary } from "@/lib/queue";
+import { calculateQuoteTotals } from "@/lib/quote";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 
 function defaultValidUntil() {
@@ -37,6 +38,9 @@ async function createQuote(tripRequestId: string, formData: FormData) {
   const hourlyRate = Number(formData.get("hourlyRate") ?? 0);
   const repoHours = Number(formData.get("repoHours") ?? 0);
   const repoRate = Number(formData.get("repoRate") ?? 0);
+  const returnsToHomeBase = formData.get("returnsToHomeBase") === "on";
+  const overnightNights = returnsToHomeBase ? 0 : Number(formData.get("overnightNights") ?? 0);
+  const overnightFee = overnightNights * operator.defaultOvernightFee;
   const landingFees = Number(formData.get("landingFees") ?? 0);
   const handlingFees = Number(formData.get("handlingFees") ?? 0);
   const fetTax = formData.get("fetTax") === "on";
@@ -50,13 +54,18 @@ async function createQuote(tripRequestId: string, formData: FormData) {
     additionalFees = [];
   }
 
-  const flightCost = flightHours * hourlyRate;
-  const repoCost = repoHours * repoRate;
-  const feesTotal = additionalFees.reduce((sum, f) => sum + (f.amount || 0), 0);
-  const subtotal = flightCost + repoCost + landingFees + handlingFees + feesTotal;
-  const discountedSubtotal = Math.max(subtotal - discount, 0);
-  const fetAmount = fetTax ? discountedSubtotal * 0.075 : 0;
-  const total = discountedSubtotal + fetAmount;
+  const { subtotal, total, fetAmount } = calculateQuoteTotals({
+    flightHours,
+    hourlyRate,
+    repoHours,
+    repoRate,
+    overnightFee,
+    landingFees,
+    handlingFees,
+    additionalFees,
+    fetTax,
+    discount,
+  });
 
   const legs = (tripRequest.legs as { depAirport?: string; arrAirport?: string; date?: string }[]) ?? [];
   const itinerary = legs.map((leg) => ({
@@ -81,6 +90,9 @@ async function createQuote(tripRequestId: string, formData: FormData) {
       hourlyRate,
       repoHours,
       repoRate,
+      returnsToHomeBase,
+      overnightNights,
+      overnightFee,
       landingFees,
       handlingFees,
       additionalFees,
@@ -158,6 +170,8 @@ export default async function NewQuotePage({
             hourlyRate: defaultAircraft?.hourlyRate ?? 0,
             repoHours: 0,
             repoRate: defaultAircraft?.repoRate ?? defaultAircraft?.hourlyRate ?? 0,
+            returnsToHomeBase: true,
+            overnightNights: 0,
             landingFees: 0,
             handlingFees: 0,
             additionalFees: [],
@@ -169,6 +183,7 @@ export default async function NewQuotePage({
           }}
           priceSuggestion={priceSuggestion}
           depositPercent={operator.depositPercent}
+          defaultOvernightFee={operator.defaultOvernightFee}
           action={createQuoteWithId}
           submitLabel="Create Quote"
         />

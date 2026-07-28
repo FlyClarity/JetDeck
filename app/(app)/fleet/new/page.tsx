@@ -42,6 +42,9 @@ async function createAircraft(formData: FormData) {
         ? Number(formData.get("repoRate"))
         : null,
       rangeNm: formData.get("rangeNm") ? Number(formData.get("rangeNm")) : null,
+      cruiseSpeedKts: formData.get("cruiseSpeedKts")
+        ? Number(formData.get("cruiseSpeedKts"))
+        : null,
       hasWifi: formData.get("hasWifi") === "on",
     },
   });
@@ -113,9 +116,18 @@ export default async function NewAircraftPage() {
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="rangeNm">Range (nm, optional)</Label>
-          <Input id="rangeNm" name="rangeNm" type="number" min={0} />
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="rangeNm">Range (nm, optional)</Label>
+            <Input id="rangeNm" name="rangeNm" type="number" min={0} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="cruiseSpeedKts">Cruise speed (kts, optional)</Label>
+            <Input id="cruiseSpeedKts" name="cruiseSpeedKts" type="number" min={0} placeholder="416" />
+            <p className="text-sm text-muted-foreground">
+              From the manufacturer&apos;s spec sheet — drives flight-time estimates.
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">

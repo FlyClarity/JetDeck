@@ -50,19 +50,32 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   want role-based routing/defaults, not just a shared nav link.
 
 - **Automate flight/repositioning time calculation** (raised after
-  Step 13 — major, user is compiling fuller notes before we scope
-  this properly): Quote Builder currently requires manually typing
-  flight hours, which is real friction and error-prone. Direction:
-  compute it instead of asking for it. Would need:
-  - Real performance data on Aircraft (cruise speed at minimum,
-    possibly fuel burn) — currently only `rangeNm` exists
-  - A way to resolve airport locations (ICAO → lat/long) to compute
-    distance — either a bundled airport database or an aviation API
-  - Flight hours and repositioning hours become calculated fields,
-    not manual entry
-  - Would also sharpen opportunity scoring's positioning logic, which
-    is currently qualitative ("requires repositioning from X") rather
-    than an actual hours estimate
+  Step 13; foundations built after Step 13.5 — still blocked on the
+  airport dataset). Direction the user gave: compute block time
+  instead of asking for it, default repositioning to return-to-home-base,
+  charge an overnight fee instead when it doesn't. What's built:
+  - `Aircraft.cruiseSpeedKts` — manual cruise speed field (fleet
+    forms), manufacturer spec, entered once per tail
+  - `Operator.defaultBlockTimeBufferHours` (default 0.2 hrs/leg,
+    editable in Settings) — buffer for climb/descent/taxi on top of
+    raw cruise-speed flight time
+  - `Operator.defaultOvernightFee` (default $1,500/night, editable in
+    Settings) — applied when a quote doesn't return to home base
+  - `Quote.returnsToHomeBase` (defaults true), `Quote.overnightNights`,
+    `Quote.overnightFee` — Quote Builder now has a "returns to home
+    base" toggle; unchecking it reveals a nights-away input and adds
+    the overnight fee to the total instead of a return repositioning
+    leg
+  - Empty `Airport` model (icao/iata/name/lat/lon/elevation/timezone)
+    scaffolded, ready for the dataset
+  Still blocked: the actual distance/flight-time calculation. Needs
+  the user's airport dataset imported into `Airport`, then: distance
+  between dep/arr ICAOs (great-circle) → raw flight time from
+  `cruiseSpeedKts` → + `defaultBlockTimeBufferHours` per leg →
+  flight hours becomes a calculated field instead of manual entry.
+  Would also sharpen opportunity scoring's positioning logic, which
+  is currently qualitative ("requires repositioning from X") rather
+  than an actual hours estimate.
   General theme to keep in mind going forward: reduce manual data
   entry everywhere automation is realistically possible, not just
   here — revisit other steps with this lens too once this is scoped.

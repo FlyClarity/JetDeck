@@ -22,6 +22,8 @@ async function updateSettings(formData: FormData) {
   const termsVersion = termsText
     ? createHash("sha256").update(termsText).digest("hex")
     : null;
+  const defaultBlockTimeBufferHours = Number(formData.get("defaultBlockTimeBufferHours") ?? 0.2);
+  const defaultOvernightFee = Number(formData.get("defaultOvernightFee") ?? 1500);
 
   await prisma.operator.update({
     where: { clerkOrgId },
@@ -31,6 +33,8 @@ async function updateSettings(formData: FormData) {
       termsVersion,
       replyToEmail,
       depositPercent,
+      defaultBlockTimeBufferHours,
+      defaultOvernightFee,
     },
   });
 
@@ -98,6 +102,37 @@ export default async function SettingsPage() {
             Client replies to quote emails route back through JetDeck via
             this address.
           </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="defaultBlockTimeBufferHours">Block time buffer (hrs/leg)</Label>
+            <Input
+              id="defaultBlockTimeBufferHours"
+              name="defaultBlockTimeBufferHours"
+              type="number"
+              min={0}
+              step="0.1"
+              defaultValue={operator.defaultBlockTimeBufferHours}
+            />
+            <p className="text-sm text-muted-foreground">
+              Added to each leg&apos;s flight time for climb/descent/taxi.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="defaultOvernightFee">Overnight fee ($/night)</Label>
+            <Input
+              id="defaultOvernightFee"
+              name="defaultOvernightFee"
+              type="number"
+              min={0}
+              step="0.01"
+              defaultValue={operator.defaultOvernightFee}
+            />
+            <p className="text-sm text-muted-foreground">
+              Applied when the aircraft doesn&apos;t return to home base.
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-col gap-2">

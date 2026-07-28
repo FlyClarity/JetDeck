@@ -21,6 +21,8 @@ export type QuoteBuilderInitialValues = {
   hourlyRate: number;
   repoHours: number;
   repoRate: number;
+  returnsToHomeBase: boolean;
+  overnightNights: number;
   landingFees: number;
   handlingFees: number;
   additionalFees: AdditionalFee[];
@@ -38,6 +40,7 @@ export function QuoteBuilderForm({
   initialValues,
   priceSuggestion,
   depositPercent,
+  defaultOvernightFee,
   action,
   submitLabel,
 }: {
@@ -47,6 +50,7 @@ export function QuoteBuilderForm({
   initialValues: QuoteBuilderInitialValues;
   priceSuggestion: { suggestedPrice: number; reasoning: string } | null;
   depositPercent: number;
+  defaultOvernightFee: number;
   action: (formData: FormData) => Promise<void>;
   submitLabel: string;
 }) {
@@ -55,6 +59,10 @@ export function QuoteBuilderForm({
   const [hourlyRate, setHourlyRate] = useState(String(initialValues.hourlyRate || ""));
   const [repoHours, setRepoHours] = useState(String(initialValues.repoHours || ""));
   const [repoRate, setRepoRate] = useState(String(initialValues.repoRate || ""));
+  const [returnsToHomeBase, setReturnsToHomeBase] = useState(initialValues.returnsToHomeBase);
+  const [overnightNights, setOvernightNights] = useState(
+    String(initialValues.overnightNights || "")
+  );
   const [landingFees, setLandingFees] = useState(String(initialValues.landingFees || ""));
   const [handlingFees, setHandlingFees] = useState(String(initialValues.handlingFees || ""));
   const [additionalFees, setAdditionalFees] = useState<AdditionalFee[]>(
@@ -79,6 +87,8 @@ export function QuoteBuilderForm({
     );
   }
 
+  const overnightFee = returnsToHomeBase ? 0 : (Number(overnightNights) || 0) * defaultOvernightFee;
+
   const totals = useMemo(
     () =>
       calculateQuoteTotals({
@@ -86,13 +96,14 @@ export function QuoteBuilderForm({
         hourlyRate: Number(hourlyRate) || 0,
         repoHours: Number(repoHours) || 0,
         repoRate: Number(repoRate) || 0,
+        overnightFee,
         landingFees: Number(landingFees) || 0,
         handlingFees: Number(handlingFees) || 0,
         additionalFees,
         fetTax,
         discount: Number(discount) || 0,
       }),
-    [flightHours, hourlyRate, repoHours, repoRate, landingFees, handlingFees, additionalFees, fetTax, discount]
+    [flightHours, hourlyRate, repoHours, repoRate, overnightFee, landingFees, handlingFees, additionalFees, fetTax, discount]
   );
 
   const discountPercentOfSubtotal =
@@ -105,6 +116,8 @@ export function QuoteBuilderForm({
       <input type="hidden" name="aircraftId" value={aircraftId} />
       <input type="hidden" name="additionalFeesJson" value={JSON.stringify(additionalFees)} />
       <input type="hidden" name="fetTax" value={fetTax ? "on" : ""} />
+      <input type="hidden" name="returnsToHomeBase" value={returnsToHomeBase ? "on" : ""} />
+      <input type="hidden" name="overnightNights" value={overnightNights} />
 
       <div className="flex flex-1 flex-col gap-6">
         <div>
@@ -191,6 +204,38 @@ export function QuoteBuilderForm({
               onChange={(e) => setRepoRate(e.target.value)}
             />
           </div>
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+          <div className="flex items-center gap-2">
+            <input
+              id="returnsToHomeBaseCheckbox"
+              type="checkbox"
+              className="size-4 rounded border-input"
+              checked={returnsToHomeBase}
+              onChange={(e) => setReturnsToHomeBase(e.target.checked)}
+            />
+            <Label htmlFor="returnsToHomeBaseCheckbox">
+              Aircraft returns to home base after this trip
+            </Label>
+          </div>
+          {!returnsToHomeBase && (
+            <div className="flex flex-col gap-2 pl-6">
+              <Label htmlFor="overnightNightsInput">Nights away</Label>
+              <Input
+                id="overnightNightsInput"
+                type="number"
+                min={0}
+                step="1"
+                className="w-32"
+                value={overnightNights}
+                onChange={(e) => setOvernightNights(e.target.value)}
+              />
+              <p className="text-sm text-muted-foreground">
+                {formatCurrency(defaultOvernightFee)}/night — set in Settings
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -339,6 +384,12 @@ export function QuoteBuilderForm({
             <span className="text-muted-foreground">Repositioning</span>
             <span>{formatCurrency(totals.repoCost)}</span>
           </div>
+          {overnightFee > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Overnight fee</span>
+              <span>{formatCurrency(overnightFee)}</span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span className="text-muted-foreground">Fees</span>
             <span>
