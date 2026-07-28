@@ -4,14 +4,65 @@ import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
 import { generateQuoteNumber } from "@/lib/quote-server";
 import { suggestPrice } from "@/lib/ai/suggest-price";
+import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 import { routeSummary } from "@/lib/queue";
 import { calculateQuoteTotals } from "@/lib/quote";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
+import { NewLeadForm } from "@/components/quote/new-lead-form";
 
 function defaultValidUntil() {
   const d = new Date();
   d.setDate(d.getDate() + 7);
   return d.toISOString().slice(0, 10);
+}
+
+async function createManualLead(formData: FormData) {
+  "use server";
+
+  const { clerkOrgId } = await getTenantContext();
+  if (!clerkOrgId) return;
+
+  const operator = await prisma.operator.findUnique({ where: { clerkOrgId } });
+  if (!operator) return;
+
+  let legs: unknown[] = [];
+  try {
+    legs = JSON.parse(String(formData.get("legsJson") ?? "[]"));
+  } catch {
+    legs = [];
+  }
+
+  const normalizedLegs = (legs as Record<string, unknown>[]).map((leg) => ({
+    depAirport: String(leg.depAirport ?? ""),
+    arrAirport: String(leg.arrAirport ?? ""),
+    date: String(leg.date ?? ""),
+    timePref: leg.timePref ? String(leg.timePref) : null,
+    timeFlexible: Boolean(leg.timeFlexible),
+    passengerCount: leg.passengerCount ? Number(leg.passengerCount) : null,
+  }));
+
+  const aircraftPref = String(formData.get("aircraftPref") ?? "no_preference");
+
+  const tripRequest = await prisma.tripRequest.create({
+    data: {
+      operatorId: operator.id,
+      source: "manual",
+      requestorName: String(formData.get("requestorName") ?? ""),
+      requestorEmail: String(formData.get("requestorEmail") ?? ""),
+      requestorPhone: String(formData.get("requestorPhone") ?? "") || null,
+      requestorCompany: String(formData.get("requestorCompany") ?? "") || null,
+      requestorType: String(formData.get("requestorType") ?? "direct"),
+      tripType: String(formData.get("tripType") ?? "one_way"),
+      legs: normalizedLegs,
+      aircraftPref: aircraftPref === "no_preference" ? null : aircraftPref,
+      specialRequests: String(formData.get("specialRequests") ?? "") || null,
+      status: "ready",
+    },
+  });
+
+  await scoreOpportunity(tripRequest.id);
+
+  redirect(`/quotes/new?tripRequestId=${tripRequest.id}`);
 }
 
 async function createQuote(tripRequestId: string, formData: FormData) {
@@ -123,7 +174,19 @@ export default async function NewQuotePage({
 }) {
   const { tripRequestId } = await searchParams;
   const operator = await getCurrentOperator();
-  if (!operator || !tripRequestId) notFound();
+  if (!operator) notFound();
+
+  if (!tripRequestId) {
+    return (
+      <div className="mx-auto w-full max-w-xl px-6 py-10">
+        <h1 className="text-2xl font-semibold tracking-tight">New Quote</h1>
+        <p className="mt-1 text-muted-foreground">
+          Enter the trip and requestor details — you&apos;ll build the quote next.
+        </p>
+        <NewLeadForm action={createManualLead} />
+      </div>
+    );
+  }
 
   const tripRequest = await prisma.tripRequest.findFirst({
     where: { id: tripRequestId, operatorId: operator.id },

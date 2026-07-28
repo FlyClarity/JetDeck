@@ -131,27 +131,32 @@ export function QuoteQueue({
             ))}
           </div>
 
-          {activeView === "all" && (
-            <div className="flex shrink-0 gap-1 rounded-lg bg-muted p-1">
-              {STATUS_FILTERS.map((f) => (
-                <button
-                  key={f.key}
-                  onClick={() => setStatusFilter(f.key)}
-                  className={cn(
-                    "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                    statusFilter === f.key
-                      ? "bg-background text-foreground shadow-xs"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {f.label}
-                  {f.key === "passed" && passedCount > 0 && (
-                    <span className="ml-1 text-muted-foreground">{passedCount}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {activeView === "all" && (
+              <div className="flex gap-1 rounded-lg bg-muted p-1">
+                {STATUS_FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => setStatusFilter(f.key)}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                      statusFilter === f.key
+                        ? "bg-background text-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {f.label}
+                    {f.key === "passed" && passedCount > 0 && (
+                      <span className="ml-1 text-muted-foreground">{passedCount}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+            <Button size="sm" asChild>
+              <Link href="/quotes/new">+ New Quote</Link>
+            </Button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
