@@ -524,25 +524,20 @@ export function QuoteBuilderForm({
                 key={leg.id}
                 className="flex flex-wrap items-end gap-3 rounded-md border border-border p-2.5"
               >
-                <div className="flex flex-col gap-1">
-                  <Label
-                    className={cn(
-                      "text-xs tracking-wide uppercase",
-                      isRepositioning ? "text-muted-foreground" : "text-accent"
-                    )}
-                  >
-                    {isRepositioning ? "Reposition" : `Leg ${i + 1}`}
-                  </Label>
+                <div className="flex h-9 items-center">
                   {isRepositioning ? (
                     <button
                       type="button"
                       onClick={() => toggleCollapsed(leg.id)}
-                      className="flex items-center text-muted-foreground hover:text-foreground"
+                      className="flex items-center gap-1 text-xs font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground"
                     >
-                      <ChevronDown className="size-4" />
+                      <ChevronDown className="size-3.5" />
+                      Reposition
                     </button>
                   ) : (
-                    <div className="h-4" />
+                    <span className="text-xs font-medium tracking-wide text-accent uppercase">
+                      Leg {i + 1}
+                    </span>
                   )}
                 </div>
 
@@ -579,7 +574,7 @@ export function QuoteBuilderForm({
                       type="number"
                       min={0}
                       step="0.1"
-                      className="w-16"
+                      className="w-20 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                       value={leg.flightHours}
                       onChange={(e) =>
                         updateLeg(leg.id, { flightHours: e.target.value, dirty: true })
