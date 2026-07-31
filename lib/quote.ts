@@ -38,3 +38,9 @@ export function formatCurrency(value: number) {
     maximumFractionDigits: 2,
   });
 }
+
+export const QUOTE_MESSAGE_BADGES: Record<string, { emoji: string; label: string }> = {
+  quote_response_questions: { emoji: "💬", label: "Question" },
+  quote_response_accepted: { emoji: "✅", label: "Accepted" },
+  quote_response_declined: { emoji: "❌", label: "Declined" },
+};

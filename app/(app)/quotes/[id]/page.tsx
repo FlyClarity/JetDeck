@@ -2,8 +2,8 @@ import { notFound, redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
-import { routeSummary } from "@/lib/queue";
-import { calculateQuoteTotals, formatCurrency } from "@/lib/quote";
+import { routeSummary, relativeTime } from "@/lib/queue";
+import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES } from "@/lib/quote";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { Button } from "@/components/ui/button";
@@ -151,6 +151,11 @@ export default async function QuotePage({
     orderBy: { tailNumber: "asc" },
   });
 
+  const messages = await prisma.inboundEmail.findMany({
+    where: { quoteId: quote.id },
+    orderBy: { receivedAt: "asc" },
+  });
+
   const routeSummaryText = quote.tripRequest
     ? routeSummary(quote.tripRequest.legs, quote.tripRequest.tripType)
     : "Route unknown";
@@ -210,6 +215,55 @@ export default async function QuotePage({
           {quote.token}
         </p>
       )}
+
+      <div className="mt-8 flex flex-col gap-3">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Messages
+        </h2>
+        {messages.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {quote.status === "draft"
+              ? "Replies will appear here once this quote is sent."
+              : "No replies yet — client replies to the quote email land here automatically."}
+          </p>
+        ) : (
+          messages.map((message) => {
+            const badge = message.classification
+              ? QUOTE_MESSAGE_BADGES[message.classification]
+              : null;
+            return (
+              <div key={message.id} className="rounded-md border border-border p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {message.fromName ?? message.fromEmail}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {relativeTime(message.receivedAt)}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  {badge && (
+                    <span>
+                      {badge.emoji} {badge.label}
+                    </span>
+                  )}
+                  {message.classification === "quote_response_accepted" &&
+                    message.status === "needs_review" && (
+                      <span className="text-accent">
+                        Needs manual confirmation — email acceptance isn&apos;t a legal
+                        record on its own
+                      </span>
+                    )}
+                </div>
+                {message.subject && <p className="mt-2 font-medium">{message.subject}</p>}
+                <p className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap text-muted-foreground">
+                  {message.bodyText}
+                </p>
+              </div>
+            );
+          })
+        )}
+      </div>
 
       <div className="mt-8">
         <QuoteBuilderForm
