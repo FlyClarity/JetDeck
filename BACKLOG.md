@@ -2,6 +2,25 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Client quote page — terms-hash snapshotting** (raised while building
+  Step 15/16): `acceptedTermsHash` is computed at accept time from
+  whatever `operator.termsText` currently holds, not from a snapshot
+  taken when the quote was sent. If an operator edits their charter
+  terms in Settings between sending a quote and the client accepting
+  it, the hash reflects the edited version, not what the client
+  actually read on the page (which is also live-fetched, so the page
+  and the hash always agree with each other — just not necessarily
+  with whatever the operator originally intended when the quote was
+  sent). Low risk in practice (terms rarely change quote-to-quote) but
+  worth hardening later by storing a terms snapshot on the Quote at
+  send time, matching how `Operator.termsVersion` already snapshots a
+  hash on Settings save.
+- **Stripe card hold link in the acceptance email** (Step 17, not
+  started): the confirmation email sent on accept currently tells the
+  client wire instructions and says a card-hold link is coming
+  separately, since there's no Stripe integration yet to generate one.
+  Once Step 17 lands, that email should include the real Payment Link.
+
 - **Buy a domain + finish Postmark setup** (raised after Step 13):
   inbound email (Step 7) is built but not actually live — `jetdeck.app`
   is hardcoded in the code (Clerk webhook's inbound address generation,
