@@ -149,16 +149,26 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   builder lands in a later step") even though the Quote Builder has
   existed since Step 13 — so a created draft had nowhere to appear
   except buried in All Requests under the parent trip request's
-  "quoted" status. Now `QuoteQueue` receives the operator's `Quote`
+  "quoted" status. `QuoteQueue` now receives the operator's `Quote`
   rows alongside `TripRequest` rows and renders them per status
-  (quote number, requestor, route, total, and a status-appropriate
-  action label — "Continue draft →" / "Sent — view →" /
-  "Accepted — view →"). These are plain link rows for now, not
-  wired into the `j`/`k`/detail-pane selection machinery that
-  TripRequest rows use, since a Quote isn't a TripRequest and forcing
-  it through the same detail pane would need a larger refactor —
-  worth doing once there's more to show per quote (e.g. once Step 16
-  gives Accepted quotes a real accept record to display).
+  (quote number, requestor, route, total, a status-appropriate action
+  label). Follow-up fix: these were initially plain link rows, not
+  wired into the same selection model as TripRequest rows — the user
+  caught this ("the UI and UX needs to be uniform") and it's now
+  unified: quote rows are selectable via click or `j`/`k` exactly like
+  trip requests, with their own right-side pane (Continue Draft/Delete
+  Draft for drafts, View/Mark Declined for sent). Also fixed in the
+  same pass: list rows (both kinds) were stealing `Tab` focus from the
+  top-level view tabs, which fought with `j`/`k` for list movement —
+  rows are now excluded from the tab order (`tabIndex={-1}`) so `Tab`
+  stays a clean left-to-right pass across the dashboard's tabs/filters
+  and `j`/`k` is the only way to move through a list.
+  Known gap: declining a sent quote (or a client declining by email)
+  moves it out of every visible tab — there's no "Declined" view yet
+  to see where it went, matching the original brief's status list
+  (Draft/Sent/Accepted/**Declined**/Expired/Passed) which only
+  partially exists today. Worth adding once there's enough of that
+  state to be worth a tab.
 
 - **Pricing profiles per aircraft, by client type** (raised after
   Step 14): the user wants different rates for the same aircraft

@@ -50,10 +50,14 @@ export function QuoteQueue({
   tripRequests,
   quotes,
   passAction,
+  deleteDraftAction,
+  declineQuoteAction,
 }: {
   tripRequests: TripRequest[];
   quotes: QuoteWithTripRequest[];
   passAction: (id: string) => Promise<void>;
+  deleteDraftAction: (id: string) => Promise<void>;
+  declineQuoteAction: (id: string) => Promise<void>;
 }) {
   const router = useRouter();
   const [activeView, setActiveView] = useState<ViewKey>("ready");
@@ -89,7 +93,14 @@ export function QuoteQueue({
     return tripRequests.filter((t) => t.status === statusFilter);
   }, [isQuoteView, activeView, statusFilter, tripRequests]);
 
-  const selected = currentList.find((t) => t.id === selectedId) ?? null;
+  const selectedTripRequest = !isQuoteView
+    ? (currentList.find((t) => t.id === selectedId) ?? null)
+    : null;
+  const selectedQuote = isQuoteView ? (quoteList.find((q) => q.id === selectedId) ?? null) : null;
+
+  // Both list types share one selection model and one set of j/k/Enter/Esc
+  // shortcuts — only "p" (pass) is trip-request-specific.
+  const activeList: { id: string }[] = isQuoteView ? quoteList : currentList;
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -98,34 +109,36 @@ export function QuoteQueue({
 
       if (e.key === "q") {
         e.preventDefault();
-        router.push(selectedId ? `/quotes/new?tripRequestId=${selectedId}` : "/quotes/new");
+        router.push(
+          selectedId && !isQuoteView ? `/quotes/new?tripRequestId=${selectedId}` : "/quotes/new"
+        );
         return;
       }
 
-      if (isQuoteView || currentList.length === 0) return;
+      if (activeList.length === 0) return;
 
-      const currentIndex = currentList.findIndex((t) => t.id === selectedId);
+      const currentIndex = activeList.findIndex((item) => item.id === selectedId);
 
       if (e.key === "j") {
         e.preventDefault();
-        const next = currentList[Math.min(currentIndex + 1, currentList.length - 1)];
-        setSelectedId((next ?? currentList[0]).id);
+        const next = activeList[Math.min(currentIndex + 1, activeList.length - 1)];
+        setSelectedId((next ?? activeList[0]).id);
       } else if (e.key === "k") {
         e.preventDefault();
-        const prev = currentList[Math.max(currentIndex - 1, 0)];
-        setSelectedId((prev ?? currentList[0]).id);
+        const prev = activeList[Math.max(currentIndex - 1, 0)];
+        setSelectedId((prev ?? activeList[0]).id);
       } else if (e.key === "Enter" && !selectedId) {
-        setSelectedId(currentList[0].id);
+        setSelectedId(activeList[0].id);
       } else if (e.key === "Escape") {
         setSelectedId(null);
-      } else if (e.key === "p" && selectedId) {
+      } else if (e.key === "p" && selectedId && !isQuoteView) {
         passAction(selectedId);
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentList, selectedId, isQuoteView, passAction, router]);
+  }, [activeList, selectedId, isQuoteView, passAction, router]);
 
   return (
     <div className="flex flex-1">
@@ -202,10 +215,14 @@ export function QuoteQueue({
                       .join(" · ")
                   : "";
                 return (
-                  <Link
+                  <button
                     key={q.id}
-                    href={`/quotes/${q.id}`}
-                    className="flex w-full flex-col items-start gap-1 border-b border-border px-4 py-3 text-left transition-colors hover:bg-muted/50"
+                    tabIndex={-1}
+                    onClick={() => setSelectedId(q.id)}
+                    className={cn(
+                      "flex w-full flex-col items-start gap-1 border-b border-border px-4 py-3 text-left transition-colors",
+                      selectedId === q.id ? "bg-muted" : "hover:bg-muted/50"
+                    )}
                   >
                     <div className="flex w-full items-center justify-between gap-2">
                       <span className="text-sm font-medium">
@@ -228,7 +245,7 @@ export function QuoteQueue({
                     <span className="text-xs font-medium text-accent">
                       {QUOTE_ACTION_LABEL[q.status] ?? "View →"}
                     </span>
-                  </Link>
+                  </button>
                 );
               })
             )
@@ -243,6 +260,7 @@ export function QuoteQueue({
               return (
                 <button
                   key={tr.id}
+                  tabIndex={-1}
                   onClick={() => setSelectedId(tr.id)}
                   className={cn(
                     "flex w-full flex-col items-start gap-1 border-b border-border px-4 py-3 text-left transition-colors",
@@ -290,10 +308,10 @@ export function QuoteQueue({
         </div>
       </div>
 
-      {selected && (
+      {selectedTripRequest && (
         <div className="flex w-96 shrink-0 flex-col gap-4 overflow-y-auto p-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">{selected.requestorName}</h2>
+            <h2 className="text-lg font-semibold">{selectedTripRequest.requestorName}</h2>
             <button
               onClick={() => setSelectedId(null)}
               className="text-sm text-muted-foreground hover:text-foreground"
@@ -303,50 +321,126 @@ export function QuoteQueue({
           </div>
 
           <div className="flex flex-col gap-1 text-sm">
-            <p className="text-muted-foreground">{selected.requestorEmail}</p>
-            {selected.requestorPhone && (
-              <p className="text-muted-foreground">{selected.requestorPhone}</p>
+            <p className="text-muted-foreground">{selectedTripRequest.requestorEmail}</p>
+            {selectedTripRequest.requestorPhone && (
+              <p className="text-muted-foreground">{selectedTripRequest.requestorPhone}</p>
             )}
-            {selected.requestorCompany && <p>{selected.requestorCompany}</p>}
-            <p className="text-muted-foreground capitalize">{selected.requestorType}</p>
+            {selectedTripRequest.requestorCompany && <p>{selectedTripRequest.requestorCompany}</p>}
+            <p className="text-muted-foreground capitalize">{selectedTripRequest.requestorType}</p>
           </div>
 
           <div className="rounded-md border border-border p-3 text-sm">
-            <p className="font-medium">{routeSummary(selected.legs, selected.tripType)}</p>
-            {selected.specialRequests && (
-              <p className="mt-2 text-muted-foreground">{selected.specialRequests}</p>
+            <p className="font-medium">
+              {routeSummary(selectedTripRequest.legs, selectedTripRequest.tripType)}
+            </p>
+            {selectedTripRequest.specialRequests && (
+              <p className="mt-2 text-muted-foreground">{selectedTripRequest.specialRequests}</p>
             )}
           </div>
 
-          {selected.opportunityScore && (
+          {selectedTripRequest.opportunityScore && (
             <div className="rounded-md border border-border p-3 text-sm">
               <p className="font-medium">
-                {SCORE_BADGES[selected.opportunityScore]?.emoji}{" "}
-                {SCORE_BADGES[selected.opportunityScore]?.label}
+                {SCORE_BADGES[selectedTripRequest.opportunityScore]?.emoji}{" "}
+                {SCORE_BADGES[selectedTripRequest.opportunityScore]?.label}
               </p>
-              {selected.scoreReason && <p className="mt-1">{selected.scoreReason}</p>}
-              {selected.positioningNote && (
-                <p className="mt-1 text-muted-foreground">{selected.positioningNote}</p>
+              {selectedTripRequest.scoreReason && (
+                <p className="mt-1">{selectedTripRequest.scoreReason}</p>
               )}
-              {selected.historyNote && (
-                <p className="mt-1 text-muted-foreground">{selected.historyNote}</p>
+              {selectedTripRequest.positioningNote && (
+                <p className="mt-1 text-muted-foreground">{selectedTripRequest.positioningNote}</p>
+              )}
+              {selectedTripRequest.historyNote && (
+                <p className="mt-1 text-muted-foreground">{selectedTripRequest.historyNote}</p>
               )}
             </div>
           )}
 
           <div className="flex gap-2">
             <Button type="button" size="sm" className="self-start" asChild>
-              <Link href={`/quotes/new?tripRequestId=${selected.id}`}>Quote Now (Q)</Link>
+              <Link href={`/quotes/new?tripRequestId=${selectedTripRequest.id}`}>
+                Quote Now (Q)
+              </Link>
             </Button>
-            {selected.status !== "passed" && (
+            {selectedTripRequest.status !== "passed" && (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="self-start"
-                onClick={() => passAction(selected.id)}
+                onClick={() => passAction(selectedTripRequest.id)}
               >
                 Pass (P)
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {selectedQuote && (
+        <div className="flex w-96 shrink-0 flex-col gap-4 overflow-y-auto p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">{selectedQuote.quoteNumber}</h2>
+            <button
+              onClick={() => setSelectedId(null)}
+              className="text-sm text-muted-foreground hover:text-foreground"
+            >
+              Esc
+            </button>
+          </div>
+
+          {selectedQuote.tripRequest && (
+            <div className="flex flex-col gap-1 text-sm">
+              <p className="font-medium">
+                {selectedQuote.tripRequest.requestorName}
+                {selectedQuote.tripRequest.requestorCompany &&
+                  ` · ${selectedQuote.tripRequest.requestorCompany}`}
+              </p>
+              <p className="text-muted-foreground">{selectedQuote.tripRequest.requestorEmail}</p>
+            </div>
+          )}
+
+          <div className="rounded-md border border-border p-3 text-sm">
+            <p className="font-medium">
+              {selectedQuote.tripRequest
+                ? routeSummary(selectedQuote.tripRequest.legs, selectedQuote.tripRequest.tripType)
+                : "Route unknown"}
+            </p>
+            <p className="mt-1 text-muted-foreground">{formatCurrency(selectedQuote.total)}</p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" className="self-start" asChild>
+              <Link href={`/quotes/${selectedQuote.id}`}>
+                {selectedQuote.status === "draft" ? "Continue Draft" : "View Quote"}
+              </Link>
+            </Button>
+            {selectedQuote.status === "draft" && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="self-start"
+                onClick={() => {
+                  deleteDraftAction(selectedQuote.id);
+                  setSelectedId(null);
+                }}
+              >
+                Delete Draft
+              </Button>
+            )}
+            {selectedQuote.status === "sent" && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="self-start"
+                onClick={() => {
+                  declineQuoteAction(selectedQuote.id);
+                  setSelectedId(null);
+                }}
+              >
+                Mark Declined
               </Button>
             )}
           </div>

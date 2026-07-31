@@ -26,6 +26,60 @@ async function passTripRequest(id: string) {
   revalidatePath("/dashboard");
 }
 
+async function deleteDraftQuote(id: string) {
+  "use server";
+
+  const { clerkOrgId } = await getTenantContext();
+  if (!clerkOrgId) return;
+
+  const operator = await prisma.operator.findUnique({ where: { clerkOrgId } });
+  if (!operator) return;
+
+  const quote = await prisma.quote.findFirst({
+    where: { id, operatorId: operator.id, status: "draft" },
+  });
+  if (!quote) return;
+
+  await prisma.quote.delete({ where: { id } });
+
+  // If that was the only quote on its trip request, the lead is quotable
+  // again — surface it back in Ready to Quote instead of leaving it stuck
+  // showing "quoted" with nothing behind it.
+  if (quote.tripRequestId) {
+    const remaining = await prisma.quote.count({ where: { tripRequestId: quote.tripRequestId } });
+    if (remaining === 0) {
+      await prisma.tripRequest.update({
+        where: { id: quote.tripRequestId },
+        data: { status: "ready" },
+      });
+    }
+  }
+
+  revalidatePath("/dashboard");
+}
+
+async function declineQuote(id: string) {
+  "use server";
+
+  const { clerkOrgId } = await getTenantContext();
+  if (!clerkOrgId) return;
+
+  const operator = await prisma.operator.findUnique({ where: { clerkOrgId } });
+  if (!operator) return;
+
+  const quote = await prisma.quote.findFirst({
+    where: { id, operatorId: operator.id, status: "sent" },
+  });
+  if (!quote) return;
+
+  await prisma.quote.update({
+    where: { id },
+    data: { status: "declined", declinedAt: new Date() },
+  });
+
+  revalidatePath("/dashboard");
+}
+
 export default async function DashboardPage() {
   const operator = await getCurrentOperator();
   if (!operator) return null;
@@ -41,5 +95,13 @@ export default async function DashboardPage() {
     orderBy: { createdAt: "desc" },
   });
 
-  return <QuoteQueue tripRequests={tripRequests} quotes={quotes} passAction={passTripRequest} />;
+  return (
+    <QuoteQueue
+      tripRequests={tripRequests}
+      quotes={quotes}
+      passAction={passTripRequest}
+      deleteDraftAction={deleteDraftQuote}
+      declineQuoteAction={declineQuote}
+    />
+  );
 }
