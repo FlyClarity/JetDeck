@@ -11,10 +11,12 @@ export function AirportCombobox({
   value,
   onSelect,
   placeholder,
+  className,
 }: {
   value: PartialAirport | null;
   onSelect: (airport: AirportOption | null) => void;
   placeholder?: string;
+  className?: string;
 }) {
   const [query, setQuery] = useState(value?.icao ?? "");
   const [results, setResults] = useState<AirportOption[]>([]);
@@ -56,6 +58,7 @@ export function AirportCombobox({
       <Input
         value={query}
         placeholder={placeholder ?? "ICAO, IATA, or name"}
+        className={className}
         onChange={(e) => {
           setQuery(e.target.value.toUpperCase());
           setOpen(true);

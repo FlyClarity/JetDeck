@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
 import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
@@ -68,6 +68,7 @@ type LegRow = {
   date: string;
   flightHours: string;
   dirty: boolean;
+  collapsed: boolean;
 };
 
 function rowId() {
@@ -112,6 +113,7 @@ function buildInitialLegs(
       date: firstLeg.date,
       flightHours: hrs !== null ? hrs.toFixed(1) : "",
       dirty: false,
+      collapsed: true,
     });
   }
 
@@ -127,6 +129,7 @@ function buildInitialLegs(
       date: leg.date,
       flightHours: hrs !== null && hrs !== undefined ? Number(hrs).toFixed(1) : "",
       dirty: false,
+      collapsed: false,
     });
   });
 
@@ -141,6 +144,7 @@ function buildInitialLegs(
       date: lastLeg.date,
       flightHours: hrs !== null ? hrs.toFixed(1) : "",
       dirty: false,
+      collapsed: true,
     });
   }
 
@@ -196,16 +200,20 @@ export function QuoteBuilderForm({
   const [legs, setLegs] = useState<LegRow[]>(() => {
     if (initialValues.legs && initialValues.legs.length > 0) {
       const savedLegs = initialValues.legs;
-      return savedLegs.map((leg, idx) => ({
-        id: rowId(),
-        billAs: leg.billAs,
-        auto: leg.billAs === "repositioning" && (idx === 0 || idx === savedLegs.length - 1),
-        dep: leg.dep,
-        arr: leg.arr,
-        date: leg.date,
-        flightHours: leg.flightHours ? leg.flightHours.toFixed(1) : "",
-        dirty: false,
-      }));
+      return savedLegs.map((leg, idx) => {
+        const auto = leg.billAs === "repositioning" && (idx === 0 || idx === savedLegs.length - 1);
+        return {
+          id: rowId(),
+          billAs: leg.billAs,
+          auto,
+          dep: leg.dep,
+          arr: leg.arr,
+          date: leg.date,
+          flightHours: leg.flightHours ? leg.flightHours.toFixed(1) : "",
+          dirty: false,
+          collapsed: auto,
+        };
+      });
     }
     return buildInitialLegs(
       initialValues.requestedLegs,
@@ -273,6 +281,7 @@ export function QuoteBuilderForm({
             date: lastRevenue.date,
             flightHours: hrs !== null ? hrs.toFixed(1) : "",
             dirty: false,
+            collapsed: true,
           },
         ];
       }
@@ -328,8 +337,15 @@ export function QuoteBuilderForm({
         date: "",
         flightHours: "",
         dirty: true,
+        collapsed: false,
       },
     ]);
+  }
+
+  function toggleCollapsed(id: string) {
+    setLegs((prev) =>
+      prev.map((leg) => (leg.id === id ? { ...leg, collapsed: !leg.collapsed } : leg))
+    );
   }
 
   function handleAircraftChange(id: string) {
@@ -467,33 +483,74 @@ export function QuoteBuilderForm({
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
           <Label>Legs</Label>
-          {legs.map((leg, i) => (
-            <div key={leg.id} className="flex flex-col gap-2 rounded-md border border-border p-3">
-              <div className="flex items-center justify-between">
-                <span
-                  className={cn(
-                    "text-xs font-medium tracking-wide uppercase",
-                    leg.billAs === "repositioning" ? "text-muted-foreground" : "text-accent"
-                  )}
-                >
-                  {leg.billAs === "repositioning" ? "Repositioning" : `Leg ${i + 1}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setLegs((prev) => prev.filter((l) => l.id !== leg.id))}
-                  className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-                >
-                  Remove
-                </button>
-              </div>
+          {legs.map((leg, i) => {
+            const isRepositioning = leg.billAs === "repositioning";
 
-              <div className="flex flex-wrap items-end gap-2">
+            if (isRepositioning && leg.collapsed) {
+              return (
+                <div
+                  key={leg.id}
+                  className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm"
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapsed(leg.id)}
+                    className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronRight className="size-3.5" />
+                    <span className="text-xs font-medium tracking-wide uppercase">Reposition</span>
+                  </button>
+                  <span className="text-muted-foreground">
+                    {leg.dep?.icao ?? "?"} → {leg.arr?.icao ?? "?"}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {leg.flightHours ? `${leg.flightHours} hrs` : "— hrs"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapsed(leg.id)}
+                    className="ml-auto text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                  >
+                    Edit
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={leg.id}
+                className="flex flex-wrap items-end gap-3 rounded-md border border-border p-2.5"
+              >
+                <div className="flex flex-col gap-1">
+                  <Label
+                    className={cn(
+                      "text-xs tracking-wide uppercase",
+                      isRepositioning ? "text-muted-foreground" : "text-accent"
+                    )}
+                  >
+                    {isRepositioning ? "Reposition" : `Leg ${i + 1}`}
+                  </Label>
+                  {isRepositioning ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(leg.id)}
+                      className="flex items-center text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronDown className="size-4" />
+                    </button>
+                  ) : (
+                    <div className="h-4" />
+                  )}
+                </div>
+
                 <div className="flex flex-col gap-1">
                   <Label className="text-xs">From</Label>
                   <AirportCombobox
                     value={leg.dep}
+                    className="w-24"
                     onSelect={(airport) => updateLeg(leg.id, { dep: airport })}
                   />
                 </div>
@@ -502,6 +559,7 @@ export function QuoteBuilderForm({
                   <Label className="text-xs">To</Label>
                   <AirportCombobox
                     value={leg.arr}
+                    className="w-24"
                     onSelect={(airport) => updateLeg(leg.id, { arr: airport })}
                   />
                 </div>
@@ -514,33 +572,32 @@ export function QuoteBuilderForm({
                     onChange={(e) => updateLeg(leg.id, { date: e.target.value })}
                   />
                 </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-1.5">
-                  <Input
-                    type="number"
-                    min={0}
-                    step="0.1"
-                    className="w-20"
-                    value={leg.flightHours}
-                    onChange={(e) =>
-                      updateLeg(leg.id, { flightHours: e.target.value, dirty: true })
-                    }
-                  />
-                  <span className="text-sm text-muted-foreground">hrs</span>
-                  {leg.dirty && (leg.dep as LegAirport)?.lat && (leg.arr as LegAirport)?.lat && (
-                    <button
-                      type="button"
-                      onClick={() => recalcLeg(leg.id)}
-                      className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-                    >
-                      Reset to auto
-                    </button>
-                  )}
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">Hours</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.1"
+                      className="w-16"
+                      value={leg.flightHours}
+                      onChange={(e) =>
+                        updateLeg(leg.id, { flightHours: e.target.value, dirty: true })
+                      }
+                    />
+                    {leg.dirty && (leg.dep as LegAirport)?.lat && (leg.arr as LegAirport)?.lat && (
+                      <button
+                        type="button"
+                        onClick={() => recalcLeg(leg.id)}
+                        className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <div className="ml-auto flex gap-1 rounded-lg bg-muted p-1">
+                <div className="flex gap-1 rounded-lg bg-muted p-1">
                   {(["revenue", "repositioning"] as const).map((option) => (
                     <button
                       key={option}
@@ -553,13 +610,21 @@ export function QuoteBuilderForm({
                           : "text-muted-foreground hover:text-foreground"
                       )}
                     >
-                      {option === "revenue" ? "Revenue" : "Repositioning"}
+                      {option === "revenue" ? "Revenue" : "Reposition"}
                     </button>
                   ))}
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setLegs((prev) => prev.filter((l) => l.id !== leg.id))}
+                  className="mb-2.5 ml-auto text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                >
+                  Remove
+                </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <Button type="button" variant="outline" size="sm" className="self-start" onClick={addLeg}>
             Add leg
           </Button>

@@ -240,7 +240,7 @@ export default async function NewQuotePage({
   const createQuoteWithId = createQuote.bind(null, tripRequest.id);
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+    <div className="mx-auto w-full max-w-5xl px-6 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">New Quote</h1>
 
       <div className="mt-8">

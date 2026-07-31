@@ -192,7 +192,7 @@ export default async function QuotePage({
   const sendQuoteWithId = sendQuote.bind(null, quote.id);
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+    <div className="mx-auto w-full max-w-5xl px-6 py-10">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">{quote.quoteNumber}</h1>
         <span className="rounded-full bg-muted px-2.5 py-1 text-sm font-medium capitalize text-muted-foreground">

@@ -91,3 +91,40 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   wherever the aircraft actually ended up last. Also, opportunity
   scoring's positioning logic is still qualitative text, not tied to
   this new hours math yet.
+
+- **Multiple itinerary variations per quote** (raised after Step 13.5):
+  the user asked about presenting two options on the same quote — e.g.
+  the same trip priced from a more efficient departure airport vs. the
+  requested one, so the client can pick. Not scoped or built yet, just
+  flagging the design fork for when we get to it: (a) a `Quote` gets a
+  `variants`/`options` array so one quote record holds N priced
+  itineraries, client page shows a picker, or (b) each variation is
+  its own sibling `Quote` row (new `quoteGroupId` or similar linking
+  them) sent together. (b) fits the current schema with much less
+  disruption — `Quote` is already a flat, self-contained pricing
+  record — but (a) is the more natural authoring experience in the
+  Quote Builder (duplicate a draft, tweak the airport, compare
+  side-by-side before sending). Worth scoping properly before Step 14
+  if the user wants to prioritize it, since it touches the client quote
+  page (Step 15, not built yet) too — better to design it in from the
+  start than retrofit.
+
+- **AI profitability / margin analysis on quotes** (raised after Step
+  13.5): the user wants the AI layer to surface how profitable a trip
+  actually is, not just suggest a sell price. What exists today:
+  `lib/ai/suggest-price.ts` recommends a total price using the
+  aircraft's hourly rate, positioning, and quote history — no cost
+  basis at all, so it can't compute margin. `lib/ai/score-opportunity.ts`
+  (Quoting Queue's score badges) is also cost-blind — it only reasons
+  about availability/positioning/history, not profitability, despite
+  the original build brief's illustrative example text ("est. margin
+  38%") suggesting otherwise; that number was never actually
+  implemented. To do this for real needs a real operating-cost basis
+  per aircraft (fuel burn, maintenance reserve, crew cost, insurance/
+  hangar amortized per hour, etc.) that doesn't exist in the schema
+  yet. The user's own instinct is right: this is a natural fit for
+  Phase 2.4 (Owner Monthly Settlement Statements), which will already
+  need per-aircraft cost data to compute owner settlements — build the
+  cost model once, use it for both. Once that data exists, `suggest-
+  price.ts` and `score-opportunity.ts` could both be extended to
+  reason about margin, not just sell price.
