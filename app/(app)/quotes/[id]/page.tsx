@@ -206,9 +206,14 @@ export default async function QuotePage({
       </div>
 
       {quote.status === "draft" ? (
-        <form action={sendQuoteWithId} className="mt-4">
-          <Button type="submit">Send Quote</Button>
-        </form>
+        <div className="mt-4 flex items-center gap-3">
+          <p className="text-sm text-muted-foreground">
+            Saved as a draft — edit anything below, then send when ready.
+          </p>
+          <form action={sendQuoteWithId}>
+            <Button type="submit">Send Quote</Button>
+          </form>
+        </div>
       ) : (
         <p className="mt-4 text-sm text-muted-foreground">
           Sent {quote.sentAt?.toLocaleString()} — client link: {process.env.NEXT_PUBLIC_APP_URL}/q/

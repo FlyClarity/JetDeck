@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { TripRequest } from "@/lib/generated/prisma/client";
+import type { TripRequest, Prisma } from "@/lib/generated/prisma/client";
 import {
   SOURCE_BADGES,
   SCORE_BADGES,
@@ -12,9 +12,12 @@ import {
   routeSummary,
   paxCount,
 } from "@/lib/queue";
+import { formatCurrency } from "@/lib/quote";
 import { categoryLabel } from "@/lib/aircraft";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+type QuoteWithTripRequest = Prisma.QuoteGetPayload<{ include: { tripRequest: true } }>;
 
 const VIEWS = [
   { key: "ready", label: "Ready to Quote" },
@@ -35,13 +38,21 @@ const STATUS_FILTERS = [
 type ViewKey = (typeof VIEWS)[number]["key"];
 type StatusFilterKey = (typeof STATUS_FILTERS)[number]["key"];
 
-const PLACEHOLDER_VIEWS: ViewKey[] = ["draft", "sent", "accepted"];
+const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "accepted"];
+
+const QUOTE_ACTION_LABEL: Record<string, string> = {
+  draft: "Continue draft →",
+  sent: "Sent — view →",
+  accepted: "Accepted — view →",
+};
 
 export function QuoteQueue({
   tripRequests,
+  quotes,
   passAction,
 }: {
   tripRequests: TripRequest[];
+  quotes: QuoteWithTripRequest[];
   passAction: (id: string) => Promise<void>;
 }) {
   const router = useRouter();
@@ -59,25 +70,39 @@ export function QuoteQueue({
     [tripRequests]
   );
 
-  const isPlaceholderView = PLACEHOLDER_VIEWS.includes(activeView);
+  const draftCount = useMemo(() => quotes.filter((q) => q.status === "draft").length, [quotes]);
+
+  const isQuoteView = QUOTE_VIEWS.includes(activeView);
+
+  const quoteList = useMemo(
+    () => quotes.filter((q) => q.status === activeView),
+    [quotes, activeView]
+  );
 
   const currentList = useMemo(() => {
-    if (isPlaceholderView) return [];
+    if (isQuoteView) return [];
     if (activeView === "ready") return tripRequests.filter((t) => t.status === "ready");
     // "Active" hides passed/declined by default — the brief's own tab groups
     // Passed with Declined/Expired, and in practice most requests end up here,
     // so surfacing it by default would bury everything actionable under it.
     if (statusFilter === "active") return tripRequests.filter((t) => t.status !== "passed");
     return tripRequests.filter((t) => t.status === statusFilter);
-  }, [isPlaceholderView, activeView, statusFilter, tripRequests]);
+  }, [isQuoteView, activeView, statusFilter, tripRequests]);
 
   const selected = currentList.find((t) => t.id === selectedId) ?? null;
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (isPlaceholderView || currentList.length === 0) return;
       const target = e.target as HTMLElement;
       if (["INPUT", "TEXTAREA"].includes(target.tagName)) return;
+
+      if (e.key === "q") {
+        e.preventDefault();
+        router.push(selectedId ? `/quotes/new?tripRequestId=${selectedId}` : "/quotes/new");
+        return;
+      }
+
+      if (isQuoteView || currentList.length === 0) return;
 
       const currentIndex = currentList.findIndex((t) => t.id === selectedId);
 
@@ -95,14 +120,12 @@ export function QuoteQueue({
         setSelectedId(null);
       } else if (e.key === "p" && selectedId) {
         passAction(selectedId);
-      } else if (e.key === "q" && selectedId) {
-        router.push(`/quotes/new?tripRequestId=${selectedId}`);
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentList, selectedId, isPlaceholderView, passAction, router]);
+  }, [currentList, selectedId, isQuoteView, passAction, router]);
 
   return (
     <div className="flex flex-1">
@@ -113,6 +136,10 @@ export function QuoteQueue({
               <button
                 key={view.key}
                 onClick={() => {
+                  setActiveView(view.key);
+                  setSelectedId(null);
+                }}
+                onFocus={() => {
                   setActiveView(view.key);
                   setSelectedId(null);
                 }}
@@ -127,6 +154,9 @@ export function QuoteQueue({
                 {view.key === "ready" && readyCount > 0 && (
                   <span className="ml-1.5 text-xs text-muted-foreground">{readyCount}</span>
                 )}
+                {view.key === "draft" && draftCount > 0 && (
+                  <span className="ml-1.5 text-xs text-muted-foreground">{draftCount}</span>
+                )}
               </button>
             ))}
           </div>
@@ -138,6 +168,7 @@ export function QuoteQueue({
                   <button
                     key={f.key}
                     onClick={() => setStatusFilter(f.key)}
+                    onFocus={() => setStatusFilter(f.key)}
                     className={cn(
                       "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
                       statusFilter === f.key
@@ -160,10 +191,47 @@ export function QuoteQueue({
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {isPlaceholderView ? (
-            <p className="p-6 text-sm text-muted-foreground">
-              No quotes yet — the quote builder lands in a later step.
-            </p>
+          {isQuoteView ? (
+            quoteList.length === 0 ? (
+              <p className="p-6 text-sm text-muted-foreground">Nothing here.</p>
+            ) : (
+              quoteList.map((q) => {
+                const requestorLine = q.tripRequest
+                  ? [q.tripRequest.requestorName, q.tripRequest.requestorCompany]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : "";
+                return (
+                  <Link
+                    key={q.id}
+                    href={`/quotes/${q.id}`}
+                    className="flex w-full flex-col items-start gap-1 border-b border-border px-4 py-3 text-left transition-colors hover:bg-muted/50"
+                  >
+                    <div className="flex w-full items-center justify-between gap-2">
+                      <span className="text-sm font-medium">
+                        {q.quoteNumber}
+                        {requestorLine && (
+                          <span className="font-normal text-muted-foreground"> · {requestorLine}</span>
+                        )}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {relativeTime(q.createdAt)}
+                      </span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {q.tripRequest
+                        ? routeSummary(q.tripRequest.legs, q.tripRequest.tripType)
+                        : "Route unknown"}
+                      {" · "}
+                      {formatCurrency(q.total)}
+                    </p>
+                    <span className="text-xs font-medium text-accent">
+                      {QUOTE_ACTION_LABEL[q.status] ?? "View →"}
+                    </span>
+                  </Link>
+                );
+              })
+            )
           ) : currentList.length === 0 ? (
             <p className="p-6 text-sm text-muted-foreground">Nothing here.</p>
           ) : (

@@ -128,3 +128,69 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   cost model once, use it for both. Once that data exists, `suggest-
   price.ts` and `score-opportunity.ts` could both be extended to
   reason about margin, not just sell price.
+
+- **Create vs. Send Quote page — deeper redesign** (raised as a UX
+  question, not a firm spec — "open to your thoughts"). The immediate
+  confusion ("why does hitting Create Quote just show me the same
+  page again") is mostly resolved now: newly created quotes correctly
+  land in the dashboard's Draft tab (see the fix below), and the
+  quote detail page now says outright "Saved as a draft — edit
+  anything below, then send when ready." But the deeper ask — making
+  the create and send stages feel like genuinely different screens,
+  not the same form with a button added — is still open. Worth
+  considering once Step 15 (client quote page) exists and we can see
+  the whole lifecycle end to end: e.g. a lighter-weight "review"
+  layout for a freshly-created draft (pricing summary up front,
+  fields collapsed until touched) vs. the current dense edit form,
+  or a distinct confirmation step between Create and Send.
+
+- **Quoting Queue: Draft/Sent/Accepted tabs now show real quotes**
+  (fixed): these tabs used to be hardcoded placeholders ("the quote
+  builder lands in a later step") even though the Quote Builder has
+  existed since Step 13 — so a created draft had nowhere to appear
+  except buried in All Requests under the parent trip request's
+  "quoted" status. Now `QuoteQueue` receives the operator's `Quote`
+  rows alongside `TripRequest` rows and renders them per status
+  (quote number, requestor, route, total, and a status-appropriate
+  action label — "Continue draft →" / "Sent — view →" /
+  "Accepted — view →"). These are plain link rows for now, not
+  wired into the `j`/`k`/detail-pane selection machinery that
+  TripRequest rows use, since a Quote isn't a TripRequest and forcing
+  it through the same detail pane would need a larger refactor —
+  worth doing once there's more to show per quote (e.g. once Step 16
+  gives Accepted quotes a real accept record to display).
+
+- **Pricing profiles per aircraft, by client type** (raised after
+  Step 14): the user wants different rates for the same aircraft
+  depending on who's asking — e.g. a direct-client rate vs. a broker
+  rate, rather than the single flat `hourlyRate`/`repoRate` on
+  `Aircraft` today. Not scoped yet — open questions before building:
+  is this just direct-vs-broker (matches `requestorType`, simplest),
+  or arbitrary named tiers an operator defines themselves (more
+  flexible, more UI)? Is a profile per-aircraft or an operator-wide
+  default with per-aircraft overrides? Straw-man data model: a new
+  `AircraftPricingProfile` (aircraftId, clientType, hourlyRate,
+  repoRate) that the Quote Builder looks up by the trip request's
+  `requestorType` when an aircraft is selected, falling back to the
+  aircraft's base rate if no profile matches. Fleet management would
+  need a UI to manage profiles per tail.
+
+- **Escape key in the Quote Builder → back to dashboard, saving work**
+  (raised after Step 14): today Escape only does something on the
+  dashboard itself (closes the detail pane). Inside `/quotes/new` or
+  `/quotes/[id]`, there's no keyboard way back, and — this is the
+  real ask — no autosave, so navigating away any other way loses
+  unsaved edits. Two things to design before building: (1) autosave
+  itself — the existing `createQuote`/`updateQuote` server actions
+  already persist the full form state, but they also each call
+  `redirect()` to the quote detail page internally, so invoking them
+  from an Escape handler wouldn't land back on the dashboard, it'd
+  land on `/quotes/[id]` (which does at least mean edits are never
+  lost — same outcome, different destination than asked for); (2)
+  whether every keystroke should debounce-autosave in the background
+  (real autosave) vs. only saving on the explicit Escape-to-leave
+  gesture (simpler, matches what was actually asked for). Leaning
+  toward (2) for a first pass — lower risk of surprising partial
+  saves — but flagging both since it changes how "draft" status
+  should be interpreted (a true autosave means there's no unsaved
+  state to lose in the first place).

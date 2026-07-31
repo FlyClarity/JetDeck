@@ -35,5 +35,11 @@ export default async function DashboardPage() {
     orderBy: { createdAt: "desc" },
   });
 
-  return <QuoteQueue tripRequests={tripRequests} passAction={passTripRequest} />;
+  const quotes = await prisma.quote.findMany({
+    where: { operatorId: operator.id },
+    include: { tripRequest: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return <QuoteQueue tripRequests={tripRequests} quotes={quotes} passAction={passTripRequest} />;
 }

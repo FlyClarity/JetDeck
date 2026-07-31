@@ -44,15 +44,49 @@ async function createManualLead(formData: FormData) {
 
   const aircraftPref = String(formData.get("aircraftPref") ?? "no_preference");
 
+  const requestorName = String(formData.get("requestorName") ?? "");
+  const requestorEmail = String(formData.get("requestorEmail") ?? "");
+  const requestorPhone = String(formData.get("requestorPhone") ?? "") || null;
+  const requestorCompany = String(formData.get("requestorCompany") ?? "") || null;
+  const requestorType = String(formData.get("requestorType") ?? "direct");
+
+  // A contact picked from the search box already has an id. Otherwise, save
+  // this person as a new Contact (or reuse one matching by email) so they're
+  // searchable next time instead of re-entering the same info every lead.
+  let contactId = String(formData.get("contactId") ?? "") || null;
+  if (!contactId && requestorEmail) {
+    const existingContact = await prisma.contact.findFirst({
+      where: { operatorId: operator.id, email: requestorEmail },
+    });
+    if (existingContact) {
+      contactId = existingContact.id;
+    } else {
+      const [firstName, ...rest] = requestorName.split(" ");
+      const newContact = await prisma.contact.create({
+        data: {
+          operatorId: operator.id,
+          firstName: firstName || "Unknown",
+          lastName: rest.join(" "),
+          email: requestorEmail,
+          phone: requestorPhone,
+          company: requestorCompany,
+          type: requestorType,
+        },
+      });
+      contactId = newContact.id;
+    }
+  }
+
   const tripRequest = await prisma.tripRequest.create({
     data: {
       operatorId: operator.id,
       source: "manual",
-      requestorName: String(formData.get("requestorName") ?? ""),
-      requestorEmail: String(formData.get("requestorEmail") ?? ""),
-      requestorPhone: String(formData.get("requestorPhone") ?? "") || null,
-      requestorCompany: String(formData.get("requestorCompany") ?? "") || null,
-      requestorType: String(formData.get("requestorType") ?? "direct"),
+      contactId,
+      requestorName,
+      requestorEmail,
+      requestorPhone,
+      requestorCompany,
+      requestorType,
       tripType: String(formData.get("tripType") ?? "one_way"),
       legs: normalizedLegs,
       aircraftPref: aircraftPref === "no_preference" ? null : aircraftPref,
@@ -141,6 +175,7 @@ async function createQuote(tripRequestId: string, formData: FormData) {
       operatorId: operator.id,
       quoteNumber,
       tripRequestId: tripRequest.id,
+      contactId: tripRequest.contactId,
       aircraftId: aircraft.id,
       itinerary,
       flightHours,
