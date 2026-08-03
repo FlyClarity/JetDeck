@@ -47,6 +47,12 @@ legal/travel-advisory boilerplate (e.g. REAL ID notices) — extract trip
 details from the body only and ignore that trailing boilerplate; it does
 not affect the legs, dates, or passenger count.
 
+The subject line is part of the request, not just a label — brokers
+often put the route, date, and trip type in the subject (e.g. "NEED: OW
+10/15 KSNA KPDX") and leave only secondary details like pax count or
+time in the body. Always read both together: if an airport, date, or
+route only appears in the subject, still extract it into the legs.
+
 {
   "requestorName": string | null,
   "requestorCompany": string | null,
@@ -72,6 +78,7 @@ not affect the legs, dates, or passenger count.
 }`;
 
 export async function parseEmailToTripRequest(
+  subject: string | null | undefined,
   bodyText: string
 ): Promise<ExtractedTripData | null> {
   if (!anthropic) {
@@ -85,7 +92,7 @@ export async function parseEmailToTripRequest(
     messages: [
       {
         role: "user",
-        content: `${EXTRACTION_PROMPT}\n\n${bodyText}`,
+        content: `${EXTRACTION_PROMPT}\n\nSubject: ${subject ?? ""}\n\n${bodyText}`,
       },
     ],
   });

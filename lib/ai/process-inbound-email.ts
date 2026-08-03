@@ -121,7 +121,10 @@ export async function logInboundEmailAsInquiry(inboundEmail: InboundEmailWithOpe
 export async function createTripRequestFromInboundEmail(
   inboundEmail: InboundEmailWithOperator
 ) {
-  const extracted = await parseEmailToTripRequest(inboundEmail.bodyText);
+  const extracted = await parseEmailToTripRequest(
+    inboundEmail.subject,
+    inboundEmail.bodyText
+  );
 
   const tripRequest = await prisma.tripRequest.create({
     data: {
