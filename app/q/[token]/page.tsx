@@ -7,6 +7,7 @@ import { formatCurrency } from "@/lib/quote";
 import { paxCount } from "@/lib/queue";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
 
 export type StoredLeg = {
   billAs?: string;
@@ -15,6 +16,9 @@ export type StoredLeg = {
   date?: string | null;
   depDt?: string | null;
   flightHours?: number;
+  depTime?: string | null;
+  depTimeTBD?: boolean;
+  arrTime?: string | null;
 };
 
 export function revenueLegsOf(itinerary: unknown): StoredLeg[] {
@@ -22,12 +26,21 @@ export function revenueLegsOf(itinerary: unknown): StoredLeg[] {
   return legs.filter((l) => (l.billAs ?? "revenue") === "revenue");
 }
 
+export function legDateIso(leg: StoredLeg): string | null {
+  return leg.date || (leg.depDt ? leg.depDt.slice(0, 10) : null);
+}
+
 export function legDate(leg: StoredLeg): string {
-  const iso = leg.date || (leg.depDt ? leg.depDt.slice(0, 10) : "");
+  const iso = legDateIso(leg);
   if (!iso) return "";
   const d = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+export function legTimeLabel(leg: StoredLeg): string {
+  const dep = leg.depTimeTBD || !leg.depTime ? "TBD" : leg.depTime;
+  return leg.arrTime ? `Departs ${dep} · Arrives ${leg.arrTime}` : `Departs ${dep}`;
 }
 
 function routeAndDateText(itinerary: unknown) {
@@ -46,12 +59,15 @@ async function getQuoteByToken(token: string) {
   });
 }
 
-async function acceptQuote(token: string) {
+async function acceptQuote(token: string, formData: FormData) {
   "use server";
 
   const quote = await getQuoteByToken(token);
   if (!quote || quote.status !== "sent") return;
   if (quote.validUntil < new Date()) return;
+
+  const acceptedByName = String(formData.get("acceptedByName") ?? "").trim() || null;
+  if (!acceptedByName) return;
 
   const hdrs = await headers();
   const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || hdrs.get("x-real-ip") || null;
@@ -61,14 +77,41 @@ async function acceptQuote(token: string) {
     : null;
   const acceptedAt = new Date();
 
+  // Flag a possible double-booking: another already-accepted quote on the
+  // same aircraft covering one of the same dates. Doesn't block the client's
+  // acceptance (they've already committed) — surfaces it to the operator to
+  // resolve manually, e.g. via Cancel Booking on whichever can't be honored.
+  let conflictWarning: string | null = null;
+  if (quote.aircraftId) {
+    const thisDates = new Set(
+      revenueLegsOf(quote.itinerary)
+        .map(legDateIso)
+        .filter((d): d is string => Boolean(d))
+    );
+    const otherAccepted = await prisma.quote.findMany({
+      where: { aircraftId: quote.aircraftId, status: "accepted", id: { not: quote.id } },
+    });
+    for (const other of otherAccepted) {
+      const overlap = revenueLegsOf(other.itinerary)
+        .map(legDateIso)
+        .find((d) => d && thisDates.has(d));
+      if (overlap) {
+        conflictWarning = `Also booked on this aircraft for ${overlap} via quote ${other.quoteNumber}.`;
+        break;
+      }
+    }
+  }
+
   await prisma.quote.update({
     where: { id: quote.id },
     data: {
       status: "accepted",
       acceptedAt,
+      acceptedByName,
       acceptedIp: ip,
       acceptedUserAgent: userAgent,
       acceptedTermsHash: termsHash,
+      conflictWarning,
     },
   });
 
@@ -105,8 +148,14 @@ async function acceptQuote(token: string) {
   if (quote.operator.notifyEmail) {
     await sendEmail({
       to: quote.operator.notifyEmail,
-      subject: `Quote ${quote.quoteNumber} accepted!`,
-      html: `<p>${requestorName} accepted quote ${quote.quoteNumber} (${formatCurrency(quote.total)}) at ${acceptedAt.toUTCString()}.</p>`,
+      subject: conflictWarning
+        ? `⚠️ Double-booking risk — Quote ${quote.quoteNumber} accepted`
+        : `Quote ${quote.quoteNumber} accepted!`,
+      html: `<p>${acceptedByName} (${requestorName}) accepted quote ${quote.quoteNumber} (${formatCurrency(quote.total)}) at ${acceptedAt.toUTCString()}.</p>${
+        conflictWarning
+          ? `<p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p>`
+          : ""
+      }`,
     });
   }
 
@@ -192,6 +241,7 @@ export default async function ClientQuotePage({
   const pax = tripRequest ? paxCount(tripRequest.legs) : null;
 
   const isExpired = quote.status === "sent" && quote.validUntil < new Date();
+  const pendingDecision = quote.status === "sent" && !isExpired;
   const daysRemaining = Math.ceil(
     (quote.validUntil.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)
   );
@@ -244,7 +294,10 @@ export default async function ClientQuotePage({
                   <span className="font-medium">
                     {leg.depAirport} → {leg.arrAirport}
                   </span>
-                  <span className="text-muted-foreground">{legDate(leg)}</span>
+                  <span className="text-right text-muted-foreground">
+                    <span className="block">{legDate(leg)}</span>
+                    <span className="block text-xs">{legTimeLabel(leg)}</span>
+                  </span>
                 </div>
               ))}
             </div>
@@ -307,7 +360,7 @@ export default async function ClientQuotePage({
             </div>
           </section>
 
-          {operator.termsText && (
+          {operator.termsText && !pendingDecision && (
             <section className="mt-6">
               <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Charter Terms
@@ -345,16 +398,11 @@ export default async function ClientQuotePage({
             </div>
           ) : (
             <div className="mt-8 flex flex-col gap-4 border-t border-border pt-6">
-              <p className="text-sm text-muted-foreground">
-                By clicking the button below, you confirm that you have read and agree to the
-                Charter Terms above and authorize a credit card hold of{" "}
-                {Math.round(operator.depositPercent * 100)}% of the total as a booking deposit.
-              </p>
-              <form action={acceptQuoteWithToken}>
-                <Button type="submit" size="lg" className="w-full">
-                  I Accept — Book This Charter
-                </Button>
-              </form>
+              <TermsAcceptGate
+                termsText={operator.termsText}
+                depositPercent={operator.depositPercent}
+                action={acceptQuoteWithToken}
+              />
 
               <details className="text-sm text-muted-foreground">
                 <summary className="cursor-pointer">Need changes, or can&apos;t accept as-is?</summary>

@@ -14,6 +14,7 @@ async function updateSettings(formData: FormData) {
   const { clerkOrgId } = await getTenantContext();
   if (!clerkOrgId) return;
 
+  const logoUrl = String(formData.get("logoUrl") ?? "").trim() || null;
   const wireInstructions = String(formData.get("wireInstructions") ?? "");
   const termsText = String(formData.get("termsText") ?? "");
   const replyToEmail = String(formData.get("replyToEmail") ?? "");
@@ -28,6 +29,7 @@ async function updateSettings(formData: FormData) {
   await prisma.operator.update({
     where: { clerkOrgId },
     data: {
+      logoUrl,
       wireInstructions,
       termsText,
       termsVersion,
@@ -54,6 +56,21 @@ export default async function SettingsPage() {
       <p className="mt-1 text-muted-foreground">{operator.name}</p>
 
       <form action={updateSettings} className="mt-8 flex flex-col gap-6">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="logoUrl">Logo URL</Label>
+          <Input
+            id="logoUrl"
+            name="logoUrl"
+            type="url"
+            defaultValue={operator.logoUrl ?? ""}
+            placeholder="https://youroperator.com/logo.png"
+          />
+          <p className="text-sm text-muted-foreground">
+            Shown at the top of the client quote page. Paste a link to a hosted image — file
+            upload isn&apos;t built yet.
+          </p>
+        </div>
+
         <div className="flex flex-col gap-2">
           <Label htmlFor="wireInstructions">Wire instructions</Label>
           <Textarea

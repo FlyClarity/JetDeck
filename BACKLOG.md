@@ -2,6 +2,29 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Operator logo upload** (raised alongside the client quote page's
+  missing logo): `Operator.logoUrl` and the Settings field only accept
+  a pasted URL to an already-hosted image. There's no file upload —
+  worth adding via Vercel Blob (same tool already flagged for aircraft
+  photos above) once there's appetite to batch image-upload work
+  together.
+- **Double-booking detection is same-aircraft-only and date-only**
+  (raised alongside cancel/decline): `acceptQuote`'s conflict check
+  compares revenue-leg dates across other `accepted` quotes sharing
+  the same `aircraftId` — it doesn't look at repositioning legs, don't
+  account for time-of-day (two same-day legs that don't actually
+  overlap in time still flag), and says nothing about crew
+  availability (no crew-scheduling data exists yet). It's also
+  advisory only, by design — the client's acceptance still goes
+  through, and the operator resolves it manually via Cancel Booking.
+  Worth tightening once there's real leg-time data to compare instead
+  of whole-day granularity.
+- **No dashboard view for cancelled bookings** (raised alongside
+  Cancel Booking): cancelling an accepted quote moves it to a
+  `cancelled` status with no tab to find it again afterward — same gap
+  already noted above for `declined` quotes. Both should probably be
+  solved together once there's enough terminal-state volume to
+  justify a tab (or a combined "Inactive" filter).
 - **Client quote page — terms-hash snapshotting** (raised while building
   Step 15/16): `acceptedTermsHash` is computed at accept time from
   whatever `operator.termsText` currently holds, not from a snapshot

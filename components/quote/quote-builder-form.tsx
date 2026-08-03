@@ -25,6 +25,9 @@ export type QuoteLegInput = {
   arr: AirportOption | { icao: string } | null;
   date: string;
   flightHours?: number;
+  depTime?: string | null;
+  depTimeTBD?: boolean;
+  arrTime?: string | null;
 };
 
 export type SavedLegInput = {
@@ -33,6 +36,9 @@ export type SavedLegInput = {
   arr: AirportOption | { icao: string } | null;
   date: string;
   flightHours: number;
+  depTime?: string | null;
+  depTimeTBD?: boolean;
+  arrTime?: string | null;
 };
 
 export type QuoteBuilderInitialValues = {
@@ -69,6 +75,9 @@ type LegRow = {
   flightHours: string;
   dirty: boolean;
   collapsed: boolean;
+  depTime: string;
+  depTimeTBD: boolean;
+  arrTime: string;
 };
 
 function rowId() {
@@ -114,6 +123,9 @@ function buildInitialLegs(
       flightHours: hrs !== null ? hrs.toFixed(1) : "",
       dirty: false,
       collapsed: true,
+      depTime: "",
+      depTimeTBD: true,
+      arrTime: "",
     });
   }
 
@@ -130,6 +142,9 @@ function buildInitialLegs(
       flightHours: hrs !== null && hrs !== undefined ? Number(hrs).toFixed(1) : "",
       dirty: false,
       collapsed: false,
+      depTime: leg.depTime ?? "",
+      depTimeTBD: leg.depTimeTBD ?? !leg.depTime,
+      arrTime: leg.arrTime ?? "",
     });
   });
 
@@ -145,6 +160,9 @@ function buildInitialLegs(
       flightHours: hrs !== null ? hrs.toFixed(1) : "",
       dirty: false,
       collapsed: true,
+      depTime: "",
+      depTimeTBD: true,
+      arrTime: "",
     });
   }
 
@@ -161,6 +179,7 @@ export function QuoteBuilderForm({
   depositPercent,
   defaultOvernightFee,
   defaultBlockTimeBufferHours,
+  isAccepted,
   action,
   submitLabel,
 }: {
@@ -173,9 +192,12 @@ export function QuoteBuilderForm({
   depositPercent: number;
   defaultOvernightFee: number;
   defaultBlockTimeBufferHours: number;
+  isAccepted?: boolean;
   action: (formData: FormData) => Promise<void>;
   submitLabel: string;
 }) {
+  const [unlocked, setUnlocked] = useState(!isAccepted);
+  const locked = Boolean(isAccepted) && !unlocked;
   const [aircraftId, setAircraftId] = useState(initialValues.aircraftId ?? "");
   const [hourlyRate, setHourlyRate] = useState(String(initialValues.hourlyRate || ""));
   const [repoRate, setRepoRate] = useState(String(initialValues.repoRate || ""));
@@ -212,6 +234,9 @@ export function QuoteBuilderForm({
           flightHours: leg.flightHours ? leg.flightHours.toFixed(1) : "",
           dirty: false,
           collapsed: auto,
+          depTime: leg.depTime ?? "",
+          depTimeTBD: leg.depTimeTBD ?? !leg.depTime,
+          arrTime: leg.arrTime ?? "",
         };
       });
     }
@@ -282,6 +307,9 @@ export function QuoteBuilderForm({
             flightHours: hrs !== null ? hrs.toFixed(1) : "",
             dirty: false,
             collapsed: true,
+            depTime: "",
+            depTimeTBD: true,
+            arrTime: "",
           },
         ];
       }
@@ -338,6 +366,9 @@ export function QuoteBuilderForm({
         flightHours: "",
         dirty: true,
         collapsed: false,
+        depTime: "",
+        depTimeTBD: true,
+        arrTime: "",
       },
     ]);
   }
@@ -387,6 +418,9 @@ export function QuoteBuilderForm({
       arrAirport: l.arr?.icao ?? null,
       date: l.date,
       flightHours: Number(l.flightHours) || 0,
+      depTime: l.depTimeTBD ? null : l.depTime || null,
+      depTimeTBD: l.depTimeTBD,
+      arrTime: l.arrTime || null,
     }))
   );
 
@@ -424,6 +458,37 @@ export function QuoteBuilderForm({
       <input type="hidden" name="legsJson" value={legsJson} />
 
       <div className="flex flex-1 flex-col gap-6">
+        {isAccepted && (
+          <div className="rounded-md border border-amber-400/50 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
+            {locked ? (
+              <>
+                <p className="font-medium">This quote has already been accepted by the client.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "This quote has already been accepted by the client. Are you sure you want to change the pricing?"
+                      )
+                    ) {
+                      setUnlocked(true);
+                    }
+                  }}
+                  className="mt-1 text-sm underline underline-offset-4 hover:text-foreground"
+                >
+                  Unlock to edit pricing
+                </button>
+              </>
+            ) : (
+              <p className="font-medium">
+                Pricing unlocked — this quote was already accepted, so double-check any changes
+                before saving.
+              </p>
+            )}
+          </div>
+        )}
+
+        <fieldset disabled={locked} className="contents">
         <div>
           <p className="font-medium">{routeSummaryText}</p>
           <p className="text-sm text-muted-foreground">{requestorLine}</p>
@@ -506,6 +571,9 @@ export function QuoteBuilderForm({
                     {leg.dep?.icao ?? "?"} → {leg.arr?.icao ?? "?"}
                   </span>
                   <span className="text-muted-foreground">
+                    {leg.depTimeTBD ? "TBD" : leg.depTime || "TBD"}
+                  </span>
+                  <span className="text-muted-foreground">
                     {leg.flightHours ? `${leg.flightHours} hrs` : "— hrs"}
                   </span>
                   <button
@@ -565,6 +633,39 @@ export function QuoteBuilderForm({
                     className="w-36"
                     value={leg.date}
                     onChange={(e) => updateLeg(leg.id, { date: e.target.value })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">Departs</Label>
+                  {leg.depTimeTBD ? (
+                    <div className="flex h-9 w-24 items-center text-sm text-muted-foreground">TBD</div>
+                  ) : (
+                    <Input
+                      type="time"
+                      className="w-24"
+                      value={leg.depTime}
+                      onChange={(e) => updateLeg(leg.id, { depTime: e.target.value })}
+                    />
+                  )}
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className="size-3.5 rounded border-input"
+                      checked={leg.depTimeTBD}
+                      onChange={(e) =>
+                        updateLeg(leg.id, { depTimeTBD: e.target.checked, depTime: "" })
+                      }
+                    />
+                    TBD
+                  </label>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">Arrives</Label>
+                  <Input
+                    type="time"
+                    className="w-24"
+                    value={leg.arrTime}
+                    onChange={(e) => updateLeg(leg.id, { arrTime: e.target.value })}
                   />
                 </div>
                 <div className="flex flex-col gap-1">
@@ -798,6 +899,7 @@ export function QuoteBuilderForm({
         <Button type="submit" size="lg" className="self-start" disabled={!aircraftId}>
           {submitLabel}
         </Button>
+        </fieldset>
       </div>
 
       <div className="w-72 shrink-0">

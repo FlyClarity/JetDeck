@@ -9,6 +9,7 @@ import { getAirportsByIcao } from "@/lib/airport-server";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 async function getScopedQuote(id: string) {
   const { clerkOrgId } = await getTenantContext();
@@ -79,6 +80,9 @@ async function updateQuote(id: string, formData: FormData) {
     arrAirport: leg.arrAirport ? String(leg.arrAirport) : null,
     date: leg.date ? String(leg.date) : null,
     flightHours: Number(leg.flightHours) || 0,
+    depTime: leg.depTime ? String(leg.depTime) : null,
+    depTimeTBD: Boolean(leg.depTimeTBD),
+    arrTime: leg.arrTime ? String(leg.arrTime) : null,
   }));
 
   const validUntil = String(formData.get("validUntil") ?? "");
@@ -138,6 +142,34 @@ async function sendQuote(id: string) {
   redirect(`/quotes/${quote.id}`);
 }
 
+async function cancelBooking(id: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedQuote(id);
+  if (!scoped) return;
+  const { quote, operator } = scoped;
+  if (quote.status !== "accepted") return;
+
+  const note = String(formData.get("cancellationNote") ?? "").trim();
+  if (!note) return;
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { status: "cancelled", cancelledAt: new Date(), cancellationNote: note },
+  });
+
+  if (quote.tripRequest?.requestorEmail) {
+    await sendEmail({
+      to: quote.tripRequest.requestorEmail,
+      subject: `Important update — ${quote.quoteNumber}`,
+      html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>We're sorry to let you know your booking (${quote.quoteNumber}) has been cancelled: ${note}</p><p>Please contact us so we can help find another solution.</p><p>— ${operator.name}</p>`,
+      replyTo: operator.replyToEmail ?? undefined,
+    });
+  }
+
+  redirect(`/quotes/${quote.id}`);
+}
+
 export default async function QuotePage({
   params,
 }: {
@@ -176,6 +208,9 @@ export default async function QuotePage({
     date?: string | null;
     depDt?: string | null;
     flightHours?: number;
+    depTime?: string | null;
+    depTimeTBD?: boolean;
+    arrTime?: string | null;
   };
   const storedLegs = (quote.itinerary as StoredLeg[]) ?? [];
   const icaosToResolve = [
@@ -193,10 +228,14 @@ export default async function QuotePage({
     arr: l.arrAirport ? airportsByIcao[l.arrAirport] ?? { icao: l.arrAirport } : null,
     date: l.date ?? (l.depDt ? l.depDt.slice(0, 10) : ""),
     flightHours: l.flightHours ?? 0,
+    depTime: l.depTime ?? "",
+    depTimeTBD: l.depTimeTBD ?? !l.depTime,
+    arrTime: l.arrTime ?? "",
   }));
 
   const updateQuoteWithId = updateQuote.bind(null, quote.id);
   const sendQuoteWithId = sendQuote.bind(null, quote.id);
+  const cancelBookingWithId = cancelBooking.bind(null, quote.id);
   const clientLink = `${await getAppUrl()}/q/${quote.token}`;
 
   return (
@@ -219,18 +258,62 @@ export default async function QuotePage({
         </div>
       ) : (
         <div className="mt-4 flex items-center gap-3 text-sm text-muted-foreground">
-          <p>
-            Sent {quote.sentAt?.toLocaleString()} — client link:{" "}
-            <a
-              href={clientLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-foreground underline underline-offset-4"
-            >
-              {clientLink}
-            </a>
-          </p>
+          <p>Sent {quote.sentAt?.toLocaleString()}</p>
+          <a
+            href={clientLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-foreground underline underline-offset-4"
+          >
+            Client link
+          </a>
           <CopyLinkButton link={clientLink} />
+        </div>
+      )}
+
+      {quote.status === "accepted" && (
+        <div className="mt-4 flex flex-col gap-3">
+          <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm">
+            <p className="font-medium">
+              Accepted by {quote.acceptedByName || quote.tripRequest?.requestorName || "the client"}
+              {quote.acceptedAt && ` on ${quote.acceptedAt.toLocaleString()}`}
+            </p>
+            {quote.acceptedIp && (
+              <p className="mt-1 text-xs text-muted-foreground">IP: {quote.acceptedIp}</p>
+            )}
+          </div>
+
+          {quote.conflictWarning && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <p className="font-medium text-destructive">⚠️ Possible double-booking</p>
+              <p className="mt-1">{quote.conflictWarning}</p>
+            </div>
+          )}
+
+          <details className="text-sm">
+            <summary className="cursor-pointer text-muted-foreground">
+              Aircraft or crew no longer available?
+            </summary>
+            <form action={cancelBookingWithId} className="mt-3 flex flex-col gap-2">
+              <Textarea
+                name="cancellationNote"
+                rows={2}
+                placeholder="Reason for cancelling — this is sent to the client"
+                required
+              />
+              <Button type="submit" variant="destructive" size="sm" className="self-start">
+                Cancel Booking
+              </Button>
+            </form>
+          </details>
+        </div>
+      )}
+
+      {quote.status === "cancelled" && (
+        <div className="mt-4 rounded-md border border-border p-3 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Booking cancelled</p>
+          {quote.cancelledAt && <p className="mt-1">On {quote.cancelledAt.toLocaleString()}</p>}
+          {quote.cancellationNote && <p className="mt-1">{quote.cancellationNote}</p>}
         </div>
       )}
 
@@ -313,6 +396,7 @@ export default async function QuotePage({
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}
           defaultBlockTimeBufferHours={operator.defaultBlockTimeBufferHours}
+          isAccepted={quote.status === "accepted"}
           action={updateQuoteWithId}
           submitLabel="Save Changes"
         />

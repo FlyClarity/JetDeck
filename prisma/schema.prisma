@@ -191,17 +191,28 @@ model Quote {
   // Client-facing
   token  String @unique @default(cuid())
   status String @default("draft")
-  // "draft" | "sent" | "accepted" | "declined" | "expired" | "converted"
+  // "draft" | "sent" | "accepted" | "declined" | "expired" | "converted" | "cancelled"
 
   sentAt DateTime?
 
   // Legal acceptance record
   acceptedAt        DateTime?
+  acceptedByName    String? // name the client typed to confirm they read the terms
   acceptedIp        String?
   acceptedUserAgent String?
   acceptedTermsHash String? // hash of exact terms shown at acceptance
 
   declinedAt DateTime?
+
+  // Set when accepting this quote finds another accepted quote on the same
+  // aircraft with overlapping dates — surfaced to the operator so they can
+  // resolve the conflict manually (e.g. cancel one of the two bookings).
+  conflictWarning String?
+
+  // Set when the operator cancels an already-accepted booking (aircraft/crew
+  // no longer available, etc.)
+  cancelledAt     DateTime?
+  cancellationNote String?
 
   // Stripe
   stripePaymentIntentId String?

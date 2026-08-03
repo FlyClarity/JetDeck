@@ -165,6 +165,9 @@ async function createQuote(tripRequestId: string, formData: FormData) {
     arrAirport: leg.arrAirport ? String(leg.arrAirport) : null,
     date: leg.date ? String(leg.date) : null,
     flightHours: Number(leg.flightHours) || 0,
+    depTime: leg.depTime ? String(leg.depTime) : null,
+    depTimeTBD: Boolean(leg.depTimeTBD),
+    arrTime: leg.arrTime ? String(leg.arrTime) : null,
   }));
 
   const quoteNumber = await generateQuoteNumber(operator.id);
@@ -248,7 +251,13 @@ export default async function NewQuotePage({
     .join(" · ");
 
   const tripLegs =
-    (tripRequest.legs as { depAirport?: string; arrAirport?: string; date?: string }[]) ?? [];
+    (tripRequest.legs as {
+      depAirport?: string;
+      arrAirport?: string;
+      date?: string;
+      timePref?: string | null;
+      timeFlexible?: boolean;
+    }[]) ?? [];
   const icaosToResolve = [
     ...tripLegs.flatMap((l) => [l.depAirport, l.arrAirport].filter(Boolean) as string[]),
     ...aircraftList.map((a) => a.homeBase),
@@ -256,10 +265,13 @@ export default async function NewQuotePage({
   const resolvedAirports = await getAirportsByIcao(icaosToResolve);
   const airportsByIcao = Object.fromEntries(resolvedAirports.map((a) => [a.icao, a]));
 
+  const timePattern = /^\d{2}:\d{2}$/;
   const requestedLegs = tripLegs.map((l) => ({
     dep: l.depAirport ? airportsByIcao[l.depAirport] ?? { icao: l.depAirport } : null,
     arr: l.arrAirport ? airportsByIcao[l.arrAirport] ?? { icao: l.arrAirport } : null,
     date: l.date ?? "",
+    depTime: l.timePref && timePattern.test(l.timePref) ? l.timePref : null,
+    depTimeTBD: l.timeFlexible ?? !l.timePref,
   }));
 
   const priceSuggestion = defaultAircraft
