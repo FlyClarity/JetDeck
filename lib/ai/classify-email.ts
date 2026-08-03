@@ -60,7 +60,7 @@ export async function classifyEmail(email: {
   }
 
   const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
+    model: "claude-sonnet-5",
     max_tokens: 1024,
     messages: [
       {
