@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
+import { getAppUrl } from "@/lib/url";
 import { routeSummary, relativeTime } from "@/lib/queue";
 import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES } from "@/lib/quote";
 import { getAirportsByIcao } from "@/lib/airport-server";
@@ -124,7 +125,7 @@ async function sendQuote(id: string) {
     data: { status: "sent", sentAt: new Date() },
   });
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const appUrl = await getAppUrl();
   const quoteLink = `${appUrl}/q/${quote.token}`;
 
   await sendEmail({
@@ -196,7 +197,7 @@ export default async function QuotePage({
 
   const updateQuoteWithId = updateQuote.bind(null, quote.id);
   const sendQuoteWithId = sendQuote.bind(null, quote.id);
-  const clientLink = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/q/${quote.token}`;
+  const clientLink = `${await getAppUrl()}/q/${quote.token}`;
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
