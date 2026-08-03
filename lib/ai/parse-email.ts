@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { extractJson } from "@/lib/ai/extract-json";
 
 const anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -35,8 +36,16 @@ export type ExtractedTripData = {
 };
 
 const EXTRACTION_PROMPT = `You are a flight operations assistant for a Part 135 charter operator.
-Extract the following from this broker email and return ONLY valid JSON.
-If a field cannot be determined, use null.
+Extract trip details from this inbound email and return ONLY valid JSON —
+no markdown code fences, no commentary before or after. If a field cannot
+be determined, use null.
+
+Charter request emails are often terse shorthand, e.g. "9/10 1000L KSNA -
+KTEB" means a leg on Sept 10, departing 10:00 AM local, from KSNA to KTEB.
+Emails also commonly end with a sender's signature block and unrelated
+legal/travel-advisory boilerplate (e.g. REAL ID notices) — extract trip
+details from the body only and ignore that trailing boilerplate; it does
+not affect the legs, dates, or passenger count.
 
 {
   "requestorName": string | null,
@@ -82,25 +91,28 @@ export async function parseEmailToTripRequest(
   });
 
   const text = message.content.find((block) => block.type === "text")?.text ?? "{}";
+  const parsed = extractJson<Record<string, unknown>>(text);
 
-  try {
-    const parsed = JSON.parse(text);
-    return {
-      requestorName: parsed.requestorName ?? null,
-      requestorCompany: parsed.requestorCompany ?? null,
-      requestorEmail: parsed.requestorEmail ?? null,
-      requestorPhone: parsed.requestorPhone ?? null,
-      requestorType: parsed.requestorType ?? null,
-      tripType: parsed.tripType ?? null,
-      legs: Array.isArray(parsed.legs) ? parsed.legs : [],
-      aircraftCategory: parsed.aircraftCategory ?? null,
-      budgetMentioned: parsed.budgetMentioned ?? null,
-      specialRequests: parsed.specialRequests ?? null,
-      urgency: parsed.urgency ?? null,
-      rawNeedsSummary: parsed.rawNeedsSummary ?? "",
-    };
-  } catch {
-    console.error("Failed to parse AI extraction response");
+  if (!parsed) {
+    console.error(
+      "Failed to parse AI extraction response:",
+      text.slice(0, 500)
+    );
     return null;
   }
+
+  return {
+    requestorName: (parsed.requestorName as string) ?? null,
+    requestorCompany: (parsed.requestorCompany as string) ?? null,
+    requestorEmail: (parsed.requestorEmail as string) ?? null,
+    requestorPhone: (parsed.requestorPhone as string) ?? null,
+    requestorType: (parsed.requestorType as ExtractedTripData["requestorType"]) ?? null,
+    tripType: (parsed.tripType as ExtractedTripData["tripType"]) ?? null,
+    legs: Array.isArray(parsed.legs) ? (parsed.legs as ExtractedLeg[]) : [],
+    aircraftCategory: (parsed.aircraftCategory as ExtractedTripData["aircraftCategory"]) ?? null,
+    budgetMentioned: (parsed.budgetMentioned as number) ?? null,
+    specialRequests: (parsed.specialRequests as string) ?? null,
+    urgency: (parsed.urgency as ExtractedTripData["urgency"]) ?? null,
+    rawNeedsSummary: (parsed.rawNeedsSummary as string) ?? "",
+  };
 }

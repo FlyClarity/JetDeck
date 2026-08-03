@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { extractJson } from "@/lib/ai/extract-json";
 
 const anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -25,7 +26,7 @@ export async function suggestPrice(input: {
 Suggest a total quote price (in USD) for this trip and briefly explain your
 reasoning in one or two sentences. Consider the aircraft's hourly rate,
 positioning, and any quoting history provided. Return ONLY valid JSON in
-this shape, no other text:
+this shape, no markdown code fences, no other text:
 
 { "suggestedPrice": number, "reasoning": string }
 
@@ -42,15 +43,15 @@ History: ${input.historyNote ?? "no prior history with this broker/route"}`;
   });
 
   const text = message.content.find((block) => block.type === "text")?.text ?? "{}";
+  const parsed = extractJson<Record<string, unknown>>(text);
 
-  try {
-    const parsed = JSON.parse(text);
-    if (typeof parsed.suggestedPrice !== "number") return null;
-    return {
-      suggestedPrice: parsed.suggestedPrice,
-      reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
-    };
-  } catch {
+  if (!parsed || typeof parsed.suggestedPrice !== "number") {
+    console.error("Failed to parse AI price suggestion:", text.slice(0, 500));
     return null;
   }
+
+  return {
+    suggestedPrice: parsed.suggestedPrice,
+    reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
+  };
 }

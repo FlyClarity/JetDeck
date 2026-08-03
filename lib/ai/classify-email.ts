@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { extractJson } from "@/lib/ai/extract-json";
 
 const anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -37,7 +38,7 @@ Also return:
 - senderEmail: the From address
 - senderName: the sender name if identifiable, else null
 
-Return ONLY valid JSON. No other text.`;
+Return ONLY valid JSON. No markdown code fences, no other text.`;
 
 export async function classifyEmail(email: {
   fromEmail: string;
@@ -71,24 +72,13 @@ export async function classifyEmail(email: {
   });
 
   const text = message.content.find((block) => block.type === "text")?.text ?? "{}";
+  const parsed = extractJson<Record<string, unknown>>(text);
 
-  try {
-    const parsed = JSON.parse(text);
-    const classification = EMAIL_CLASSIFICATIONS.includes(parsed.classification)
-      ? (parsed.classification as EmailClassificationType)
-      : "unclassifiable";
-
-    return {
-      classification,
-      confidence: ["high", "medium", "low"].includes(parsed.confidence)
-        ? parsed.confidence
-        : "low",
-      reason: typeof parsed.reason === "string" ? parsed.reason : "",
-      quoteNumber: parsed.quoteNumber ?? null,
-      senderEmail: parsed.senderEmail ?? email.fromEmail,
-      senderName: parsed.senderName ?? email.fromName ?? null,
-    };
-  } catch {
+  if (!parsed) {
+    console.error(
+      "Failed to parse AI classification response:",
+      text.slice(0, 500)
+    );
     return {
       classification: "unclassifiable",
       confidence: "low",
@@ -98,4 +88,21 @@ export async function classifyEmail(email: {
       senderName: email.fromName ?? null,
     };
   }
+
+  const classification = EMAIL_CLASSIFICATIONS.includes(
+    parsed.classification as EmailClassificationType
+  )
+    ? (parsed.classification as EmailClassificationType)
+    : "unclassifiable";
+
+  return {
+    classification,
+    confidence: ["high", "medium", "low"].includes(parsed.confidence as string)
+      ? (parsed.confidence as "high" | "medium" | "low")
+      : "low",
+    reason: typeof parsed.reason === "string" ? parsed.reason : "",
+    quoteNumber: (parsed.quoteNumber as string) ?? null,
+    senderEmail: (parsed.senderEmail as string) ?? email.fromEmail,
+    senderName: (parsed.senderName as string) ?? email.fromName ?? null,
+  };
 }
