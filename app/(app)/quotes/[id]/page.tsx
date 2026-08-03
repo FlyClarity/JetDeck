@@ -6,6 +6,7 @@ import { routeSummary, relativeTime } from "@/lib/queue";
 import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES } from "@/lib/quote";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
+import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { Button } from "@/components/ui/button";
 
 async function getScopedQuote(id: string) {
@@ -195,6 +196,7 @@ export default async function QuotePage({
 
   const updateQuoteWithId = updateQuote.bind(null, quote.id);
   const sendQuoteWithId = sendQuote.bind(null, quote.id);
+  const clientLink = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/q/${quote.token}`;
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
@@ -215,10 +217,20 @@ export default async function QuotePage({
           </form>
         </div>
       ) : (
-        <p className="mt-4 text-sm text-muted-foreground">
-          Sent {quote.sentAt?.toLocaleString()} — client link: {process.env.NEXT_PUBLIC_APP_URL}/q/
-          {quote.token}
-        </p>
+        <div className="mt-4 flex items-center gap-3 text-sm text-muted-foreground">
+          <p>
+            Sent {quote.sentAt?.toLocaleString()} — client link:{" "}
+            <a
+              href={clientLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-foreground underline underline-offset-4"
+            >
+              {clientLink}
+            </a>
+          </p>
+          <CopyLinkButton link={clientLink} />
+        </div>
       )}
 
       <div className="mt-8 flex flex-col gap-3">
