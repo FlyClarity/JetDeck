@@ -339,7 +339,7 @@ export function QuoteQueue({
       </div>
 
       {selectedTripRequest && (
-        <div className="flex w-96 shrink-0 flex-col gap-4 overflow-y-auto p-6">
+        <div className="sticky top-4 flex max-h-[calc(100vh-2rem)] w-96 shrink-0 flex-col gap-4 self-start overflow-y-auto p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">{selectedTripRequest.requestorName}</h2>
             <button
@@ -408,7 +408,7 @@ export function QuoteQueue({
       )}
 
       {selectedQuote && (
-        <div className="flex w-96 shrink-0 flex-col gap-4 overflow-y-auto p-6">
+        <div className="sticky top-4 flex max-h-[calc(100vh-2rem)] w-96 shrink-0 flex-col gap-4 self-start overflow-y-auto p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">{selectedQuote.quoteNumber}</h2>
             <button

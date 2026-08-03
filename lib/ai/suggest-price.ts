@@ -7,7 +7,6 @@ const anthropic = process.env.ANTHROPIC_API_KEY
 
 export type PriceSuggestion = {
   suggestedPrice: number;
-  reasoning: string;
 };
 
 export async function suggestPrice(input: {
@@ -23,12 +22,12 @@ export async function suggestPrice(input: {
   }
 
   const prompt = `You are a pricing assistant for a Part 135 charter operator.
-Suggest a total quote price (in USD) for this trip and briefly explain your
-reasoning in one or two sentences. Consider the aircraft's hourly rate,
-positioning, and any quoting history provided. Return ONLY valid JSON in
-this shape, no markdown code fences, no other text:
+Suggest a total quote price (in USD) for this trip, considering the
+aircraft's hourly rate, positioning, and any quoting history provided.
+Return ONLY valid JSON in this shape, no markdown code fences, no other
+text, no explanation:
 
-{ "suggestedPrice": number, "reasoning": string }
+{ "suggestedPrice": number }
 
 Route: ${input.routeSummary}
 Estimated flight hours: ${input.flightHours ?? "unknown"}
@@ -38,7 +37,7 @@ History: ${input.historyNote ?? "no prior history with this broker/route"}`;
 
   const message = await anthropic.messages.create({
     model: "claude-sonnet-5",
-    max_tokens: 512,
+    max_tokens: 64,
     messages: [{ role: "user", content: prompt }],
   });
 
@@ -50,8 +49,5 @@ History: ${input.historyNote ?? "no prior history with this broker/route"}`;
     return null;
   }
 
-  return {
-    suggestedPrice: parsed.suggestedPrice,
-    reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
-  };
+  return { suggestedPrice: parsed.suggestedPrice };
 }

@@ -5,7 +5,7 @@ import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
 import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
-import { addHoursToTime } from "@/lib/time";
+import { addHoursAcrossTimezones } from "@/lib/time";
 import type { AirportOption } from "@/lib/airport-server";
 import { AirportCombobox } from "@/components/quote/airport-combobox";
 import {
@@ -69,7 +69,14 @@ export type QuoteBuilderInitialValues = {
   validUntil: string;
 };
 
-type LegAirport = { icao: string; iata?: string | null; name?: string; lat?: number; lon?: number };
+type LegAirport = {
+  icao: string;
+  iata?: string | null;
+  name?: string;
+  lat?: number;
+  lon?: number;
+  timezone?: string | null;
+};
 
 type LegRow = {
   id: string;
@@ -90,12 +97,21 @@ type LegRow = {
 };
 
 // Best-effort arrival time: only fills in when we actually have a firm
-// departure time and a flight-hours estimate to add to it.
-function computeArrTime(depTime: string, depTimeTBD: boolean, flightHours: string): string {
+// departure time and a flight-hours estimate to add to it. Converts across
+// timezones when both airports' zones are known (see addHoursAcrossTimezones)
+// instead of just adding hours on the departure airport's clock.
+function computeArrTime(
+  date: string,
+  depTime: string,
+  depTimeTBD: boolean,
+  flightHours: string,
+  dep: LegAirport | null,
+  arr: LegAirport | null
+): string {
   if (depTimeTBD || !depTime) return "";
   const hrs = Number(flightHours);
   if (!Number.isFinite(hrs) || hrs <= 0) return "";
-  return addHoursToTime(depTime, hrs);
+  return addHoursAcrossTimezones(date, depTime, hrs, dep?.timezone ?? null, arr?.timezone ?? null);
 }
 
 function rowId() {
@@ -166,7 +182,7 @@ function buildInitialLegs(
       collapsed: false,
       depTime,
       depTimeTBD,
-      arrTime: leg.arrTime || computeArrTime(depTime, depTimeTBD, flightHours),
+      arrTime: leg.arrTime || computeArrTime(leg.date, depTime, depTimeTBD, flightHours, leg.dep, leg.arr),
       arrTimeDirty: Boolean(leg.arrTime),
     });
   });
@@ -305,7 +321,7 @@ export function QuoteBuilderForm({
             flightHours,
             arrTime: leg.arrTimeDirty
               ? leg.arrTime
-              : computeArrTime(leg.depTime, leg.depTimeTBD, flightHours),
+              : computeArrTime(leg.date, leg.depTime, leg.depTimeTBD, flightHours, dep, arr),
           };
         })
         // Dropping the aircraft onto a plane already based at this leg's
@@ -371,7 +387,14 @@ export function QuoteBuilderForm({
         if ("arrTime" in patch) {
           updated.arrTimeDirty = true;
         } else if (!updated.arrTimeDirty) {
-          updated.arrTime = computeArrTime(updated.depTime, updated.depTimeTBD, updated.flightHours);
+          updated.arrTime = computeArrTime(
+            updated.date,
+            updated.depTime,
+            updated.depTimeTBD,
+            updated.flightHours,
+            updated.dep,
+            updated.arr
+          );
         }
         return updated;
       })
@@ -395,7 +418,7 @@ export function QuoteBuilderForm({
           flightHours,
           arrTime: leg.arrTimeDirty
             ? leg.arrTime
-            : computeArrTime(leg.depTime, leg.depTimeTBD, flightHours),
+            : computeArrTime(leg.date, leg.depTime, leg.depTimeTBD, flightHours, leg.dep, leg.arr),
         };
       })
     );
@@ -408,7 +431,14 @@ export function QuoteBuilderForm({
           ? {
               ...leg,
               arrTimeDirty: false,
-              arrTime: computeArrTime(leg.depTime, leg.depTimeTBD, leg.flightHours),
+              arrTime: computeArrTime(
+                leg.date,
+                leg.depTime,
+                leg.depTimeTBD,
+                leg.flightHours,
+                leg.dep,
+                leg.arr
+              ),
             }
           : leg
       )

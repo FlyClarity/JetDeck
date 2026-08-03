@@ -2,6 +2,29 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **AI triage cost: merge classify + extract into one call** (raised
+  when asked how to cut AI triage costs): investigated prompt caching
+  first, but both the classification and extraction prompts are only
+  ~450–550 tokens — below Claude Sonnet 5's 1024-token minimum
+  cacheable prefix, so marking them `cache_control` would silently do
+  nothing. The real lever: right now a `new_trip_request` email costs
+  two full model calls (classify, then a second extract call that
+  re-reads the same email body). Merging them into a single call that
+  both classifies and extracts in one pass would cut that to one call
+  for the common case, at the cost of a small amount of wasted output
+  on non-trip-request emails (empty extraction fields). Not done yet —
+  it touches the classification prompt we just spent several rounds
+  tuning for broker-shorthand accuracy, so it's worth a deliberate
+  pass (and ideally a live test) rather than folding into an unrelated
+  batch of fixes. Also worth another look at prompt caching once/if
+  the merged prompt's length pushes past the 1024-token threshold.
+- **Arrival-time timezone conversion doesn't flag a day change**: the
+  new `addHoursAcrossTimezones` (lib/time.ts) correctly converts the
+  computed arrival time into the destination's local clock, but a long
+  or heavily-eastbound trip can land on the next calendar day and the
+  UI has no way to show that today (`Arrives` is a plain time input,
+  no date component). Worth a small "+1 day" indicator if this comes
+  up in practice.
 - **Opportunity scoring: repositioning uses aircraft base, not a live
   fleet-tracking feed** (raised alongside the scoring refinement below):
   the new distance-tiered scoring still reasons from

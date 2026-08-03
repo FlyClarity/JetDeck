@@ -16,9 +16,10 @@ type ItineraryLeg = { depDt?: string };
 // Repositioning-time tiers, in estimated flight hours (no block-time buffer
 // added — this is a rough scoring heuristic, not a billing calculation).
 // A 20-minute repo and a 3-hour cross-country repo are not the same
-// opportunity and shouldn't both land in the same bucket.
+// opportunity and shouldn't both land in the same bucket. Beyond the medium
+// threshold, the trip auto-passes instead of scoring low (see below).
 const REPO_HIGH_HOURS = 0.75;
-const REPO_MEDIUM_HOURS = 2.5;
+const REPO_MEDIUM_HOURS = 2;
 
 export async function scoreOpportunity(
   tripRequestId: string
@@ -185,15 +186,21 @@ export async function scoreOpportunity(
   const repoMinutes = Math.round(chosen.repoHours * 60);
   const repoLabel = repoMinutes < 60 ? `${repoMinutes}min` : `${chosen.repoHours.toFixed(1)}hr`;
 
-  const tier: "high" | "medium" | "low" =
-    chosen.repoHours <= REPO_HIGH_HOURS
-      ? "high"
-      : chosen.repoHours <= REPO_MEDIUM_HOURS
-        ? "medium"
-        : "low";
+  // Beyond the medium threshold, even the closest available aircraft is too
+  // far out of position to be worth quoting — auto-pass instead of scoring
+  // it low and leaving it in the queue.
+  if (chosen.repoHours > REPO_MEDIUM_HOURS) {
+    return finalize(tripRequestId, {
+      opportunityScore: "pass",
+      scoreReason: `Nearest aircraft (${chosen.aircraft.tailNumber}) requires a ${repoLabel} repositioning from ${chosen.base} — too far out of position${categoryNote}`,
+      positioningNote: `Nearest available aircraft (${chosen.aircraft.tailNumber}) is based at ${chosen.base}, ~${repoLabel} from ${firstLeg.depAirport}`,
+      historyNote,
+      recommendedAction: "pass",
+    });
+  }
 
   return finalize(tripRequestId, {
-    opportunityScore: tier,
+    opportunityScore: chosen.repoHours <= REPO_HIGH_HOURS ? "high" : "medium",
     scoreReason: `${chosen.aircraft.tailNumber} requires a ${repoLabel} repositioning from ${chosen.base}${categoryNote}`,
     positioningNote: `Nearest available aircraft (${chosen.aircraft.tailNumber}) is based at ${chosen.base}, ~${repoLabel} from ${firstLeg.depAirport}`,
     historyNote,
