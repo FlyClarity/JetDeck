@@ -17,6 +17,37 @@ export const EMAIL_CLASSIFICATIONS = [
 
 export type EmailClassificationType = (typeof EMAIL_CLASSIFICATIONS)[number];
 
+// The model occasionally drifts from the exact enum string (e.g.
+// "trip_request" instead of "new_trip_request") despite the prompt
+// spelling it out — normalize common near-misses instead of silently
+// dropping a correctly-reasoned classification to unclassifiable.
+const CLASSIFICATION_SYNONYMS: Record<string, EmailClassificationType> = {
+  trip_request: "new_trip_request",
+  new_request: "new_trip_request",
+  quote_request: "new_trip_request",
+  request_quote: "new_trip_request",
+  new_quote_request: "new_trip_request",
+  availability_request: "new_trip_request",
+  charter_request: "new_trip_request",
+  new_charter_request: "new_trip_request",
+  quote_accepted: "quote_response_accepted",
+  quote_declined: "quote_response_declined",
+  quote_questions: "quote_response_questions",
+  inquiry: "general_inquiry",
+  spam: "spam_or_auto_reply",
+  auto_reply: "spam_or_auto_reply",
+};
+
+function normalizeClassification(raw: unknown): EmailClassificationType {
+  if (typeof raw !== "string") return "unclassifiable";
+
+  const normalized = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (EMAIL_CLASSIFICATIONS.includes(normalized as EmailClassificationType)) {
+    return normalized as EmailClassificationType;
+  }
+  return CLASSIFICATION_SYNONYMS[normalized] ?? "unclassifiable";
+}
+
 export type EmailClassificationResult = {
   classification: EmailClassificationType;
   confidence: "high" | "medium" | "low";
@@ -110,11 +141,13 @@ export async function classifyEmail(email: {
     };
   }
 
-  const classification = EMAIL_CLASSIFICATIONS.includes(
-    parsed.classification as EmailClassificationType
-  )
-    ? (parsed.classification as EmailClassificationType)
-    : "unclassifiable";
+  const classification = normalizeClassification(parsed.classification);
+  if (classification === "unclassifiable" && parsed.classification !== "unclassifiable") {
+    console.warn(
+      "Unrecognized classification value from AI, defaulting to unclassifiable:",
+      parsed.classification
+    );
+  }
 
   return {
     classification,
