@@ -15,6 +15,7 @@ async function updateSettings(formData: FormData) {
   if (!clerkOrgId) return;
 
   const logoUrl = String(formData.get("logoUrl") ?? "").trim() || null;
+  const inboundEmail = String(formData.get("inboundEmail") ?? "").trim() || null;
   const wireInstructions = String(formData.get("wireInstructions") ?? "");
   const termsText = String(formData.get("termsText") ?? "");
   const replyToEmail = String(formData.get("replyToEmail") ?? "");
@@ -30,6 +31,7 @@ async function updateSettings(formData: FormData) {
     where: { clerkOrgId },
     data: {
       logoUrl,
+      inboundEmail,
       wireInstructions,
       termsText,
       termsVersion,
@@ -153,11 +155,18 @@ export default async function SettingsPage() {
         </div>
 
         <div className="flex flex-col gap-2">
-          <Label>Inbound email address</Label>
-          <Input readOnly disabled value={operator.inboundEmail ?? ""} />
+          <Label htmlFor="inboundEmail">Inbound email address</Label>
+          <Input
+            id="inboundEmail"
+            name="inboundEmail"
+            type="email"
+            defaultValue={operator.inboundEmail ?? ""}
+            placeholder="you@inbound.postmarkapp.com"
+          />
           <p className="text-sm text-muted-foreground">
-            Forward your charter inbox to this address to feed the AI
-            triage pipeline.
+            Forward or set up mail routing to this address to feed the AI
+            triage pipeline. Must exactly match the address Postmark
+            delivers inbound mail to.
           </p>
         </div>
 
