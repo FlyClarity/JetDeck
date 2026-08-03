@@ -31,6 +31,27 @@ Classify this inbound email into exactly one of these categories:
 new_trip_request, quote_response_accepted, quote_response_questions,
 quote_response_declined, general_inquiry, spam_or_auto_reply, unclassifiable.
 
+new_trip_request: the sender wants a charter quote or aircraft availability
+for a trip, however it's phrased. Charter brokers write these in dense
+industry shorthand, not full sentences — treat these as strong
+new_trip_request signals even with no other context:
+- Subject or body starting with "NEED:", "LOOKING FOR:", "AVAIL?", or
+  "QUOTE:" followed by trip shorthand (broker slang for "I need
+  availability/pricing for this trip")
+- Terse leg notation like "9/10 1000L KSNA-KTEB" (date, 24hr local time,
+  dep-arr airports) or "RT"/"OW" for round-trip/one-way
+- A bare "pax" count with no other explanation (e.g. "8 pax")
+Example: an email reading only "NEED: RT 9/10-15 KSNA KTEB" with a body of
+"8 pax / 9/10 1000L KSNA - KTEB / 9/15 1000L KTEB - KSNA" plus a signature
+block is a new_trip_request, not unclassifiable — brokers omit
+pleasantries like "please quote me" because the shorthand already implies
+it.
+
+Reserve unclassifiable for emails you genuinely cannot place in any other
+category (e.g. no discernible trip details, quote reference, or intent at
+all) — don't use it just because an email is terse or informally
+formatted.
+
 Also return:
 - confidence: "high" | "medium" | "low"
 - reason: one sentence explaining your classification
