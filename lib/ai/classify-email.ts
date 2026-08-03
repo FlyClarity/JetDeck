@@ -83,14 +83,17 @@ category (e.g. no discernible trip details, quote reference, or intent at
 all) — don't use it just because an email is terse or informally
 formatted.
 
-Also return:
-- confidence: "high" | "medium" | "low"
-- reason: one sentence explaining your classification
-- quoteNumber: extract if this email references an existing quote number (e.g. Q-2024-0042), else null
-- senderEmail: the From address
-- senderName: the sender name if identifiable, else null
+Return ONLY valid JSON, no markdown code fences, no other text, in exactly
+this shape and field order:
 
-Return ONLY valid JSON. No markdown code fences, no other text.`;
+{
+  "reason": string, // explain in one sentence what the email is actually asking for — work this out BEFORE picking a classification below, and make sure the classification you choose matches what you just wrote here
+  "classification": "new_trip_request" | "quote_response_accepted" | "quote_response_questions" | "quote_response_declined" | "general_inquiry" | "spam_or_auto_reply" | "unclassifiable",
+  "confidence": "high" | "medium" | "low",
+  "quoteNumber": string | null, // an existing quote number this email references (e.g. Q-2024-0042), else null
+  "senderEmail": string, // the From address
+  "senderName": string | null // the sender name if identifiable, else null
+}`;
 
 export async function classifyEmail(email: {
   fromEmail: string;
