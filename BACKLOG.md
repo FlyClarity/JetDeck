@@ -2,6 +2,22 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Opportunity scoring: repositioning uses aircraft base, not a live
+  fleet-tracking feed** (raised alongside the scoring refinement below):
+  the new distance-tiered scoring still reasons from
+  `Aircraft.currentBase`/`homeBase`, which is only as fresh as the last
+  manual update — there's no real-time "where is this tail right now"
+  data source. Also, the range/reachability check only looks at the
+  first requested leg, not the full multi-leg itinerary, so a
+  multi-leg trip that's fine outbound but exceeds range on a later leg
+  won't get caught yet.
+- **Category-relaxed scoring always calls out the mismatch, even for
+  an operator with only one category of aircraft**: after relaxing
+  the hard category filter, every off-preference match adds a
+  parenthetical note ("flagged as a good fit anyway rather than
+  passed"). For a single-aircraft-type fleet this note fires on nearly
+  every request, which may get noisy — worth revisiting if it turns
+  out to be more clutter than signal in practice.
 - **Operator logo upload** (raised alongside the client quote page's
   missing logo): `Operator.logoUrl` and the Settings field only accept
   a pasted URL to an already-hosted image. There's no file upload —

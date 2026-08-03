@@ -64,8 +64,8 @@ route only appears in the subject, still extract it into the legs.
     {
       "depAirport": string,
       "arrAirport": string,
-      "date": string,
-      "timePref": string | null,
+      "date": string, // "YYYY-MM-DD"
+      "timePref": string | null, // 24-hour "HH:MM" if a specific time is stated or implied, e.g. "1000L" -> "10:00", "2pm" -> "14:00"; else null
       "timeFlexible": boolean,
       "passengerCount": number | null
     }

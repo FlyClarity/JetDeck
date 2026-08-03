@@ -8,8 +8,10 @@ import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 import { routeSummary } from "@/lib/queue";
 import { calculateQuoteTotals } from "@/lib/quote";
 import { getAirportsByIcao } from "@/lib/airport-server";
+import { normalizeTimeString } from "@/lib/time";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { NewLeadForm } from "@/components/quote/new-lead-form";
+import { OriginalRequestPanel } from "@/components/quote/original-request-panel";
 
 function defaultValidUntil() {
   const d = new Date();
@@ -265,30 +267,45 @@ export default async function NewQuotePage({
   const resolvedAirports = await getAirportsByIcao(icaosToResolve);
   const airportsByIcao = Object.fromEntries(resolvedAirports.map((a) => [a.icao, a]));
 
-  const timePattern = /^\d{2}:\d{2}$/;
-  const requestedLegs = tripLegs.map((l) => ({
-    dep: l.depAirport ? airportsByIcao[l.depAirport] ?? { icao: l.depAirport } : null,
-    arr: l.arrAirport ? airportsByIcao[l.arrAirport] ?? { icao: l.arrAirport } : null,
-    date: l.date ?? "",
-    depTime: l.timePref && timePattern.test(l.timePref) ? l.timePref : null,
-    depTimeTBD: l.timeFlexible ?? !l.timePref,
-  }));
+  const requestedLegs = tripLegs.map((l) => {
+    const depTime = normalizeTimeString(l.timePref);
+    return {
+      dep: l.depAirport ? airportsByIcao[l.depAirport] ?? { icao: l.depAirport } : null,
+      arr: l.arrAirport ? airportsByIcao[l.arrAirport] ?? { icao: l.arrAirport } : null,
+      date: l.date ?? "",
+      depTime,
+      depTimeTBD: l.timeFlexible ?? !depTime,
+    };
+  });
 
-  const priceSuggestion = defaultAircraft
-    ? await suggestPrice({
+  // Not awaited — the Anthropic call takes a couple of seconds, and blocking
+  // the whole page on it made this route noticeably slow to open from the
+  // queue. Streamed into the form via Suspense instead (see
+  // PriceSuggestionCard) so the rest of the page renders immediately.
+  const priceSuggestionPromise = defaultAircraft
+    ? suggestPrice({
         routeSummary: routeSummaryText,
         flightHours: null,
         aircraftHourlyRate: defaultAircraft.hourlyRate,
         positioningNote: tripRequest.positioningNote,
         historyNote: tripRequest.historyNote,
       })
-    : null;
+    : Promise.resolve(null);
 
   const createQuoteWithId = createQuote.bind(null, tripRequest.id);
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">New Quote</h1>
+
+      <div className="mt-6">
+        <OriginalRequestPanel
+          source={tripRequest.source}
+          rawEmailFrom={tripRequest.rawEmailFrom}
+          rawEmailBody={tripRequest.rawEmailBody}
+          specialRequests={tripRequest.specialRequests}
+        />
+      </div>
 
       <div className="mt-8">
         <QuoteBuilderForm
@@ -312,7 +329,7 @@ export default async function NewQuotePage({
             internalNotes: "",
             validUntil: defaultValidUntil(),
           }}
-          priceSuggestion={priceSuggestion}
+          priceSuggestionPromise={priceSuggestionPromise}
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}
           defaultBlockTimeBufferHours={operator.defaultBlockTimeBufferHours}

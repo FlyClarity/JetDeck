@@ -8,6 +8,7 @@ import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES } from "@/li
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
+import { OriginalRequestPanel } from "@/components/quote/original-request-panel";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -317,6 +318,17 @@ export default async function QuotePage({
         </div>
       )}
 
+      {quote.tripRequest && (
+        <div className="mt-6">
+          <OriginalRequestPanel
+            source={quote.tripRequest.source}
+            rawEmailFrom={quote.tripRequest.rawEmailFrom}
+            rawEmailBody={quote.tripRequest.rawEmailBody}
+            specialRequests={quote.tripRequest.specialRequests}
+          />
+        </div>
+      )}
+
       <div className="mt-8 flex flex-col gap-3">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
           Messages
@@ -392,7 +404,7 @@ export default async function QuotePage({
             internalNotes: quote.internalNotes ?? "",
             validUntil: quote.validUntil.toISOString().slice(0, 10),
           }}
-          priceSuggestion={null}
+          priceSuggestionPromise={Promise.resolve(null)}
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}
           defaultBlockTimeBufferHours={operator.defaultBlockTimeBufferHours}

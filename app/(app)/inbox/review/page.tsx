@@ -1,4 +1,5 @@
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
@@ -36,9 +37,10 @@ async function createTripRequestAction(id: string) {
   const inboundEmail = await getScopedInboundEmail(id);
   if (!inboundEmail) return;
 
-  await createTripRequestFromInboundEmail(inboundEmail);
+  const tripRequest = await createTripRequestFromInboundEmail(inboundEmail);
   await markReviewed(id, "create_trip_request");
   revalidatePath("/inbox/review");
+  redirect(`/dashboard?open=${tripRequest.id}`);
 }
 
 async function logAsInquiryAction(id: string) {

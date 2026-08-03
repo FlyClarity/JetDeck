@@ -1,12 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
 import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
+import { addHoursToTime } from "@/lib/time";
 import type { AirportOption } from "@/lib/airport-server";
 import { AirportCombobox } from "@/components/quote/airport-combobox";
+import {
+  PriceSuggestionCard,
+  PriceSuggestionSkeleton,
+  type PriceSuggestion,
+} from "@/components/quote/price-suggestion-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -78,7 +84,19 @@ type LegRow = {
   depTime: string;
   depTimeTBD: boolean;
   arrTime: string;
+  // false = arrTime is auto-derived from depTime + flightHours; true = the
+  // user typed an arrival time directly, so stop overwriting it.
+  arrTimeDirty: boolean;
 };
+
+// Best-effort arrival time: only fills in when we actually have a firm
+// departure time and a flight-hours estimate to add to it.
+function computeArrTime(depTime: string, depTimeTBD: boolean, flightHours: string): string {
+  if (depTimeTBD || !depTime) return "";
+  const hrs = Number(flightHours);
+  if (!Number.isFinite(hrs) || hrs <= 0) return "";
+  return addHoursToTime(depTime, hrs);
+}
 
 function rowId() {
   return Math.random().toString(36).slice(2);
@@ -126,12 +144,16 @@ function buildInitialLegs(
       depTime: "",
       depTimeTBD: true,
       arrTime: "",
+      arrTimeDirty: false,
     });
   }
 
   requestedLegs.forEach((leg) => {
     const hrs =
       leg.flightHours ?? computeLegHours(leg.dep, leg.arr, cruiseSpeedKts, blockTimeBufferHours);
+    const flightHours = hrs !== null && hrs !== undefined ? Number(hrs).toFixed(1) : "";
+    const depTime = leg.depTime ?? "";
+    const depTimeTBD = leg.depTimeTBD ?? !leg.depTime;
     rows.push({
       id: rowId(),
       billAs: "revenue",
@@ -139,12 +161,13 @@ function buildInitialLegs(
       dep: leg.dep,
       arr: leg.arr,
       date: leg.date,
-      flightHours: hrs !== null && hrs !== undefined ? Number(hrs).toFixed(1) : "",
+      flightHours,
       dirty: false,
       collapsed: false,
-      depTime: leg.depTime ?? "",
-      depTimeTBD: leg.depTimeTBD ?? !leg.depTime,
-      arrTime: leg.arrTime ?? "",
+      depTime,
+      depTimeTBD,
+      arrTime: leg.arrTime || computeArrTime(depTime, depTimeTBD, flightHours),
+      arrTimeDirty: Boolean(leg.arrTime),
     });
   });
 
@@ -163,6 +186,7 @@ function buildInitialLegs(
       depTime: "",
       depTimeTBD: true,
       arrTime: "",
+      arrTimeDirty: false,
     });
   }
 
@@ -175,7 +199,7 @@ export function QuoteBuilderForm({
   aircraftList,
   airportsByIcao,
   initialValues,
-  priceSuggestion,
+  priceSuggestionPromise,
   depositPercent,
   defaultOvernightFee,
   defaultBlockTimeBufferHours,
@@ -188,7 +212,7 @@ export function QuoteBuilderForm({
   aircraftList: Aircraft[];
   airportsByIcao: Record<string, AirportOption>;
   initialValues: QuoteBuilderInitialValues;
-  priceSuggestion: { suggestedPrice: number; reasoning: string } | null;
+  priceSuggestionPromise: Promise<PriceSuggestion>;
   depositPercent: number;
   defaultOvernightFee: number;
   defaultBlockTimeBufferHours: number;
@@ -237,6 +261,7 @@ export function QuoteBuilderForm({
           depTime: leg.depTime ?? "",
           depTimeTBD: leg.depTimeTBD ?? !leg.depTime,
           arrTime: leg.arrTime ?? "",
+          arrTimeDirty: Boolean(leg.arrTime),
         };
       });
     }
@@ -272,7 +297,16 @@ export function QuoteBuilderForm({
             selectedAircraft?.cruiseSpeedKts,
             defaultBlockTimeBufferHours
           );
-          return { ...leg, dep, arr, flightHours: hrs !== null ? hrs.toFixed(1) : leg.flightHours };
+          const flightHours = hrs !== null ? hrs.toFixed(1) : leg.flightHours;
+          return {
+            ...leg,
+            dep,
+            arr,
+            flightHours,
+            arrTime: leg.arrTimeDirty
+              ? leg.arrTime
+              : computeArrTime(leg.depTime, leg.depTimeTBD, flightHours),
+          };
         })
         // Dropping the aircraft onto a plane already based at this leg's
         // airport makes an auto repositioning leg redundant (0nm).
@@ -310,6 +344,7 @@ export function QuoteBuilderForm({
             depTime: "",
             depTimeTBD: true,
             arrTime: "",
+            arrTimeDirty: false,
           },
         ];
       }
@@ -333,6 +368,11 @@ export function QuoteBuilderForm({
           );
           if (!updated.dirty && hrs !== null) updated.flightHours = hrs.toFixed(1);
         }
+        if ("arrTime" in patch) {
+          updated.arrTimeDirty = true;
+        } else if (!updated.arrTimeDirty) {
+          updated.arrTime = computeArrTime(updated.depTime, updated.depTimeTBD, updated.flightHours);
+        }
         return updated;
       })
     );
@@ -348,8 +388,30 @@ export function QuoteBuilderForm({
           selectedAircraft?.cruiseSpeedKts,
           defaultBlockTimeBufferHours
         );
-        return { ...leg, dirty: false, flightHours: hrs !== null ? hrs.toFixed(1) : leg.flightHours };
+        const flightHours = hrs !== null ? hrs.toFixed(1) : leg.flightHours;
+        return {
+          ...leg,
+          dirty: false,
+          flightHours,
+          arrTime: leg.arrTimeDirty
+            ? leg.arrTime
+            : computeArrTime(leg.depTime, leg.depTimeTBD, flightHours),
+        };
       })
+    );
+  }
+
+  function resetArrTime(id: string) {
+    setLegs((prev) =>
+      prev.map((leg) =>
+        leg.id === id
+          ? {
+              ...leg,
+              arrTimeDirty: false,
+              arrTime: computeArrTime(leg.depTime, leg.depTimeTBD, leg.flightHours),
+            }
+          : leg
+      )
     );
   }
 
@@ -369,6 +431,7 @@ export function QuoteBuilderForm({
         depTime: "",
         depTimeTBD: true,
         arrTime: "",
+        arrTimeDirty: false,
       },
     ]);
   }
@@ -494,14 +557,9 @@ export function QuoteBuilderForm({
           <p className="text-sm text-muted-foreground">{requestorLine}</p>
         </div>
 
-        {priceSuggestion && (
-          <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm">
-            <p className="font-medium">
-              AI suggests {formatCurrency(priceSuggestion.suggestedPrice)}
-            </p>
-            <p className="mt-1 text-muted-foreground">{priceSuggestion.reasoning}</p>
-          </div>
-        )}
+        <Suspense fallback={<PriceSuggestionSkeleton />}>
+          <PriceSuggestionCard promise={priceSuggestionPromise} />
+        </Suspense>
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="aircraftId-select">Aircraft</Label>
@@ -667,6 +725,15 @@ export function QuoteBuilderForm({
                     value={leg.arrTime}
                     onChange={(e) => updateLeg(leg.id, { arrTime: e.target.value })}
                   />
+                  {leg.arrTimeDirty && !leg.depTimeTBD && leg.depTime && (
+                    <button
+                      type="button"
+                      onClick={() => resetArrTime(leg.id)}
+                      className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                    >
+                      Reset
+                    </button>
+                  )}
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label className="text-xs">Hours</Label>

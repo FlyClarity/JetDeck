@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { TripRequest, Prisma } from "@/lib/generated/prisma/client";
 import {
   SOURCE_BADGES,
@@ -60,9 +60,26 @@ export function QuoteQueue({
   declineQuoteAction: (id: string) => Promise<void>;
 }) {
   const router = useRouter();
-  const [activeView, setActiveView] = useState<ViewKey>("ready");
-  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("active");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+
+  // Landing here from "Create Trip Request" in Needs Review (?open=<id>) —
+  // jump straight to that trip's detail pane instead of leaving the operator
+  // to find it in the list themselves. Computed as lazy initial state
+  // (rather than an effect) since tripRequests and the URL are both already
+  // available on mount, and this route remounts fresh on each navigation
+  // here from a different page.
+  const openTrip = useMemo(() => {
+    const openId = searchParams.get("open");
+    return openId ? (tripRequests.find((t) => t.id === openId) ?? null) : null;
+  }, [searchParams, tripRequests]);
+
+  const [activeView, setActiveView] = useState<ViewKey>(() =>
+    openTrip?.status === "passed" ? "all" : "ready"
+  );
+  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>(() =>
+    openTrip?.status === "passed" ? "passed" : "active"
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(() => openTrip?.id ?? null);
 
   const readyCount = useMemo(
     () => tripRequests.filter((t) => t.status === "ready").length,
@@ -102,6 +119,19 @@ export function QuoteQueue({
   // shortcuts — only "p" (pass) is trip-request-specific.
   const activeList: { id: string }[] = isQuoteView ? quoteList : currentList;
 
+  // Passing removes the item from view once the list refreshes — advance to
+  // whatever's next (or previous, if it was the last) right away instead of
+  // dropping the operator back to an empty detail pane.
+  const handlePass = useCallback(
+    (id: string) => {
+      const idx = currentList.findIndex((item) => item.id === id);
+      const next = currentList[idx + 1] ?? currentList[idx - 1] ?? null;
+      setSelectedId(next ? next.id : null);
+      passAction(id);
+    },
+    [currentList, passAction]
+  );
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement;
@@ -132,13 +162,13 @@ export function QuoteQueue({
       } else if (e.key === "Escape") {
         setSelectedId(null);
       } else if (e.key === "p" && selectedId && !isQuoteView) {
-        passAction(selectedId);
+        handlePass(selectedId);
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeList, selectedId, isQuoteView, passAction, router]);
+  }, [activeList, selectedId, isQuoteView, router, handlePass]);
 
   return (
     <div className="flex flex-1">
@@ -368,7 +398,7 @@ export function QuoteQueue({
                 variant="outline"
                 size="sm"
                 className="self-start"
-                onClick={() => passAction(selectedTripRequest.id)}
+                onClick={() => handlePass(selectedTripRequest.id)}
               >
                 Pass (P)
               </Button>
