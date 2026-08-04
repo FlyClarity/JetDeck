@@ -22,11 +22,30 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   resolve correctly), excluding heliports/seaplane bases/balloonports
   (not relevant to fixed-wing charter) and OurAirports' own "ZZ"
   placeholder rows. Result: 18,353 airports, up from 10,463 — nearly
-  double. Worth spot-checking a handful of other previously-missing
-  airports (if the user has more examples) to confirm this really was
-  the complete fix and not just these two. Also worth eventually
-  tracking down *why* the original import lost rows, in case the same
-  process gets reused for a future data refresh.
+  double.
+
+  Follow-up: that full-world import turned out to be too broad —
+  13,468 of the 18,353 were `small_airport` type, and 87% of those
+  (11,779) were outside the US, i.e. mostly irrelevant remote/private
+  strips for a US charter operator. Narrowed with a second migration
+  (`20260804221336_narrow_small_airports_to_us_runway_3000ft`):
+  large/medium airports stay worldwide (only ~4,885, no real noise
+  there), but `small_airport` is now scoped to `iso_country = "US"`
+  and requires a longest open runway ≥ 3,000ft, cross-referenced from
+  a companion `runways.csv` the user also provided (joined on
+  airports.csv's numeric `id` == runways.csv's `airport_ref`, not on
+  `ident`, since the chosen ICAO sometimes comes from `gps_code`
+  instead — see the ident/gps_code fallback note above). A
+  small_airport with no runway record at all is excluded rather than
+  assumed to qualify. Net result: 6,472 airports, still including
+  KUAO and KOEB. If international small-airport charters ever come up
+  (Caribbean, Mexico, Canada, etc.), this is a one-line change to
+  extend the country allowlist — flagging here so it's not forgotten
+  when that need arises. Also worth spot-checking a handful of other
+  previously-missing airports (if the user has more examples) to
+  confirm the original fix was complete, and eventually tracking down
+  *why* the original import lost rows in the first place, in case the
+  same process gets reused for a future data refresh.
 - **Daily AI pass to re-surface passed one-way requests that now fit a
   scheduled trip** (raised directly): at the end of each day, have the
   AI review upcoming confirmed trips alongside trip requests that were
