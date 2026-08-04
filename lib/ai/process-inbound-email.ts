@@ -25,6 +25,13 @@ function isAvailabilityListing(subject: string | null): boolean {
   return Boolean(subject && NON_REQUEST_SUBJECT_PREFIXES.some((re) => re.test(subject)));
 }
 
+// Relay/blast feeds (e.g. NBAA Air Mail) send From a shared address but set
+// Reply-To to the real client/broker — that's who a reply, a Contact match,
+// or a requestor record should actually point at, not the relay.
+function senderEmailOf(inboundEmail: InboundEmailWithOperator): string {
+  return inboundEmail.replyToEmail || inboundEmail.fromEmail;
+}
+
 export async function processInboundEmail(inboundEmailId: string) {
   const inboundEmail = await prisma.inboundEmail.findUnique({
     where: { id: inboundEmailId },
@@ -48,7 +55,7 @@ export async function processInboundEmail(inboundEmailId: string) {
   }
 
   const result = await classifyAndExtractEmail({
-    fromEmail: inboundEmail.fromEmail,
+    fromEmail: senderEmailOf(inboundEmail),
     fromName: inboundEmail.fromName,
     subject: inboundEmail.subject,
     bodyText: inboundEmail.bodyText,
@@ -102,8 +109,10 @@ export async function processInboundEmail(inboundEmailId: string) {
  * automatic AI-routing path and the manual "Log as Inquiry" review action.
  */
 export async function logInboundEmailAsInquiry(inboundEmail: InboundEmailWithOperator) {
+  const senderEmail = senderEmailOf(inboundEmail);
+
   const existing = await prisma.contact.findFirst({
-    where: { operatorId: inboundEmail.operatorId, email: inboundEmail.fromEmail },
+    where: { operatorId: inboundEmail.operatorId, email: senderEmail },
   });
 
   const noteLine = `[${new Date().toISOString()}] General inquiry: ${inboundEmail.subject ?? "(no subject)"}`;
@@ -114,14 +123,14 @@ export async function logInboundEmailAsInquiry(inboundEmail: InboundEmailWithOpe
       data: { notes: existing.notes ? `${existing.notes}\n${noteLine}` : noteLine },
     });
   } else {
-    const displayName = inboundEmail.fromName ?? inboundEmail.fromEmail;
+    const displayName = inboundEmail.fromName ?? senderEmail;
     const [firstName, ...rest] = displayName.split(" ");
     await prisma.contact.create({
       data: {
         operatorId: inboundEmail.operatorId,
         firstName: firstName || "Unknown",
         lastName: rest.join(" "),
-        email: inboundEmail.fromEmail,
+        email: senderEmail,
         type: "direct",
         notes: noteLine,
       },
@@ -136,8 +145,8 @@ export async function logInboundEmailAsInquiry(inboundEmail: InboundEmailWithOpe
   if (inboundEmail.operator.notifyEmail) {
     await sendEmail({
       to: inboundEmail.operator.notifyEmail,
-      subject: `General inquiry — ${inboundEmail.fromEmail}`,
-      html: `<p>New general inquiry from ${inboundEmail.fromName ?? inboundEmail.fromEmail} (${inboundEmail.fromEmail}).</p><p>Subject: ${inboundEmail.subject ?? "(no subject)"}</p>`,
+      subject: `General inquiry — ${senderEmail}`,
+      html: `<p>New general inquiry from ${inboundEmail.fromName ?? senderEmail} (${senderEmail}).</p><p>Subject: ${inboundEmail.subject ?? "(no subject)"}</p>`,
     });
   }
 }
@@ -178,15 +187,16 @@ export async function createTripRequestFromInboundEmail(
     arrAirport: codeMap[l.arrAirport?.toUpperCase()] ?? l.arrAirport,
   }));
 
+  const senderEmail = senderEmailOf(inboundEmail);
+
   const tripRequest = await prisma.tripRequest.create({
     data: {
       operatorId: inboundEmail.operatorId,
       source: "email_inbound",
       rawEmailBody: inboundEmail.bodyText,
       rawEmailFrom: inboundEmail.fromEmail,
-      requestorName:
-        extracted?.requestorName || inboundEmail.fromName || inboundEmail.fromEmail,
-      requestorEmail: extracted?.requestorEmail || inboundEmail.fromEmail,
+      requestorName: extracted?.requestorName || inboundEmail.fromName || senderEmail,
+      requestorEmail: extracted?.requestorEmail || senderEmail,
       requestorPhone: extracted?.requestorPhone ?? null,
       requestorCompany: extracted?.requestorCompany ?? null,
       requestorType: extracted?.requestorType || "direct",
@@ -226,7 +236,7 @@ async function handleQuoteResponse(
       where: {
         operatorId: inboundEmail.operatorId,
         status: "sent",
-        contact: { email: inboundEmail.fromEmail },
+        contact: { email: senderEmailOf(inboundEmail) },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -263,7 +273,7 @@ async function handleQuoteResponse(
     await sendEmail({
       to: inboundEmail.operator.notifyEmail,
       subject: `Quote ${quote.quoteNumber} — ${action}`,
-      html: `<p>${inboundEmail.fromName ?? inboundEmail.fromEmail} replied to quote ${quote.quoteNumber} (${action}).</p>`,
+      html: `<p>${inboundEmail.fromName ?? senderEmailOf(inboundEmail)} replied to quote ${quote.quoteNumber} (${action}).</p>`,
     });
   }
 }

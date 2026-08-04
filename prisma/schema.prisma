@@ -293,13 +293,17 @@ model InboundEmail {
   postmarkMessageId String? @unique
 
   // Raw email data from Postmark
-  fromEmail  String
-  fromName   String?
-  toEmail    String
-  subject    String?
-  bodyText   String
-  bodyHtml   String?
-  receivedAt DateTime
+  fromEmail    String
+  fromName     String?
+  // Distinct from fromEmail — feeds like NBAA relay mail through a shared
+  // sender address (e.g. "Charter Airmail") but set Reply-To to the real
+  // client/broker. Treated as the effective contact email when present.
+  replyToEmail String?
+  toEmail      String
+  subject      String?
+  bodyText     String
+  bodyHtml     String?
+  receivedAt   DateTime
 
   // AI triage result
   classification           String

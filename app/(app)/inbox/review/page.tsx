@@ -120,6 +120,11 @@ export default async function NeedsReviewPage() {
                         &lt;{email.fromEmail}&gt;
                       </span>
                     </p>
+                    {email.replyToEmail && (
+                      <p className="text-sm text-muted-foreground">
+                        Reply-To: {email.replyToEmail}
+                      </p>
+                    )}
                     <p className="text-sm text-muted-foreground">
                       {email.subject || "(no subject)"}
                     </p>

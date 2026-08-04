@@ -24,6 +24,7 @@ type PostmarkInboundPayload = {
   MessageID?: string;
   FromFull?: { Email?: string; Name?: string };
   From?: string;
+  ReplyTo?: string;
   ToFull?: { Email?: string }[];
   To?: string;
   Subject?: string;
@@ -43,6 +44,12 @@ export async function POST(req: NextRequest) {
   const fromEmail = payload.FromFull?.Email ?? payload.From ?? "";
   const fromName = payload.FromFull?.Name || null;
   const postmarkMessageId = payload.MessageID || null;
+  // Relay feeds (e.g. NBAA Air Mail) send From a shared address but set
+  // Reply-To to the actual client/broker — only trust it when it's a real
+  // address distinct from From, not just an artifact of the relay itself.
+  const replyToRaw = payload.ReplyTo?.split(",")[0]?.trim() || null;
+  const replyToEmail =
+    replyToRaw && replyToRaw.toLowerCase() !== fromEmail.toLowerCase() ? replyToRaw : null;
 
   const operator = await prisma.operator.findFirst({
     where: { inboundEmail: { equals: toEmail, mode: "insensitive" } },
@@ -74,6 +81,7 @@ export async function POST(req: NextRequest) {
       postmarkMessageId,
       fromEmail,
       fromName,
+      replyToEmail,
       toEmail,
       subject: payload.Subject || null,
       bodyText: payload.TextBody || "",
