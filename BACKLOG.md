@@ -2,6 +2,31 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Airport dataset gaps (KUAO, KOEB) — root cause found and fixed, but
+  worth a second look**: the original import (10,463 rows) silently
+  dropped a meaningful number of legitimate ICAO-coded airports —
+  confirmed by diffing against the exact source CSV the user provided:
+  KUAO and KOEB were both present in the source with normal data (a
+  medium_airport and small_airport respectively, both missing an IATA
+  code but that's common and not disqualifying — e.g. KMMV, which
+  matches that same profile, *did* make it into the original import).
+  No single filter rule explains the gap; it looks like incomplete/lossy
+  processing in whatever script built the original import rather than
+  a deliberate exclusion. Rebuilt from scratch instead of patching
+  individual rows: full re-import migration
+  (`20260804213733_reimport_full_airport_dataset`) parses the source
+  CSV directly, keeping only `type` in (large_airport, medium_airport,
+  small_airport), preferring `ident` as the ICAO code and falling back
+  to `gps_code` when `ident` isn't 4-letter ICAO-shaped (this is what
+  makes airports like Nunapitchuk — ident "16A", gps_code "PPIT" —
+  resolve correctly), excluding heliports/seaplane bases/balloonports
+  (not relevant to fixed-wing charter) and OurAirports' own "ZZ"
+  placeholder rows. Result: 18,353 airports, up from 10,463 — nearly
+  double. Worth spot-checking a handful of other previously-missing
+  airports (if the user has more examples) to confirm this really was
+  the complete fix and not just these two. Also worth eventually
+  tracking down *why* the original import lost rows, in case the same
+  process gets reused for a future data refresh.
 - **Daily AI pass to re-surface passed one-way requests that now fit a
   scheduled trip** (raised directly): at the end of each day, have the
   AI review upcoming confirmed trips alongside trip requests that were
