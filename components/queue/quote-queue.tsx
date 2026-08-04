@@ -46,6 +46,12 @@ const QUOTE_ACTION_LABEL: Record<string, string> = {
   accepted: "Accepted — view →",
 };
 
+const TRIP_TYPE_LABELS: Record<string, string> = {
+  one_way: "One-way",
+  round_trip: "Round-trip",
+  multi_leg: "Multi-leg",
+};
+
 export function QuoteQueue({
   tripRequests,
   quotes,
@@ -80,6 +86,15 @@ export function QuoteQueue({
     openTrip?.status === "passed" ? "passed" : "active"
   );
   const [selectedId, setSelectedId] = useState<string | null>(() => openTrip?.id ?? null);
+
+  // Poll for fresh data instead of requiring a manual reload — new inbound
+  // trip requests should show up without the operator remembering to hit
+  // refresh. router.refresh() re-fetches this page's server data in place;
+  // it doesn't reset component state (selected item, active tab, etc.).
+  useEffect(() => {
+    const interval = setInterval(() => router.refresh(), 30000);
+    return () => clearInterval(interval);
+  }, [router]);
 
   const readyCount = useMemo(
     () => tripRequests.filter((t) => t.status === "ready").length,
@@ -298,19 +313,17 @@ export function QuoteQueue({
                   )}
                 >
                   <div className="flex w-full items-center justify-between gap-2">
-                    <span className="flex items-center gap-2 text-sm font-medium">
+                    <span className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span title={source.label}>{source.emoji}</span>
                       {score && (
                         <span title={score.label}>
                           {score.emoji} {score.label}
                         </span>
                       )}
-                      {tr.requestorName}
-                      {tr.requestorCompany && (
-                        <span className="font-normal text-muted-foreground">
-                          · {tr.requestorCompany}
-                        </span>
-                      )}
+                      <span>
+                        {tr.requestorName}
+                        {tr.requestorCompany && ` · ${tr.requestorCompany}`}
+                      </span>
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       {activeView === "all" && (
@@ -323,14 +336,15 @@ export function QuoteQueue({
                       </span>
                     </span>
                   </div>
-                  {tr.scoreReason && (
-                    <p className="text-xs text-muted-foreground">{tr.scoreReason}</p>
-                  )}
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-base font-medium text-foreground">
                     {routeSummary(tr.legs, tr.tripType)}
+                    {TRIP_TYPE_LABELS[tr.tripType] && ` · ${TRIP_TYPE_LABELS[tr.tripType]}`}
                     {pax !== null && ` · ${pax} pax`}
                     {tr.aircraftPref && ` · ${categoryLabel(tr.aircraftPref)}`}
                   </p>
+                  {tr.scoreReason && (
+                    <p className="text-xs text-muted-foreground">{tr.scoreReason}</p>
+                  )}
                 </button>
               );
             })

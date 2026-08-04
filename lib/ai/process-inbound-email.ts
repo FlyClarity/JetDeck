@@ -4,6 +4,7 @@ import { sendEmail } from "@/lib/email";
 import { classifyAndExtractEmail, type EmailClassificationResult } from "@/lib/ai/classify-email";
 import { parseEmailToTripRequest, type ExtractedTripData } from "@/lib/ai/parse-email";
 import { scoreOpportunity } from "@/lib/ai/score-opportunity";
+import { resolveAirportCodesToIcao } from "@/lib/airport-server";
 
 export type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
   include: { operator: true };
@@ -165,6 +166,18 @@ export async function createTripRequestFromInboundEmail(
       ? preExtracted
       : await parseEmailToTripRequest(inboundEmail.subject, inboundEmail.bodyText);
 
+  // The AI sometimes returns the 3-letter IATA code (e.g. "SAN") instead
+  // of the 4-letter ICAO code ("KSAN") the rest of the app assumes for
+  // airport lookups — normalize once here so scoring, the quote builder,
+  // and everything else downstream can just trust TripRequest.legs.
+  const legCodes = (extracted?.legs ?? []).flatMap((l) => [l.depAirport, l.arrAirport]);
+  const codeMap = await resolveAirportCodesToIcao(legCodes);
+  const normalizedLegs = (extracted?.legs ?? []).map((l) => ({
+    ...l,
+    depAirport: codeMap[l.depAirport?.toUpperCase()] ?? l.depAirport,
+    arrAirport: codeMap[l.arrAirport?.toUpperCase()] ?? l.arrAirport,
+  }));
+
   const tripRequest = await prisma.tripRequest.create({
     data: {
       operatorId: inboundEmail.operatorId,
@@ -178,7 +191,7 @@ export async function createTripRequestFromInboundEmail(
       requestorCompany: extracted?.requestorCompany ?? null,
       requestorType: extracted?.requestorType || "direct",
       tripType: extracted?.tripType || "one_way",
-      legs: extracted?.legs ?? [],
+      legs: normalizedLegs,
       aircraftPref: extracted?.aircraftCategory ?? null,
       budgetMentioned: extracted?.budgetMentioned ?? null,
       specialRequests: extracted?.specialRequests ?? inboundEmail.bodyText,

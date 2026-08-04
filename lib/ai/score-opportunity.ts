@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { TripRequest } from "@/lib/generated/prisma/client";
 import { greatCircleDistanceNm, estimateFlightHours } from "@/lib/geo";
+import { resolveAirportCodesToIcao } from "@/lib/airport-server";
 
 export type OpportunityScoreResult = {
   opportunityScore: "high" | "medium" | "low" | "pass";
@@ -34,9 +35,9 @@ export async function scoreOpportunity(
   });
 
   const legs = (tripRequest.legs as Leg[] | null) ?? [];
-  const firstLeg = legs[0];
+  const firstLegRaw = legs[0];
 
-  if (!firstLeg?.depAirport || !firstLeg?.date) {
+  if (!firstLegRaw?.depAirport || !firstLegRaw?.date) {
     return finalize(tripRequestId, {
       opportunityScore: "low",
       scoreReason: "Trip details incomplete — needs manual review",
@@ -45,6 +46,25 @@ export async function scoreOpportunity(
       recommendedAction: "review",
     });
   }
+
+  // AI-extracted (and some manually entered) legs sometimes carry the
+  // 3-letter IATA code (e.g. "SAN") instead of the 4-letter ICAO code
+  // ("KSAN") this function and the rest of the app assume. Normalize once
+  // here so every lookup and comparison below just works — a strict-ICAO
+  // lookup used to silently fail on these, making range checks and
+  // repositioning distance both come back "unknown" and bypass the
+  // distance-based scoring below entirely.
+  const codeMap = await resolveAirportCodesToIcao([
+    firstLegRaw.depAirport,
+    firstLegRaw.arrAirport,
+  ]);
+  const firstLeg: Leg = {
+    ...firstLegRaw,
+    depAirport: codeMap[firstLegRaw.depAirport.toUpperCase()] ?? firstLegRaw.depAirport,
+    arrAirport: firstLegRaw.arrAirport
+      ? (codeMap[firstLegRaw.arrAirport.toUpperCase()] ?? firstLegRaw.arrAirport)
+      : firstLegRaw.arrAirport,
+  };
 
   const historyNote = await buildHistoryNote(tripRequest);
 

@@ -2,6 +2,28 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Daily AI pass to re-surface passed one-way requests that now fit a
+  scheduled trip** (raised directly): at the end of each day, have the
+  AI review upcoming confirmed trips alongside trip requests that were
+  previously passed on, looking for ones that could now be strung
+  together — e.g., a client books a round trip to Colorado and back,
+  and a one-way request from Colorado to SNA that was passed on two
+  days ago (wrong fit in isolation) would actually work well as a
+  connecting leg once the aircraft is already going to be out there.
+  The stated goal: a human can't keep that much of the schedule in
+  their head at once, but the AI can cross-reference it automatically.
+  Not scoped yet — needs a design pass on: what "fits" means precisely
+  (same aircraft only, or same category/range-compatible substitutes
+  too; how much date/time slack counts as connectable; whether this
+  should also actively suggest repositioning-leg savings, not just
+  flag matches), and where surfaced (a daily digest email, a
+  dashboard section, re-opening the passed request itself with a
+  note). Likely wants to build on the same great-circle/repositioning
+  math already in `lib/geo.ts` and `score-opportunity.ts` rather than
+  inventing new logic from scratch — the "how far is this aircraft
+  from this trip" computation is the same shape either way, just
+  comparing against a confirmed Trip's schedule instead of the current
+  live fleet position.
 - **HAVE:/NEED: pre-filter is a single hardcoded prefix, watch for other
   non-request patterns in real feed traffic**: after connecting a real
   NBAA/broker blast feed, a huge chunk of the volume turned out to be

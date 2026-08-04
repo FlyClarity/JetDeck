@@ -123,6 +123,12 @@ that isn't a trip request. When extracting:
   OW 10/15 KSNA KPDX") and leave only secondary details like pax count
   or time in the body. Always read both together: if an airport, date,
   or route only appears in the subject, still extract it into the legs.
+- Always give airports as 4-letter ICAO codes, not 3-letter IATA codes —
+  e.g. write "KSAN", not "SAN", for San Diego. Convert if the email uses
+  the IATA code (most continental-US ICAO codes are just "K" + the IATA
+  code, e.g. IATA "ASE" -> ICAO "KASE", but this isn't universal — use
+  the airport's real ICAO code, not a guessed prefix, if you know it
+  differs).
 
 Return ONLY valid JSON, no markdown code fences, no other text, in
 exactly this shape and field order:

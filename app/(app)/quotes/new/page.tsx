@@ -266,7 +266,11 @@ export default async function NewQuotePage({
     ...aircraftList.map((a) => a.homeBase),
   ];
   const resolvedAirports = await getAirportsByIcao(icaosToResolve);
-  const airportsByIcao = Object.fromEntries(resolvedAirports.map((a) => [a.icao, a]));
+  // Keyed by both ICAO and IATA so a leg that stored the 3-letter code
+  // (e.g. "SAN" instead of "KSAN") still resolves to the same airport.
+  const airportsByIcao = Object.fromEntries(
+    resolvedAirports.flatMap((a) => (a.iata ? [[a.icao, a], [a.iata, a]] : [[a.icao, a]]))
+  );
 
   const requestedLegs = tripLegs.map((l) => {
     const depTime = normalizeTimeString(l.timePref);
