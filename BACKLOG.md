@@ -2,22 +2,24 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
-- **AI triage cost: merge classify + extract into one call** (raised
-  when asked how to cut AI triage costs): investigated prompt caching
-  first, but both the classification and extraction prompts are only
-  ~450–550 tokens — below Claude Sonnet 5's 1024-token minimum
-  cacheable prefix, so marking them `cache_control` would silently do
-  nothing. The real lever: right now a `new_trip_request` email costs
-  two full model calls (classify, then a second extract call that
-  re-reads the same email body). Merging them into a single call that
-  both classifies and extracts in one pass would cut that to one call
-  for the common case, at the cost of a small amount of wasted output
-  on non-trip-request emails (empty extraction fields). Not done yet —
-  it touches the classification prompt we just spent several rounds
-  tuning for broker-shorthand accuracy, so it's worth a deliberate
-  pass (and ideally a live test) rather than folding into an unrelated
-  batch of fixes. Also worth another look at prompt caching once/if
-  the merged prompt's length pushes past the 1024-token threshold.
+- **AI triage cost — needs a live test** (raised when asked how to cut
+  AI triage costs): investigated prompt caching first, but both the
+  classification and extraction prompts were only ~450–550 tokens —
+  below Claude Sonnet 5's 1024-token minimum cacheable prefix, so
+  marking them `cache_control` would've silently done nothing. Instead
+  merged classify + extract into one call (`classifyAndExtractEmail`
+  in `lib/ai/classify-email.ts`) — a `new_trip_request` email used to
+  cost two full model calls (classify, then a second extract call
+  re-reading the same email body); now it's one. The manual "Create
+  Trip Request" review action in Needs Review still calls the
+  original standalone `parseEmailToTripRequest` unchanged, so that
+  path is unaffected either way. Couldn't test the merged prompt
+  against the live API from this sandbox (no key here) — send a batch
+  of real test emails (plain language and broker shorthand both)
+  through the live inbound address and confirm classification and
+  extraction accuracy both still hold before trusting it unsupervised.
+  If the combined prompt's length ever crosses 1024 tokens, prompt
+  caching becomes worth revisiting too.
 - **Arrival-time timezone conversion doesn't flag a day change**: the
   new `addHoursAcrossTimezones` (lib/time.ts) correctly converts the
   computed arrival time into the destination's local clock, but a long

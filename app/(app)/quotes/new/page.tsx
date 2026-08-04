@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { after } from "next/server";
 import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
@@ -282,15 +283,35 @@ export default async function NewQuotePage({
   // the whole page on it made this route noticeably slow to open from the
   // queue. Streamed into the form via Suspense instead (see
   // PriceSuggestionCard) so the rest of the page renders immediately.
-  const priceSuggestionPromise = defaultAircraft
-    ? suggestPrice({
-        routeSummary: routeSummaryText,
-        flightHours: null,
-        aircraftHourlyRate: defaultAircraft.hourlyRate,
-        positioningNote: tripRequest.positioningNote,
-        historyNote: tripRequest.historyNote,
-      })
-    : Promise.resolve(null);
+  //
+  // Cached on the trip request once computed — this page gets reloaded a
+  // lot in practice (checking back on a lead, re-opening from the queue),
+  // and re-billing the AI for the same suggestion on every visit was a real
+  // cost driver, not just a latency one.
+  const priceSuggestionPromise: Promise<{ suggestedPrice: number } | null> =
+    tripRequest.aiPriceSuggestion !== null
+      ? Promise.resolve({ suggestedPrice: tripRequest.aiPriceSuggestion })
+      : defaultAircraft
+        ? suggestPrice({
+            routeSummary: routeSummaryText,
+            flightHours: null,
+            aircraftHourlyRate: defaultAircraft.hourlyRate,
+            positioningNote: tripRequest.positioningNote,
+            historyNote: tripRequest.historyNote,
+          })
+        : Promise.resolve(null);
+
+  if (tripRequest.aiPriceSuggestion === null && defaultAircraft) {
+    after(async () => {
+      const result = await priceSuggestionPromise;
+      if (result) {
+        await prisma.tripRequest.update({
+          where: { id: tripRequest.id },
+          data: { aiPriceSuggestion: result.suggestedPrice },
+        });
+      }
+    });
+  }
 
   const createQuoteWithId = createQuote.bind(null, tripRequest.id);
 

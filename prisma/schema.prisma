@@ -130,6 +130,10 @@ model TripRequest {
   recommendedAction String? // "quote_now" | "review" | "pass"
   aiProcessedAt     DateTime?
 
+  // AI price suggestion shown on /quotes/new — computed once and cached
+  // here so reloading/revisiting that page doesn't re-bill the AI call.
+  aiPriceSuggestion Float?
+
   status String @default("new")
   // "new" | "scoring" | "ready" | "quoted" | "passed" | "closed"
 

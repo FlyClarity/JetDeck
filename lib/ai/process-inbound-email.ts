@@ -1,8 +1,8 @@
 import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
-import { classifyEmail, type EmailClassificationResult } from "@/lib/ai/classify-email";
-import { parseEmailToTripRequest } from "@/lib/ai/parse-email";
+import { classifyAndExtractEmail, type EmailClassificationResult } from "@/lib/ai/classify-email";
+import { parseEmailToTripRequest, type ExtractedTripData } from "@/lib/ai/parse-email";
 import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 
 export type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
@@ -16,7 +16,7 @@ export async function processInboundEmail(inboundEmailId: string) {
   });
   if (!inboundEmail) return;
 
-  const result = await classifyEmail({
+  const result = await classifyAndExtractEmail({
     fromEmail: inboundEmail.fromEmail,
     fromName: inboundEmail.fromName,
     subject: inboundEmail.subject,
@@ -46,7 +46,9 @@ export async function processInboundEmail(inboundEmailId: string) {
       return;
 
     case "new_trip_request":
-      await createTripRequestFromInboundEmail(inboundEmail);
+      // Already extracted in the same call as classification above — pass
+      // it straight through instead of re-extracting from scratch.
+      await createTripRequestFromInboundEmail(inboundEmail, result.extraction);
       return;
 
     case "quote_response_accepted":
@@ -117,14 +119,21 @@ export async function logInboundEmailAsInquiry(inboundEmail: InboundEmailWithOpe
  * bare-bones TripRequest from the raw email fields rather than failing —
  * a human explicitly asked for this one, so it should always produce
  * something to work with, even if AI couldn't fill in the details.
+ *
+ * `preExtracted` lets the automatic pipeline pass through the extraction
+ * it already got as part of classification (see classifyAndExtractEmail)
+ * instead of paying for a second AI call here. Omit it (as the manual
+ * "Create Trip Request" review action does) to have this run extraction
+ * itself.
  */
 export async function createTripRequestFromInboundEmail(
-  inboundEmail: InboundEmailWithOperator
+  inboundEmail: InboundEmailWithOperator,
+  preExtracted?: ExtractedTripData | null
 ) {
-  const extracted = await parseEmailToTripRequest(
-    inboundEmail.subject,
-    inboundEmail.bodyText
-  );
+  const extracted =
+    preExtracted !== undefined
+      ? preExtracted
+      : await parseEmailToTripRequest(inboundEmail.subject, inboundEmail.bodyText);
 
   const tripRequest = await prisma.tripRequest.create({
     data: {

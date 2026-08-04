@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { extractJson } from "@/lib/ai/extract-json";
+import type { ExtractedLeg, ExtractedTripData } from "@/lib/ai/parse-email";
 
 const anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -55,10 +56,25 @@ export type EmailClassificationResult = {
   quoteNumber: string | null;
   senderEmail: string;
   senderName: string | null;
+  // Populated only when classification is "new_trip_request" — extracted
+  // in the same call instead of a separate follow-up request. See the
+  // module comment below for why.
+  extraction: ExtractedTripData | null;
 };
 
-const CLASSIFICATION_PROMPT = `You are an email triage assistant for a private jet charter company.
-Classify this inbound email into exactly one of these categories:
+// Classification and extraction used to be two separate Anthropic calls:
+// classify the email, then (if it was a trip request) make a second call
+// to pull out the trip details — re-sending the whole email body again and
+// paying for a second copy of the instructional prompt. Since
+// classification already requires reading the full email, extracting the
+// trip fields "for free" in the same pass cuts AI calls roughly in half
+// for the common case (a real cost driver, not just latency). Every field
+// and behavior from the two original prompts is preserved here — see the
+// commit that introduced this for the two-call version if this needs to
+// be split apart again.
+const TRIAGE_PROMPT = `You are a triage assistant for a private jet charter company reading inbound email.
+
+First, classify this email into exactly one of these categories:
 new_trip_request, quote_response_accepted, quote_response_questions,
 quote_response_declined, general_inquiry, spam_or_auto_reply, unclassifiable.
 
@@ -83,8 +99,25 @@ category (e.g. no discernible trip details, quote reference, or intent at
 all) — don't use it just because an email is terse or informally
 formatted.
 
-Return ONLY valid JSON, no markdown code fences, no other text, in exactly
-this shape and field order:
+Second, only if the classification is new_trip_request, also extract the
+trip's details into the "extraction" field below. For every other
+classification, "extraction" must be null — don't extract from an email
+that isn't a trip request. When extracting:
+- Charter request emails are often terse shorthand, e.g. "9/10 1000L
+  KSNA - KTEB" means a leg on Sept 10, departing 10:00 AM local, from
+  KSNA to KTEB.
+- Emails also commonly end with a sender's signature block and unrelated
+  legal/travel-advisory boilerplate (e.g. REAL ID notices) — extract
+  trip details from the body only and ignore that trailing boilerplate;
+  it does not affect the legs, dates, or passenger count.
+- The subject line is part of the request, not just a label — brokers
+  often put the route, date, and trip type in the subject (e.g. "NEED:
+  OW 10/15 KSNA KPDX") and leave only secondary details like pax count
+  or time in the body. Always read both together: if an airport, date,
+  or route only appears in the subject, still extract it into the legs.
+
+Return ONLY valid JSON, no markdown code fences, no other text, in
+exactly this shape and field order:
 
 {
   "reason": string, // explain in one sentence what the email is actually asking for — work this out BEFORE picking a classification below, and make sure the classification you choose matches what you just wrote here
@@ -92,10 +125,53 @@ this shape and field order:
   "confidence": "high" | "medium" | "low",
   "quoteNumber": string | null, // an existing quote number this email references (e.g. Q-2024-0042), else null
   "senderEmail": string, // the From address
-  "senderName": string | null // the sender name if identifiable, else null
+  "senderName": string | null, // the sender name if identifiable, else null
+  "extraction": null | {
+    "requestorName": string | null,
+    "requestorCompany": string | null,
+    "requestorEmail": string | null,
+    "requestorPhone": string | null,
+    "requestorType": "broker" | "direct" | null,
+    "tripType": "one_way" | "round_trip" | "multi_leg" | null,
+    "legs": [
+      {
+        "depAirport": string,
+        "arrAirport": string,
+        "date": string, // "YYYY-MM-DD"
+        "timePref": string | null, // 24-hour "HH:MM" if a specific time is stated or implied, e.g. "1000L" -> "10:00", "2pm" -> "14:00"; else null
+        "timeFlexible": boolean,
+        "passengerCount": number | null
+      }
+    ],
+    "aircraftCategory": "light" | "midsize" | "super_midsize" | "heavy" | "ultra_long" | null,
+    "budgetMentioned": number | null,
+    "specialRequests": string | null,
+    "urgency": "asap" | "normal" | "flexible" | null,
+    "rawNeedsSummary": string
+  }
 }`;
 
-export async function classifyEmail(email: {
+function normalizeExtraction(raw: unknown): ExtractedTripData | null {
+  if (!raw || typeof raw !== "object") return null;
+  const parsed = raw as Record<string, unknown>;
+
+  return {
+    requestorName: (parsed.requestorName as string) ?? null,
+    requestorCompany: (parsed.requestorCompany as string) ?? null,
+    requestorEmail: (parsed.requestorEmail as string) ?? null,
+    requestorPhone: (parsed.requestorPhone as string) ?? null,
+    requestorType: (parsed.requestorType as ExtractedTripData["requestorType"]) ?? null,
+    tripType: (parsed.tripType as ExtractedTripData["tripType"]) ?? null,
+    legs: Array.isArray(parsed.legs) ? (parsed.legs as ExtractedLeg[]) : [],
+    aircraftCategory: (parsed.aircraftCategory as ExtractedTripData["aircraftCategory"]) ?? null,
+    budgetMentioned: (parsed.budgetMentioned as number) ?? null,
+    specialRequests: (parsed.specialRequests as string) ?? null,
+    urgency: (parsed.urgency as ExtractedTripData["urgency"]) ?? null,
+    rawNeedsSummary: (parsed.rawNeedsSummary as string) ?? "",
+  };
+}
+
+export async function classifyAndExtractEmail(email: {
   fromEmail: string;
   fromName?: string | null;
   subject?: string | null;
@@ -112,16 +188,17 @@ export async function classifyEmail(email: {
       quoteNumber: null,
       senderEmail: email.fromEmail,
       senderName: email.fromName ?? null,
+      extraction: null,
     };
   }
 
   const message = await anthropic.messages.create({
     model: "claude-sonnet-5",
-    max_tokens: 1024,
+    max_tokens: 2048,
     messages: [
       {
         role: "user",
-        content: `${CLASSIFICATION_PROMPT}\n\nFrom: ${email.fromName ?? ""} <${email.fromEmail}>\nSubject: ${email.subject ?? ""}\n\n${email.bodyText}`,
+        content: `${TRIAGE_PROMPT}\n\nFrom: ${email.fromName ?? ""} <${email.fromEmail}>\nSubject: ${email.subject ?? ""}\n\n${email.bodyText}`,
       },
     ],
   });
@@ -131,16 +208,17 @@ export async function classifyEmail(email: {
 
   if (!parsed) {
     console.error(
-      "Failed to parse AI classification response:",
+      "Failed to parse AI triage response:",
       text.slice(0, 500)
     );
     return {
       classification: "unclassifiable",
       confidence: "low",
-      reason: "Failed to parse AI classification response",
+      reason: "Failed to parse AI triage response",
       quoteNumber: null,
       senderEmail: email.fromEmail,
       senderName: email.fromName ?? null,
+      extraction: null,
     };
   }
 
@@ -161,5 +239,6 @@ export async function classifyEmail(email: {
     quoteNumber: (parsed.quoteNumber as string) ?? null,
     senderEmail: (parsed.senderEmail as string) ?? email.fromEmail,
     senderName: (parsed.senderName as string) ?? email.fromName ?? null,
+    extraction: classification === "new_trip_request" ? normalizeExtraction(parsed.extraction) : null,
   };
 }
