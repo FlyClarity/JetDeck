@@ -195,7 +195,11 @@ export default async function QuotePage({
     ? routeSummary(quote.tripRequest.legs, quote.tripRequest.tripType)
     : "Route unknown";
   const requestorLine = quote.tripRequest
-    ? [quote.tripRequest.requestorName, quote.tripRequest.requestorCompany]
+    ? [
+        quote.tripRequest.requestorName,
+        quote.tripRequest.requestorCompany,
+        quote.tripRequest.requestorEmail,
+      ]
         .filter(Boolean)
         .join(" · ")
     : "";

@@ -249,7 +249,11 @@ export default async function NewQuotePage({
     aircraftList.find((a) => a.category === tripRequest.aircraftPref) ?? aircraftList[0] ?? null;
 
   const routeSummaryText = routeSummary(tripRequest.legs, tripRequest.tripType);
-  const requestorLine = [tripRequest.requestorName, tripRequest.requestorCompany]
+  const requestorLine = [
+    tripRequest.requestorName,
+    tripRequest.requestorCompany,
+    tripRequest.requestorEmail,
+  ]
     .filter(Boolean)
     .join(" · ");
 
