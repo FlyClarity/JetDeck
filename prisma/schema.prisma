@@ -287,6 +287,11 @@ model InboundEmail {
   operatorId String
   operator   Operator @relation(fields: [operatorId], references: [id])
 
+  // Postmark's own message id for this delivery — used to dedupe webhook
+  // retries so a slow response doesn't cause the same email to be
+  // reprocessed (and re-billed to the AI) multiple times.
+  postmarkMessageId String? @unique
+
   // Raw email data from Postmark
   fromEmail  String
   fromName   String?

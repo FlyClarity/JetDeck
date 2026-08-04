@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { processInboundEmail } from "@/lib/ai/process-inbound-email";
 
@@ -20,6 +21,7 @@ function isAuthorized(req: NextRequest) {
 }
 
 type PostmarkInboundPayload = {
+  MessageID?: string;
   FromFull?: { Email?: string; Name?: string };
   From?: string;
   ToFull?: { Email?: string }[];
@@ -40,6 +42,7 @@ export async function POST(req: NextRequest) {
   const toEmail = payload.ToFull?.[0]?.Email ?? payload.To ?? "";
   const fromEmail = payload.FromFull?.Email ?? payload.From ?? "";
   const fromName = payload.FromFull?.Name || null;
+  const postmarkMessageId = payload.MessageID || null;
 
   const operator = await prisma.operator.findFirst({
     where: { inboundEmail: { equals: toEmail, mode: "insensitive" } },
@@ -51,9 +54,24 @@ export async function POST(req: NextRequest) {
     return new Response("No matching operator", { status: 200 });
   }
 
+  // Postmark retries a webhook delivery it considers failed (non-2xx, or
+  // slow to respond) — up to 10 times, on its own backoff schedule.
+  // Without this check, a retry would create a second InboundEmail row and
+  // re-run the whole AI pipeline (classify + extract + score) for the same
+  // message, silently multiplying the AI bill for one real email.
+  if (postmarkMessageId) {
+    const existing = await prisma.inboundEmail.findUnique({
+      where: { postmarkMessageId },
+    });
+    if (existing) {
+      return new Response("OK (duplicate delivery)", { status: 200 });
+    }
+  }
+
   const inboundEmail = await prisma.inboundEmail.create({
     data: {
       operatorId: operator.id,
+      postmarkMessageId,
       fromEmail,
       fromName,
       toEmail,
@@ -66,11 +84,19 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  try {
-    await processInboundEmail(inboundEmail.id);
-  } catch (err) {
-    console.error("Failed to process inbound email", inboundEmail.id, err);
-  }
+  // Respond to Postmark immediately once the email is durably stored,
+  // instead of making it wait out the full classify/extract/score AI
+  // pipeline — that wait is exactly what could trip Postmark's retry
+  // timeout and trigger the duplicate-processing problem above in the
+  // first place. after() keeps the function alive to finish this in the
+  // background without blocking the response.
+  after(async () => {
+    try {
+      await processInboundEmail(inboundEmail.id);
+    } catch (err) {
+      console.error("Failed to process inbound email", inboundEmail.id, err);
+    }
+  });
 
   return new Response("OK", { status: 200 });
 }
