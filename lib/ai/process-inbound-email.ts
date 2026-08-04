@@ -9,12 +9,42 @@ export type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
   include: { operator: true };
 }>;
 
+// Broker blast feeds (NBAA Air Mail and similar aggregators like Charter
+// Airmail/FlyEasy) use a HAVE:/NEED: subject convention — HAVE: is another
+// operator advertising empty-leg availability, the mirror image of the
+// NEED:/LOOKING FOR: request shorthand the classifier already knows about.
+// A HAVE: listing is never a trip request (there's nothing to quote), so
+// it's filtered out here before spending any AI tokens on it, rather than
+// relying on the model to reliably tell the two apart — they use nearly
+// identical shorthand (route, date, aircraft type). Add more prefixes here
+// as other non-request patterns show up in real feed traffic.
+const NON_REQUEST_SUBJECT_PREFIXES = [/^\s*HAVE\s*:/i];
+
+function isAvailabilityListing(subject: string | null): boolean {
+  return Boolean(subject && NON_REQUEST_SUBJECT_PREFIXES.some((re) => re.test(subject)));
+}
+
 export async function processInboundEmail(inboundEmailId: string) {
   const inboundEmail = await prisma.inboundEmail.findUnique({
     where: { id: inboundEmailId },
     include: { operator: true },
   });
   if (!inboundEmail) return;
+
+  if (isAvailabilityListing(inboundEmail.subject)) {
+    await prisma.inboundEmail.update({
+      where: { id: inboundEmail.id },
+      data: {
+        classification: "availability_listing",
+        classificationConfidence: "high",
+        classificationReason:
+          'Subject starts with "HAVE:" — a supply-side empty-leg listing, not a trip request. Filtered before the AI ran to avoid billing for it.',
+        aiProcessedAt: new Date(),
+        status: "discarded",
+      },
+    });
+    return;
+  }
 
   const result = await classifyAndExtractEmail({
     fromEmail: inboundEmail.fromEmail,

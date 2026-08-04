@@ -2,6 +2,23 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **HAVE:/NEED: pre-filter is a single hardcoded prefix, watch for other
+  non-request patterns in real feed traffic**: after connecting a real
+  NBAA/broker blast feed, a huge chunk of the volume turned out to be
+  "HAVE:" (empty-leg availability) listings — not trip requests at
+  all, but structurally identical shorthand to a real "NEED:" request,
+  so the AI couldn't reliably be trusted to tell them apart alone. Now
+  filtered before any AI call via `NON_REQUEST_SUBJECT_PREFIXES` in
+  `lib/ai/process-inbound-email.ts` (currently just `HAVE:`), with a
+  prompt-level fallback in case the prefix format varies. If other
+  non-request patterns show up in real traffic (e.g. "SOLD:",
+  "BOOKED:", other brokers' own confirmations echoed back into the
+  feed), add them to that same list rather than relying on the AI to
+  catch them after the fact — it's both cheaper and more reliable.
+  Also worth periodically spot-checking what's landing in `discarded`
+  with `classification: "availability_listing"` to make sure the
+  filter isn't accidentally swallowing anything that was actually a
+  real request.
 - **AI triage cost — needs a live test** (raised when asked how to cut
   AI triage costs): investigated prompt caching first, but both the
   classification and extraction prompts were only ~450–550 tokens —

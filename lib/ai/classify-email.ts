@@ -94,6 +94,14 @@ block is a new_trip_request, not unclassifiable — brokers omit
 pleasantries like "please quote me" because the shorthand already implies
 it.
 
+Watch for the mirror-image case: broker blast feeds also carry "HAVE:"
+listings — another operator advertising empty-leg aircraft *availability*,
+using the exact same shorthand style (route, date, aircraft type) as a
+NEED: request. A HAVE: listing is NOT a new_trip_request — nobody is
+asking for a quote, there's nothing to extract. If the subject or body
+opens with "HAVE:" or is clearly an aircraft-for-sale/available posting
+rather than a request, classify it as unclassifiable instead.
+
 Reserve unclassifiable for emails you genuinely cannot place in any other
 category (e.g. no discernible trip details, quote reference, or intent at
 all) — don't use it just because an email is terse or informally
