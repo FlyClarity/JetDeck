@@ -139,6 +139,7 @@ async function sendQuote(id: string) {
     html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">${quoteLink}</a></p><p>Total: ${formatCurrency(quote.total)}. Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
     replyTo: operator.replyToEmail ?? undefined,
     from: operator.fromEmail,
+    fromName: operator.name,
   });
 
   redirect(`/quotes/${quote.id}`);
@@ -167,6 +168,7 @@ async function cancelBooking(id: string, formData: FormData) {
       html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>We're sorry to let you know your booking (${quote.quoteNumber}) has been cancelled: ${note}</p><p>Please contact us so we can help find another solution.</p><p>— ${operator.name}</p>`,
       replyTo: operator.replyToEmail ?? undefined,
       from: operator.fromEmail,
+      fromName: operator.name,
     });
   }
 

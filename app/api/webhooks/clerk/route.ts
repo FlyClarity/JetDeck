@@ -15,6 +15,11 @@ export async function POST(req: NextRequest) {
     const { id, name, slug } = evt.data;
     const operatorSlug = slug || slugify(name);
 
+    // Just a starting point — fully editable afterward in Settings, since
+    // the actual address has to match wherever Postmark's inbound stream is
+    // configured for this operator's real domain.
+    const inboundDomain = process.env.INBOUND_EMAIL_DOMAIN || "inbound.jetdeck.app";
+
     await prisma.operator.upsert({
       where: { clerkOrgId: id },
       update: {},
@@ -22,7 +27,7 @@ export async function POST(req: NextRequest) {
         clerkOrgId: id,
         slug: operatorSlug,
         name,
-        inboundEmail: `requests-${operatorSlug}@inbound.jetdeck.app`,
+        inboundEmail: `requests-${operatorSlug}@${inboundDomain}`,
       },
     });
   }

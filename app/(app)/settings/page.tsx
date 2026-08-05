@@ -119,12 +119,14 @@ export default async function SettingsPage() {
             name="fromEmail"
             type="email"
             defaultValue={operator.fromEmail ?? ""}
-            placeholder="charter@youroperator.com"
+            placeholder="quotes@outbound.youroperator.com"
           />
           <p className="text-sm text-muted-foreground">
-            Sender address on outbound email. Must be on a domain verified in
-            Resend, or delivery will fail — leave blank to use the app
-            default.
+            Technical sending address — must be on a domain verified in
+            Resend, or delivery will fail. Clients don&apos;t see this in
+            practice: outbound email shows your operator name, and replies go
+            to the Reply-to address below regardless of what this is set to.
+            Leave blank to use the app default.
           </p>
         </div>
 
@@ -135,11 +137,13 @@ export default async function SettingsPage() {
             name="replyToEmail"
             type="email"
             defaultValue={operator.replyToEmail ?? ""}
-            placeholder="charter@youroperator.com"
+            placeholder="quotes@youroperator.com"
           />
           <p className="text-sm text-muted-foreground">
-            Client replies to quote emails route back through JetDeck via
-            this address.
+            Your real charter inbox. When a client hits reply on a JetDeck
+            email, it lands here — set this to the same mailbox you&apos;re
+            forwarding to the inbound address below, so replies flow back
+            into JetDeck automatically too.
           </p>
         </div>
 
@@ -196,12 +200,14 @@ export default async function SettingsPage() {
             name="inboundEmail"
             type="email"
             defaultValue={operator.inboundEmail ?? ""}
-            placeholder="you@inbound.postmarkapp.com"
+            placeholder="quotes@inbound.youroperator.com"
           />
           <p className="text-sm text-muted-foreground">
-            Forward or set up mail routing to this address to feed the AI
-            triage pipeline. Must exactly match the address Postmark
-            delivers inbound mail to.
+            Set up an auto-forward rule in your real charter inbox (the
+            Reply-to address above) pointing to this address — it&apos;s
+            never given out to clients, just where your own inbox silently
+            copies mail so JetDeck&apos;s AI triage pipeline can see it. Must
+            exactly match the address Postmark delivers inbound mail to.
           </p>
         </div>
 

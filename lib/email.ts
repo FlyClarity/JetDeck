@@ -10,6 +10,7 @@ export async function sendEmail(params: {
   html: string;
   replyTo?: string;
   from?: string | null;
+  fromName?: string | null;
 }) {
   if (!resend) {
     console.warn(
@@ -18,8 +19,13 @@ export async function sendEmail(params: {
     return;
   }
 
+  const fromAddress = params.from || process.env.EMAIL_FROM || "noreply@jetdeck.app";
+
   await resend.emails.send({
-    from: params.from || process.env.EMAIL_FROM || "noreply@jetdeck.app",
+    // A display name means most inboxes show "Clarity Aviation" rather than
+    // the raw technical sending address — the client's actual reply
+    // destination is controlled by replyTo below, not this.
+    from: params.fromName ? `${params.fromName} <${fromAddress}>` : fromAddress,
     to: params.to,
     subject: params.subject,
     html: params.html,

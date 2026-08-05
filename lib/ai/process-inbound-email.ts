@@ -150,6 +150,7 @@ export async function logInboundEmailAsInquiry(inboundEmail: InboundEmailWithOpe
       html: `<p>New general inquiry from ${inboundEmail.fromName ?? senderEmail} (${senderEmail}).</p><p>Subject: ${inboundEmail.subject ?? "(no subject)"}</p>`,
       replyTo: senderEmail,
       from: inboundEmail.operator.fromEmail,
+      fromName: inboundEmail.operator.name,
     });
   }
 }
@@ -232,6 +233,7 @@ export async function createTripRequestFromInboundEmail(
       html: `<p>New trip request from ${tripRequest.requestorName} (${tripRequest.requestorEmail}) via email.</p><p>${badge ? `${badge.emoji} ${badge.label} — ` : ""}${score.scoreReason}</p>`,
       replyTo: senderEmail,
       from: inboundEmail.operator.fromEmail,
+      fromName: inboundEmail.operator.name,
     });
   }
 
@@ -295,6 +297,7 @@ async function handleQuoteResponse(
       html: `<p>${inboundEmail.fromName ?? senderEmailOf(inboundEmail)} replied to quote ${quote.quoteNumber} (${action}).</p>`,
       replyTo: senderEmailOf(inboundEmail),
       from: inboundEmail.operator.fromEmail,
+      fromName: inboundEmail.operator.name,
     });
   }
 }
