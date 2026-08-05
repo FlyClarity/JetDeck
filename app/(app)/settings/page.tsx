@@ -19,6 +19,7 @@ async function updateSettings(formData: FormData) {
   const wireInstructions = String(formData.get("wireInstructions") ?? "");
   const termsText = String(formData.get("termsText") ?? "");
   const replyToEmail = String(formData.get("replyToEmail") ?? "");
+  const notifyEmail = String(formData.get("notifyEmail") ?? "").trim() || null;
   const depositPercentInput = Number(formData.get("depositPercent") ?? 25);
   const depositPercent = Math.min(Math.max(depositPercentInput, 0), 100) / 100;
   const termsVersion = termsText
@@ -36,6 +37,7 @@ async function updateSettings(formData: FormData) {
       termsText,
       termsVersion,
       replyToEmail,
+      notifyEmail,
       depositPercent,
       defaultBlockTimeBufferHours,
       defaultOvernightFee,
@@ -120,6 +122,21 @@ export default async function SettingsPage() {
           <p className="text-sm text-muted-foreground">
             Client replies to quote emails route back through JetDeck via
             this address.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="notifyEmail">Internal notification email</Label>
+          <Input
+            id="notifyEmail"
+            name="notifyEmail"
+            type="email"
+            defaultValue={operator.notifyEmail ?? ""}
+            placeholder="ops@youroperator.com"
+          />
+          <p className="text-sm text-muted-foreground">
+            Where JetDeck sends alerts — quote accepted/declined, change
+            requests, and general inquiries.
           </p>
         </div>
 
