@@ -14,8 +14,6 @@ async function updateSettings(formData: FormData) {
   const { clerkOrgId } = await getTenantContext();
   if (!clerkOrgId) return;
 
-  const name = String(formData.get("name") ?? "").trim();
-  const logoUrl = String(formData.get("logoUrl") ?? "").trim() || null;
   const inboundEmail = String(formData.get("inboundEmail") ?? "").trim() || null;
   const wireInstructions = String(formData.get("wireInstructions") ?? "");
   const termsText = String(formData.get("termsText") ?? "");
@@ -33,11 +31,6 @@ async function updateSettings(formData: FormData) {
   await prisma.operator.update({
     where: { clerkOrgId },
     data: {
-      // name is a required field — only overwrite it when the form actually
-      // submitted a non-empty value, so a blank/cleared input can't null it
-      // out to an empty string.
-      ...(name ? { name } : {}),
-      logoUrl,
       inboundEmail,
       wireInstructions,
       termsText,
@@ -65,38 +58,21 @@ export default async function SettingsPage() {
     <div className="mx-auto w-full max-w-2xl px-6 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
 
-      <form action={updateSettings} className="mt-8 flex flex-col gap-6">
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="name">Organization name</Label>
-          <Input
-            id="name"
-            name="name"
-            defaultValue={operator.name}
-            placeholder="Your Charter Company"
-            required
-          />
-          <p className="text-sm text-muted-foreground">
-            Shown to clients on the quote page and in outbound emails —
-            separate from the JetDeck account itself, so renaming your Clerk
-            organization won&apos;t change this.
+      <div className="mt-6 flex items-center gap-3 rounded-md border border-border p-3">
+        {operator.logoUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={operator.logoUrl} alt={operator.name} className="h-8 w-auto" />
+        )}
+        <div>
+          <p className="text-sm font-medium">{operator.name}</p>
+          <p className="text-xs text-muted-foreground">
+            Name and logo shown to clients — managed in your organization
+            profile (the org switcher in the header, top right), not here.
           </p>
         </div>
+      </div>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="logoUrl">Logo URL</Label>
-          <Input
-            id="logoUrl"
-            name="logoUrl"
-            type="url"
-            defaultValue={operator.logoUrl ?? ""}
-            placeholder="https://youroperator.com/logo.png"
-          />
-          <p className="text-sm text-muted-foreground">
-            Shown at the top of the client quote page. Paste a link to a hosted image — file
-            upload isn&apos;t built yet.
-          </p>
-        </div>
-
+      <form action={updateSettings} className="mt-6 flex flex-col gap-6">
         <div className="flex flex-col gap-2">
           <Label htmlFor="wireInstructions">Wire instructions</Label>
           <Textarea

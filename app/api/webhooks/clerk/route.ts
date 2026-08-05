@@ -11,9 +11,14 @@ export async function POST(req: NextRequest) {
     return new Response("Webhook verification failed", { status: 400 });
   }
 
-  if (evt.type === "organization.created") {
-    const { id, name, slug } = evt.data;
+  if (evt.type === "organization.created" || evt.type === "organization.updated") {
+    const { id, name, slug, image_url, has_image } = evt.data;
     const operatorSlug = slug || slugify(name);
+    // Clerk's org profile (name + logo) is the source of truth — JetDeck
+    // shouldn't ask an operator to maintain the same identity twice, so
+    // both fields sync here on every create/update instead of being
+    // editable in Settings.
+    const logoUrl = has_image ? image_url : null;
 
     // Just a starting point — fully editable afterward in Settings, since
     // the actual address has to match wherever Postmark's inbound stream is
@@ -22,11 +27,12 @@ export async function POST(req: NextRequest) {
 
     await prisma.operator.upsert({
       where: { clerkOrgId: id },
-      update: {},
+      update: { name, logoUrl },
       create: {
         clerkOrgId: id,
         slug: operatorSlug,
         name,
+        logoUrl,
         inboundEmail: `requests-${operatorSlug}@${inboundDomain}`,
       },
     });
