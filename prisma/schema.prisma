@@ -196,7 +196,11 @@ model Quote {
   // Client-facing
   token  String @unique @default(cuid())
   status String @default("draft")
-  // "draft" | "sent" | "accepted" | "declined" | "expired" | "converted" | "cancelled"
+  // "draft" | "sent" | "pending_confirmation" | "accepted" | "declined" | "expired" | "converted" | "cancelled"
+  // pending_confirmation: client legally accepted (terms/IP/timestamp
+  // recorded) but a same-aircraft/date conflict was found, so nothing else
+  // (Trip, Stripe hold, confirmation email) fires until the operator
+  // resolves it — see lib/booking-server.ts
 
   sentAt DateTime?
 

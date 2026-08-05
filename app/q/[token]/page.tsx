@@ -6,54 +6,11 @@ import { sendEmail } from "@/lib/email";
 import { formatCurrency, allocateProportionally } from "@/lib/quote";
 import { paxCount } from "@/lib/queue";
 import { getAppUrl } from "@/lib/url";
-import { generateTripNumber } from "@/lib/trip-server";
-import { createCardHoldCheckoutSession } from "@/lib/stripe";
+import { findBookingConflict, finalizeBooking } from "@/lib/booking-server";
+import { revenueLegsOf, legDate, legTimeLabel } from "@/lib/itinerary";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
-
-export type StoredLeg = {
-  billAs?: string;
-  depAirport?: string | null;
-  arrAirport?: string | null;
-  date?: string | null;
-  depDt?: string | null;
-  flightHours?: number;
-  depTime?: string | null;
-  depTimeTBD?: boolean;
-  arrTime?: string | null;
-};
-
-export function revenueLegsOf(itinerary: unknown): StoredLeg[] {
-  const legs = (itinerary as StoredLeg[]) ?? [];
-  return legs.filter((l) => (l.billAs ?? "revenue") === "revenue");
-}
-
-export function legDateIso(leg: StoredLeg): string | null {
-  return leg.date || (leg.depDt ? leg.depDt.slice(0, 10) : null);
-}
-
-export function legDate(leg: StoredLeg): string {
-  const iso = legDateIso(leg);
-  if (!iso) return "";
-  const d = new Date(`${iso}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-export function legTimeLabel(leg: StoredLeg): string {
-  const dep = leg.depTimeTBD || !leg.depTime ? "TBD" : leg.depTime;
-  return leg.arrTime ? `Departs ${dep} · Arrives ${leg.arrTime}` : `Departs ${dep}`;
-}
-
-function routeAndDateText(itinerary: unknown) {
-  const legs = revenueLegsOf(itinerary);
-  const first = legs[0];
-  const last = legs[legs.length - 1];
-  const route = first ? `${first.depAirport ?? "?"} → ${last?.arrAirport ?? first.arrAirport ?? "?"}` : "your trip";
-  const date = first ? legDate(first) : "";
-  return { route, date };
-}
 
 async function getQuoteByToken(token: string) {
   return prisma.quote.findUnique({
@@ -80,35 +37,17 @@ async function acceptQuote(token: string, formData: FormData) {
     : null;
   const acceptedAt = new Date();
 
-  // Flag a possible double-booking: another already-accepted quote on the
-  // same aircraft covering one of the same dates. Doesn't block the client's
-  // acceptance (they've already committed) — surfaces it to the operator to
-  // resolve manually, e.g. via Cancel Booking on whichever can't be honored.
-  let conflictWarning: string | null = null;
-  if (quote.aircraftId) {
-    const thisDates = new Set(
-      revenueLegsOf(quote.itinerary)
-        .map(legDateIso)
-        .filter((d): d is string => Boolean(d))
-    );
-    const otherAccepted = await prisma.quote.findMany({
-      where: { aircraftId: quote.aircraftId, status: "accepted", id: { not: quote.id } },
-    });
-    for (const other of otherAccepted) {
-      const overlap = revenueLegsOf(other.itinerary)
-        .map(legDateIso)
-        .find((d) => d && thisDates.has(d));
-      if (overlap) {
-        conflictWarning = `Also booked on this aircraft for ${overlap} via quote ${other.quoteNumber}.`;
-        break;
-      }
-    }
-  }
+  // The legal acceptance (terms agreement, deposit authorization) is
+  // recorded right here regardless of what happens next — that's the
+  // clickwrap moment (E-SIGN/UETA), an operational question about aircraft
+  // availability shouldn't gate it. A conflict only determines whether the
+  // booking finalizes immediately or waits on the operator to resolve it.
+  const conflictWarning = await findBookingConflict(quote);
 
   await prisma.quote.update({
     where: { id: quote.id },
     data: {
-      status: "accepted",
+      status: conflictWarning ? "pending_confirmation" : "accepted",
       acceptedAt,
       acceptedByName,
       acceptedIp: ip,
@@ -118,103 +57,35 @@ async function acceptQuote(token: string, formData: FormData) {
     },
   });
 
-  const tripNumber = await generateTripNumber(quote.operatorId);
-  await prisma.trip.create({
-    data: {
-      operatorId: quote.operatorId,
-      tripNumber,
-      quoteId: quote.id,
-      status: "awaiting_payment",
-    },
-  });
-
-  // Positioning tracking: the aircraft ends this trip wherever its last
-  // itinerary leg lands, whether that's the trip's actual destination or
-  // (when "returns to home base" is on) the trailing repositioning leg back
-  // home. Only own-fleet aircraft have a currentBase to update.
-  const allLegs = (quote.itinerary as { arrAirport?: string | null }[]) ?? [];
-  const lastArrAirport = allLegs[allLegs.length - 1]?.arrAirport;
-  if (quote.aircraftId && lastArrAirport) {
-    await prisma.aircraft.update({
-      where: { id: quote.aircraftId },
-      data: { currentBase: lastArrAirport },
-    });
-  }
-
-  const appUrl = await getAppUrl();
-  let cardHoldUrl: string | null = null;
-  if (quote.depositAmount && quote.depositAmount > 0) {
-    const session = await createCardHoldCheckoutSession({
-      quoteId: quote.id,
-      quoteNumber: quote.quoteNumber,
-      depositAmount: quote.depositAmount,
-      appUrl,
-      token,
-    });
-    if (session) {
-      cardHoldUrl = session.url;
-      await prisma.quote.update({
-        where: { id: quote.id },
-        data: { stripePaymentIntentId: session.paymentIntentId, cardHoldStatus: "pending" },
-      });
-    }
-  }
-
-  const { route, date } = routeAndDateText(quote.itinerary);
   const requestorEmail = quote.tripRequest?.requestorEmail;
   const requestorName = quote.tripRequest?.requestorName ?? "there";
-  const revenueLegs = revenueLegsOf(quote.itinerary);
-  const routingHtml = revenueLegs
-    .map((leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}, ${legTimeLabel(leg)}`)
-    .join("<br/>");
 
-  if (requestorEmail) {
-    await sendEmail({
-      to: requestorEmail,
-      subject: `Your Charter Agreement — ${route} on ${date}`,
-      html: `
-        <p>Hi ${requestorName},</p>
-        <p>Thank you for booking with ${quote.operator.name}. Your charter agreement is confirmed.</p>
-        <p><strong>Reference:</strong> ${quote.quoteNumber}<br/>
-        <strong>Accepted:</strong> ${acceptedAt.toUTCString()}</p>
-        <p><strong>Routing:</strong><br/>${routingHtml}</p>
-        <p><strong>Total:</strong> ${formatCurrency(quote.total)}${
-          quote.depositAmount ? `<br/><strong>Deposit due:</strong> ${formatCurrency(quote.depositAmount)}` : ""
-        }</p>
-        ${quote.operator.wireInstructions ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
-        ${
-          cardHoldUrl
-            ? `<p><strong>Card hold:</strong> please authorize your deposit hold now — no charge is made, this only places a hold: <a href="${cardHoldUrl}">${cardHoldUrl}</a></p>`
-            : `<p>Our team will follow up shortly with a secure card authorization link for your deposit hold.</p>`
-        }
-        ${
-          quote.operator.termsText
-            ? `<p><strong>Charter terms you agreed to:</strong></p><p style="white-space:pre-wrap">${quote.operator.termsText}</p>`
-            : ""
-        }
-        <p>— ${quote.operator.name}</p>
-      `,
-      replyTo: quote.operator.replyToEmail ?? undefined,
-      from: quote.operator.fromEmail,
-      fromName: quote.operator.name,
-    });
-  }
+  if (conflictWarning) {
+    const appUrl = await getAppUrl();
 
-  if (quote.operator.notifyEmail) {
-    await sendEmail({
-      to: quote.operator.notifyEmail,
-      subject: conflictWarning
-        ? `⚠️ Double-booking risk — Quote ${quote.quoteNumber} accepted`
-        : `Quote ${quote.quoteNumber} accepted!`,
-      html: `<p>${acceptedByName} (${requestorName}) accepted quote ${quote.quoteNumber} (${formatCurrency(quote.total)}) at ${acceptedAt.toUTCString()}.</p>${
-        conflictWarning
-          ? `<p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p>`
-          : ""
-      }`,
-      replyTo: requestorEmail,
-      from: quote.operator.fromEmail,
-      fromName: quote.operator.name,
-    });
+    if (requestorEmail) {
+      await sendEmail({
+        to: requestorEmail,
+        subject: `Confirming availability — ${quote.quoteNumber}`,
+        html: `<p>Hi ${requestorName},</p><p>Thanks for accepting quote ${quote.quoteNumber} — we're confirming aircraft availability for your dates and will follow up shortly with final confirmation.</p><p>— ${quote.operator.name}</p>`,
+        replyTo: quote.operator.replyToEmail ?? undefined,
+        from: quote.operator.fromEmail,
+        fromName: quote.operator.name,
+      });
+    }
+
+    if (quote.operator.notifyEmail) {
+      await sendEmail({
+        to: quote.operator.notifyEmail,
+        subject: `⚠️ Booking conflict — Quote ${quote.quoteNumber} needs your confirmation`,
+        html: `<p>${acceptedByName} (${requestorName}) accepted quote ${quote.quoteNumber} (${formatCurrency(quote.total)}), but a conflict was found:</p><p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p><p>Review and confirm or decline from the <a href="${appUrl}/quotes/${quote.id}">quote detail page</a> — nothing has been finalized with the client yet.</p>`,
+        replyTo: requestorEmail,
+        from: quote.operator.fromEmail,
+        fromName: quote.operator.name,
+      });
+    }
+  } else {
+    await finalizeBooking(quote.id);
   }
 
   redirect(`/q/${token}`);
@@ -351,7 +222,11 @@ export default async function ClientQuotePage({
               </p>
             </div>
             <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-sm font-medium capitalize text-muted-foreground">
-              {isExpired ? "Expired" : quote.status}
+              {isExpired
+                ? "Expired"
+                : quote.status === "pending_confirmation"
+                  ? "Confirming"
+                  : quote.status}
             </span>
           </div>
 
@@ -450,6 +325,14 @@ export default async function ClientQuotePage({
               {quote.cardHoldStatus === "authorized" && (
                 <p className="mt-1 text-muted-foreground">Your deposit card hold is authorized.</p>
               )}
+            </div>
+          ) : quote.status === "pending_confirmation" ? (
+            <div className="mt-6 rounded-md border border-accent/40 bg-accent/10 p-4 text-sm">
+              <p className="font-medium">Confirming your booking</p>
+              <p className="mt-1 text-muted-foreground">
+                Thanks for accepting — we&apos;re confirming aircraft availability for your dates
+                and will follow up shortly with final confirmation.
+              </p>
             </div>
           ) : quote.status === "declined" ? (
             <div className="mt-6 rounded-md border border-border p-4 text-sm text-muted-foreground">

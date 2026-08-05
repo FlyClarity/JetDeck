@@ -1,0 +1,155 @@
+import { prisma } from "@/lib/prisma";
+import { sendEmail } from "@/lib/email";
+import { formatCurrency } from "@/lib/quote";
+import { getAppUrl } from "@/lib/url";
+import { generateTripNumber } from "@/lib/trip-server";
+import { createCardHoldCheckoutSession } from "@/lib/stripe";
+import { revenueLegsOf, legDateIso, legDate, legTimeLabel, routeAndDateText } from "@/lib/itinerary";
+
+// Same-aircraft, same-date conflicts against anything already committed to
+// that slot — "accepted" bookings, and other "pending_confirmation" requests
+// still waiting on a decision, so two near-simultaneous requests for the
+// same aircraft/dates both correctly see each other rather than only ever
+// checking against fully-resolved bookings.
+export async function findBookingConflict(quote: {
+  id: string;
+  aircraftId: string | null;
+  itinerary: unknown;
+}): Promise<string | null> {
+  if (!quote.aircraftId) return null;
+
+  const thisDates = new Set(
+    revenueLegsOf(quote.itinerary)
+      .map(legDateIso)
+      .filter((d): d is string => Boolean(d))
+  );
+  if (thisDates.size === 0) return null;
+
+  const others = await prisma.quote.findMany({
+    where: {
+      aircraftId: quote.aircraftId,
+      status: { in: ["accepted", "pending_confirmation"] },
+      id: { not: quote.id },
+    },
+  });
+
+  for (const other of others) {
+    const overlap = revenueLegsOf(other.itinerary)
+      .map(legDateIso)
+      .find((d) => d && thisDates.has(d));
+    if (overlap) {
+      return `Also booked on this aircraft for ${overlap} via quote ${other.quoteNumber}.`;
+    }
+  }
+  return null;
+}
+
+// Runs the full "this booking is definitely happening" pipeline: Trip
+// record, aircraft positioning update, Stripe card hold, and the client's
+// real confirmation email (wire instructions + card hold link). Shared by
+// the client's direct accept (no conflict found) and the operator's manual
+// Confirm Booking action (conflict was found, operator resolved it).
+export async function finalizeBooking(quoteId: string) {
+  const quote = await prisma.quote.findUniqueOrThrow({
+    where: { id: quoteId },
+    include: { operator: true, tripRequest: true },
+  });
+
+  const tripNumber = await generateTripNumber(quote.operatorId);
+  await prisma.trip.create({
+    data: {
+      operatorId: quote.operatorId,
+      tripNumber,
+      quoteId: quote.id,
+      status: "awaiting_payment",
+    },
+  });
+
+  // Positioning tracking: the aircraft ends this trip wherever its last
+  // itinerary leg lands, whether that's the trip's actual destination or
+  // (when "returns to home base" is on) the trailing repositioning leg back
+  // home. Only own-fleet aircraft have a currentBase to update.
+  const allLegs = (quote.itinerary as { arrAirport?: string | null }[]) ?? [];
+  const lastArrAirport = allLegs[allLegs.length - 1]?.arrAirport;
+  if (quote.aircraftId && lastArrAirport) {
+    await prisma.aircraft.update({
+      where: { id: quote.aircraftId },
+      data: { currentBase: lastArrAirport },
+    });
+  }
+
+  const appUrl = await getAppUrl();
+  let cardHoldUrl: string | null = null;
+  if (quote.depositAmount && quote.depositAmount > 0) {
+    const session = await createCardHoldCheckoutSession({
+      quoteId: quote.id,
+      quoteNumber: quote.quoteNumber,
+      depositAmount: quote.depositAmount,
+      appUrl,
+      token: quote.token,
+    });
+    if (session) {
+      cardHoldUrl = session.url;
+      await prisma.quote.update({
+        where: { id: quote.id },
+        data: { stripePaymentIntentId: session.paymentIntentId, cardHoldStatus: "pending" },
+      });
+    }
+  }
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { status: "accepted" },
+  });
+
+  const requestorEmail = quote.tripRequest?.requestorEmail;
+  const requestorName = quote.tripRequest?.requestorName ?? "there";
+  const revenueLegs = revenueLegsOf(quote.itinerary);
+  const routingHtml = revenueLegs
+    .map((leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}, ${legTimeLabel(leg)}`)
+    .join("<br/>");
+
+  const { route, date } = routeAndDateText(quote.itinerary);
+
+  if (requestorEmail) {
+    await sendEmail({
+      to: requestorEmail,
+      subject: `Your Charter Agreement — ${route} on ${date}`,
+      html: `
+        <p>Hi ${requestorName},</p>
+        <p>Thank you for booking with ${quote.operator.name}. Your charter agreement is confirmed.</p>
+        <p><strong>Reference:</strong> ${quote.quoteNumber}</p>
+        <p><strong>Routing:</strong><br/>${routingHtml}</p>
+        <p><strong>Total:</strong> ${formatCurrency(quote.total)}${
+          quote.depositAmount ? `<br/><strong>Deposit due:</strong> ${formatCurrency(quote.depositAmount)}` : ""
+        }</p>
+        ${quote.operator.wireInstructions ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
+        ${
+          cardHoldUrl
+            ? `<p><strong>Card hold:</strong> please authorize your deposit hold now — no charge is made, this only places a hold: <a href="${cardHoldUrl}">${cardHoldUrl}</a></p>`
+            : `<p>Our team will follow up shortly with a secure card authorization link for your deposit hold.</p>`
+        }
+        ${
+          quote.operator.termsText
+            ? `<p><strong>Charter terms you agreed to:</strong></p><p style="white-space:pre-wrap">${quote.operator.termsText}</p>`
+            : ""
+        }
+        <p>— ${quote.operator.name}</p>
+      `,
+      replyTo: quote.operator.replyToEmail ?? undefined,
+      from: quote.operator.fromEmail,
+      fromName: quote.operator.name,
+    });
+  }
+
+  if (quote.operator.notifyEmail) {
+    await sendEmail({
+      to: quote.operator.notifyEmail,
+      subject: `Quote ${quote.quoteNumber} confirmed!`,
+      html: `<p>${requestorName} is confirmed on quote ${quote.quoteNumber} (${formatCurrency(quote.total)}).</p>`,
+      replyTo: requestorEmail,
+      from: quote.operator.fromEmail,
+      fromName: quote.operator.name,
+    });
+  }
+}

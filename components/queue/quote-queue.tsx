@@ -24,6 +24,7 @@ const VIEWS = [
   { key: "all", label: "All Requests" },
   { key: "draft", label: "Draft" },
   { key: "sent", label: "Sent" },
+  { key: "pending_confirmation", label: "Needs Confirmation" },
   { key: "accepted", label: "Accepted" },
 ] as const;
 
@@ -39,11 +40,12 @@ const STATUS_FILTERS = [
 type ViewKey = (typeof VIEWS)[number]["key"];
 type StatusFilterKey = (typeof STATUS_FILTERS)[number]["key"];
 
-const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "accepted"];
+const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "pending_confirmation", "accepted"];
 
 const QUOTE_ACTION_LABEL: Record<string, string> = {
   draft: "Continue draft →",
   sent: "Sent — view →",
+  pending_confirmation: "Needs your confirmation →",
   accepted: "Accepted — view →",
 };
 
@@ -108,6 +110,11 @@ export function QuoteQueue({
   );
 
   const draftCount = useMemo(() => quotes.filter((q) => q.status === "draft").length, [quotes]);
+
+  const pendingConfirmationCount = useMemo(
+    () => quotes.filter((q) => q.status === "pending_confirmation").length,
+    [quotes]
+  );
 
   const isQuoteView = QUOTE_VIEWS.includes(activeView);
 
@@ -218,6 +225,11 @@ export function QuoteQueue({
                 )}
                 {view.key === "draft" && draftCount > 0 && (
                   <span className="ml-1.5 text-xs text-muted-foreground">{draftCount}</span>
+                )}
+                {view.key === "pending_confirmation" && pendingConfirmationCount > 0 && (
+                  <span className="ml-1.5 text-xs font-medium text-destructive">
+                    {pendingConfirmationCount}
+                  </span>
                 )}
               </button>
             ))}

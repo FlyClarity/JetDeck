@@ -152,17 +152,32 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   worth adding via Vercel Blob (same tool already flagged for aircraft
   photos above) once there's appetite to batch image-upload work
   together.
-- **Double-booking detection is same-aircraft-only and date-only**
-  (raised alongside cancel/decline): `acceptQuote`'s conflict check
-  compares revenue-leg dates across other `accepted` quotes sharing
-  the same `aircraftId` — it doesn't look at repositioning legs, don't
-  account for time-of-day (two same-day legs that don't actually
-  overlap in time still flag), and says nothing about crew
-  availability (no crew-scheduling data exists yet). It's also
-  advisory only, by design — the client's acceptance still goes
-  through, and the operator resolves it manually via Cancel Booking.
-  Worth tightening once there's real leg-time data to compare instead
-  of whole-day granularity.
+- **Double-booking now actually blocks instead of just warning after the
+  fact** (raised directly — two clients booking the same aircraft/dates):
+  previously `acceptQuote` always accepted immediately and only *flagged*
+  a conflict for the operator to sort out manually after both were already
+  "confirmed." Now: the legal acceptance (terms/IP/timestamp — the E-SIGN/
+  UETA clickwrap moment) still happens unconditionally on click, since
+  that's independent of aircraft availability, and the button/legal text
+  are unchanged from the brief's required wording. But if
+  `findBookingConflict` (`lib/booking-server.ts`) finds a same-aircraft/
+  date conflict against another `accepted` **or** `pending_confirmation`
+  quote, the booking goes to `pending_confirmation` instead of `accepted`
+  — no Trip, no Stripe hold, no wire-instructions email fire yet. Client
+  sees "confirming availability," operator gets an email with a direct
+  link to the quote, and resolves it from there with new Confirm
+  Booking/Decline actions (`app/(app)/quotes/[id]/page.tsx`) — Confirm
+  runs the same `finalizeBooking` pipeline the no-conflict path runs
+  automatically. Surfaced in the Quoting Queue as a new "Needs
+  Confirmation" tab with a badge count.
+  Still same-aircraft/date-only, not leg-time-aware (two same-day legs
+  that don't actually overlap in time still flag) and doesn't know about
+  repositioning legs or crew availability — worth tightening once there's
+  real leg-time data. Also, checking-then-writing isn't wrapped in a DB
+  transaction/lock, so two genuinely simultaneous requests for the same
+  conflicting slot could both still slip through as a narrow race —
+  closing that fully would need serializable isolation or a unique
+  constraint, not attempted here.
 - **No dashboard view for cancelled bookings** (raised alongside
   Cancel Booking): cancelling an accepted quote moves it to a
   `cancelled` status with no tab to find it again afterward — same gap

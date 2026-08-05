@@ -5,6 +5,7 @@ import { sendEmail } from "@/lib/email";
 import { getAppUrl } from "@/lib/url";
 import { routeSummary, relativeTime } from "@/lib/queue";
 import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES } from "@/lib/quote";
+import { finalizeBooking } from "@/lib/booking-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
@@ -175,6 +176,54 @@ async function cancelBooking(id: string, formData: FormData) {
   redirect(`/quotes/${quote.id}`);
 }
 
+async function confirmPendingBooking(id: string) {
+  "use server";
+
+  const scoped = await getScopedQuote(id);
+  if (!scoped) return;
+  const { quote } = scoped;
+  if (quote.status !== "pending_confirmation") return;
+
+  // The client already legally accepted (terms/IP/timestamp recorded when
+  // they clicked) — this just runs the same finalize pipeline their
+  // acceptance would have triggered automatically if there'd been no
+  // conflict: Trip creation, positioning update, Stripe hold, and the real
+  // confirmation email with wire instructions.
+  await finalizeBooking(quote.id);
+
+  redirect(`/quotes/${quote.id}`);
+}
+
+async function declinePendingBooking(id: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedQuote(id);
+  if (!scoped) return;
+  const { quote, operator } = scoped;
+  if (quote.status !== "pending_confirmation") return;
+
+  const note = String(formData.get("declineNote") ?? "").trim();
+  if (!note) return;
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { status: "declined", declinedAt: new Date() },
+  });
+
+  if (quote.tripRequest?.requestorEmail) {
+    await sendEmail({
+      to: quote.tripRequest.requestorEmail,
+      subject: `Unable to confirm — ${quote.quoteNumber}`,
+      html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>We're sorry — we're unable to confirm your booking (${quote.quoteNumber}): ${note}</p><p>Please contact us so we can help find another solution.</p><p>— ${operator.name}</p>`,
+      replyTo: operator.replyToEmail ?? undefined,
+      from: operator.fromEmail,
+      fromName: operator.name,
+    });
+  }
+
+  redirect(`/quotes/${quote.id}`);
+}
+
 export default async function QuotePage({
   params,
 }: {
@@ -249,6 +298,8 @@ export default async function QuotePage({
   const updateQuoteWithId = updateQuote.bind(null, quote.id);
   const sendQuoteWithId = sendQuote.bind(null, quote.id);
   const cancelBookingWithId = cancelBooking.bind(null, quote.id);
+  const confirmPendingBookingWithId = confirmPendingBooking.bind(null, quote.id);
+  const declinePendingBookingWithId = declinePendingBooking.bind(null, quote.id);
   const clientLink = `${await getAppUrl()}/q/${quote.token}`;
 
   return (
@@ -256,7 +307,7 @@ export default async function QuotePage({
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">{quote.quoteNumber}</h1>
         <span className="rounded-full bg-muted px-2.5 py-1 text-sm font-medium capitalize text-muted-foreground">
-          {quote.status}
+          {quote.status === "pending_confirmation" ? "Pending confirmation" : quote.status}
         </span>
       </div>
 
@@ -281,6 +332,52 @@ export default async function QuotePage({
             Client link
           </a>
           <CopyLinkButton link={clientLink} />
+        </div>
+      )}
+
+      {quote.status === "pending_confirmation" && (
+        <div className="mt-4 flex flex-col gap-3">
+          <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm">
+            <p className="font-medium">
+              {quote.acceptedByName || quote.tripRequest?.requestorName || "The client"} accepted
+              {quote.acceptedAt && ` on ${quote.acceptedAt.toLocaleString()}`} — awaiting your
+              confirmation
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              The client has legally accepted (terms, IP, and timestamp are recorded), but
+              nothing&apos;s been finalized yet — no Trip, no card hold, no confirmation email —
+              until you resolve the conflict below.
+            </p>
+          </div>
+
+          {quote.conflictWarning && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <p className="font-medium text-destructive">⚠️ Possible double-booking</p>
+              <p className="mt-1">{quote.conflictWarning}</p>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <form action={confirmPendingBookingWithId}>
+              <Button type="submit" size="sm">
+                Confirm Booking
+              </Button>
+            </form>
+            <details className="text-sm">
+              <summary className="cursor-pointer text-muted-foreground">Decline instead</summary>
+              <form action={declinePendingBookingWithId} className="mt-3 flex flex-col gap-2">
+                <Textarea
+                  name="declineNote"
+                  rows={2}
+                  placeholder="Reason — this is sent to the client"
+                  required
+                />
+                <Button type="submit" variant="destructive" size="sm" className="self-start">
+                  Decline
+                </Button>
+              </form>
+            </details>
+          </div>
         </div>
       )}
 
@@ -425,7 +522,7 @@ export default async function QuotePage({
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}
           defaultBlockTimeBufferHours={operator.defaultBlockTimeBufferHours}
-          isAccepted={quote.status === "accepted"}
+          isAccepted={quote.status === "accepted" || quote.status === "pending_confirmation"}
           action={updateQuoteWithId}
           submitLabel="Save Changes"
         />
