@@ -94,6 +94,7 @@ async function submitTripRequest(operatorSlug: string, formData: FormData) {
       to: operator.notifyEmail,
       subject: `New trip request — ${requestorName}`,
       html: `<p>New trip request from ${requestorName} (${requestorEmail}) for ${routeSummary}.</p>`,
+      replyTo: requestorEmail,
     });
   }
 

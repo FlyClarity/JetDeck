@@ -205,6 +205,7 @@ async function acceptQuote(token: string, formData: FormData) {
           ? `<p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p>`
           : ""
       }`,
+      replyTo: requestorEmail,
     });
   }
 
@@ -227,6 +228,7 @@ async function declineQuote(token: string) {
       to: quote.operator.notifyEmail,
       subject: `Quote ${quote.quoteNumber} — declined`,
       html: `<p>${quote.tripRequest?.requestorName ?? "The client"} declined quote ${quote.quoteNumber}.</p>`,
+      replyTo: quote.tripRequest?.requestorEmail,
     });
   }
 

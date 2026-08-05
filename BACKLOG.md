@@ -2,6 +2,26 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Outbound email gaps — internal notify missing on inbound trip
+  requests, inconsistent Reply-To — fixed**: two issues found doing an
+  audit of every `sendEmail` call site. (1) The intake form path sent
+  the operator a "New trip request" notification, but the AI email
+  pipeline — JetDeck's primary feature — created and scored the
+  TripRequest without notifying anyone; an operator not watching the
+  dashboard had no way to know a 🟢 HIGH opportunity had just landed by
+  email. `createTripRequestFromInboundEmail`
+  (`lib/ai/process-inbound-email.ts`) now sends the same kind of
+  internal notification, including the score badge and reason. (2) The
+  "Request Changes" flow already set `replyTo` to the client's email so
+  a sales user could hit reply and land straight in the client's inbox
+  — but that pattern wasn't applied to the other internal notify
+  emails (general inquiry, quote response matched, quote accepted,
+  quote declined, intake form new-request), so replying to any of
+  those went nowhere useful. All five now set `replyTo` to the
+  relevant client/broker address.
+  Not tested live — no `RESEND_API_KEY` in this sandbox, same
+  limitation as everywhere else email-related in this project.
+
 - **Airport dataset gaps (KUAO, KOEB) — root cause found and fixed, but
   worth a second look**: the original import (10,463 rows) silently
   dropped a meaningful number of legitimate ICAO-coded airports —
