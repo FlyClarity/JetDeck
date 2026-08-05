@@ -202,16 +202,30 @@ export async function classifyAndExtractEmail(email: {
     };
   }
 
-  const message = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 2048,
-    messages: [
-      {
-        role: "user",
-        content: `${TRIAGE_PROMPT}\n\nFrom: ${email.fromName ?? ""} <${email.fromEmail}>\nSubject: ${email.subject ?? ""}\n\n${email.bodyText}`,
-      },
-    ],
-  });
+  let message;
+  try {
+    message = await anthropic.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 2048,
+      messages: [
+        {
+          role: "user",
+          content: `${TRIAGE_PROMPT}\n\nFrom: ${email.fromName ?? ""} <${email.fromEmail}>\nSubject: ${email.subject ?? ""}\n\n${email.bodyText}`,
+        },
+      ],
+    });
+  } catch (err) {
+    console.error("AI classification request failed:", err);
+    return {
+      classification: "unclassifiable",
+      confidence: "low",
+      reason: "AI request failed — see server logs",
+      quoteNumber: null,
+      senderEmail: email.fromEmail,
+      senderName: email.fromName ?? null,
+      extraction: null,
+    };
+  }
 
   const text = message.content.find((block) => block.type === "text")?.text ?? "{}";
   const parsed = extractJson<Record<string, unknown>>(text);

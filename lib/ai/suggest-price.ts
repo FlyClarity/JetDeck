@@ -31,11 +31,21 @@ Aircraft hourly rate: $${input.aircraftHourlyRate}/hr
 Positioning: ${input.positioningNote ?? "none noted"}
 History: ${input.historyNote ?? "no prior history with this broker/route"}`;
 
-  const message = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 64,
-    messages: [{ role: "user", content: prompt }],
-  });
+  let message;
+  try {
+    message = await anthropic.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 64,
+      messages: [{ role: "user", content: prompt }],
+    });
+  } catch (err) {
+    // A rejected promise here isn't just a missing suggestion — this page's
+    // Suspense boundary doesn't catch it, so an unhandled rejection (rate
+    // limit, out of credits, network error) fails the whole Create Quote
+    // page load instead of just leaving the price field blank.
+    console.error("AI price suggestion request failed:", err);
+    return null;
+  }
 
   const text = message.content.find((block) => block.type === "text")?.text ?? "{}";
   const parsed = extractJson<Record<string, unknown>>(text);

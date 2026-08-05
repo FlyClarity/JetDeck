@@ -82,16 +82,22 @@ export async function parseEmailToTripRequest(
     return null;
   }
 
-  const message = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 2048,
-    messages: [
-      {
-        role: "user",
-        content: `${EXTRACTION_PROMPT}\n\nSubject: ${subject ?? ""}\n\n${bodyText}`,
-      },
-    ],
-  });
+  let message;
+  try {
+    message = await anthropic.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 2048,
+      messages: [
+        {
+          role: "user",
+          content: `${EXTRACTION_PROMPT}\n\nSubject: ${subject ?? ""}\n\n${bodyText}`,
+        },
+      ],
+    });
+  } catch (err) {
+    console.error("AI extraction request failed:", err);
+    return null;
+  }
 
   const text = message.content.find((block) => block.type === "text")?.text ?? "{}";
   const parsed = extractJson<Record<string, unknown>>(text);
