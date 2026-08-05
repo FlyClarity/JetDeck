@@ -1,8 +1,21 @@
 import { Resend } from "resend";
 
-const resend = process.env.RESEND_API_KEY
-  ? new Resend(process.env.RESEND_API_KEY)
-  : null;
+// Constructed defensively, not just gated on presence — same reasoning as
+// lib/ai/anthropic-client.ts. A malformed RESEND_API_KEY throws inside the
+// SDK's own header setup at construction time, which for module-scope code
+// means at import time, taking down every route that imports this (which is
+// most of the app) during Next.js's build-time page-data collection.
+function buildClient(): Resend | null {
+  if (!process.env.RESEND_API_KEY) return null;
+  try {
+    return new Resend(process.env.RESEND_API_KEY);
+  } catch (err) {
+    console.error("Failed to construct Resend client — check RESEND_API_KEY", err);
+    return null;
+  }
+}
+
+const resend = buildClient();
 
 export async function sendEmail(params: {
   to: string;
