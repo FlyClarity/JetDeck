@@ -5,7 +5,6 @@ import { classifyAndExtractEmail, type EmailClassificationResult } from "@/lib/a
 import { parseEmailToTripRequest, type ExtractedTripData } from "@/lib/ai/parse-email";
 import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 import { resolveAirportCodesToIcao } from "@/lib/airport-server";
-import { routeSummary, SCORE_BADGES } from "@/lib/queue";
 
 export type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
   include: { operator: true };
@@ -218,24 +217,7 @@ export async function createTripRequestFromInboundEmail(
     data: { status: "trip_request_created", tripRequestId: tripRequest.id },
   });
 
-  const score = await scoreOpportunity(tripRequest.id);
-
-  // Unlike the intake form (a client actively filling out a page, who
-  // already gets their own confirmation), an inbound trip request can land
-  // at any hour with nobody watching the dashboard — without this, a 🟢
-  // HIGH opportunity sits unnoticed until someone happens to check the
-  // Quoting Queue.
-  if (inboundEmail.operator.notifyEmail) {
-    const badge = SCORE_BADGES[score.opportunityScore];
-    await sendEmail({
-      to: inboundEmail.operator.notifyEmail,
-      subject: `New trip request — ${routeSummary(normalizedLegs, tripRequest.tripType)}`,
-      html: `<p>New trip request from ${tripRequest.requestorName} (${tripRequest.requestorEmail}) via email.</p><p>${badge ? `${badge.emoji} ${badge.label} — ` : ""}${score.scoreReason}</p>`,
-      replyTo: senderEmail,
-      from: inboundEmail.operator.fromEmail,
-      fromName: inboundEmail.operator.name,
-    });
-  }
+  await scoreOpportunity(tripRequest.id);
 
   return tripRequest;
 }

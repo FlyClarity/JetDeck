@@ -91,17 +91,6 @@ async function submitTripRequest(operatorSlug: string, formData: FormData) {
     fromName: operator.name,
   });
 
-  if (operator.notifyEmail) {
-    await sendEmail({
-      to: operator.notifyEmail,
-      subject: `New trip request — ${requestorName}`,
-      html: `<p>New trip request from ${requestorName} (${requestorEmail}) for ${routeSummary}.</p>`,
-      replyTo: requestorEmail,
-      from: operator.fromEmail,
-      fromName: operator.name,
-    });
-  }
-
   redirect(`/intake/${operatorSlug}?submitted=1`);
 }
 
