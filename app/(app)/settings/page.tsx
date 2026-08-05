@@ -1,4 +1,4 @@
-import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { createHash } from "node:crypto";
 import { getCurrentOperator } from "@/lib/operator";
 import { getTenantContext } from "@/lib/auth";
@@ -44,11 +44,16 @@ async function updateSettings(formData: FormData) {
     },
   });
 
-  revalidatePath("/settings");
+  redirect("/settings?saved=1");
 }
 
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ saved?: string }>;
+}) {
   const operator = await getCurrentOperator();
+  const { saved } = await searchParams;
 
   if (!operator) {
     return null;
@@ -56,7 +61,14 @@ export default async function SettingsPage() {
 
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        {saved === "1" && (
+          <span className="rounded-full bg-accent/10 px-2.5 py-1 text-sm font-medium text-accent">
+            Saved
+          </span>
+        )}
+      </div>
 
       <div className="mt-6 flex items-center gap-3 rounded-md border border-border p-3">
         {operator.logoUrl && (

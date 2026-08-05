@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
-import { formatCurrency } from "@/lib/quote";
+import { formatCurrency, allocateProportionally } from "@/lib/quote";
 import { paxCount } from "@/lib/queue";
 import { getAppUrl } from "@/lib/url";
 import { generateTripNumber } from "@/lib/trip-server";
@@ -163,6 +163,10 @@ async function acceptQuote(token: string, formData: FormData) {
   const { route, date } = routeAndDateText(quote.itinerary);
   const requestorEmail = quote.tripRequest?.requestorEmail;
   const requestorName = quote.tripRequest?.requestorName ?? "there";
+  const revenueLegs = revenueLegsOf(quote.itinerary);
+  const routingHtml = revenueLegs
+    .map((leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}, ${legTimeLabel(leg)}`)
+    .join("<br/>");
 
   if (requestorEmail) {
     await sendEmail({
@@ -172,9 +176,9 @@ async function acceptQuote(token: string, formData: FormData) {
         <p>Hi ${requestorName},</p>
         <p>Thank you for booking with ${quote.operator.name}. Your charter agreement is confirmed.</p>
         <p><strong>Reference:</strong> ${quote.quoteNumber}<br/>
-        <strong>Accepted:</strong> ${acceptedAt.toUTCString()}<br/>
-        <strong>Route:</strong> ${route}<br/>
-        <strong>Total:</strong> ${formatCurrency(quote.total)}${
+        <strong>Accepted:</strong> ${acceptedAt.toUTCString()}</p>
+        <p><strong>Routing:</strong><br/>${routingHtml}</p>
+        <p><strong>Total:</strong> ${formatCurrency(quote.total)}${
           quote.depositAmount ? `<br/><strong>Deposit due:</strong> ${formatCurrency(quote.depositAmount)}` : ""
         }</p>
         ${quote.operator.wireInstructions ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
@@ -296,8 +300,19 @@ export default async function ClientQuotePage({
   const operator = quote.operator;
   const tripRequest = quote.tripRequest;
   const legs = revenueLegsOf(quote.itinerary);
-  const additionalFees = (quote.additionalFees as { label: string; amount: number }[]) ?? [];
   const pax = tripRequest ? paxCount(tripRequest.legs) : null;
+
+  // Client-facing pricing shows one fee per segment, not the internal cost
+  // breakdown (hourly rate, repositioning, landing/handling fees, discount)
+  // that produced it — those stay internal-only, visible on the operator's
+  // quote detail page instead. Derived from total/fetTax rather than the
+  // stored subtotal so it's always self-consistent with what's displayed
+  // below, regardless of how subtotal was computed at save time.
+  const preTaxSubtotal = quote.total - quote.fetTax;
+  const segmentFees = allocateProportionally(
+    legs.map((l) => l.flightHours ?? 0),
+    preTaxSubtotal
+  );
 
   const isExpired = quote.status === "sent" && quote.validUntil < new Date();
   const pendingDecision = quote.status === "sent" && !isExpired;
@@ -371,37 +386,18 @@ export default async function ClientQuotePage({
               Pricing
             </h2>
             <div className="mt-2 flex flex-col gap-1.5 text-sm">
-              <Row
-                label={`Flight (${quote.flightHours.toFixed(1)} hrs @ ${formatCurrency(quote.hourlyRate)}/hr)`}
-                value={formatCurrency(quote.flightHours * quote.hourlyRate)}
-                emphasis="muted"
-              />
-              {quote.repoHours > 0 && (
+              {legs.map((leg, i) => (
                 <Row
-                  label={`Repositioning (${quote.repoHours.toFixed(1)} hrs)`}
-                  value={formatCurrency(quote.repoHours * quote.repoRate)}
+                  key={i}
+                  label={`${leg.depAirport} → ${leg.arrAirport}`}
+                  value={formatCurrency(segmentFees[i] ?? 0)}
                   emphasis="muted"
                 />
-              )}
-              {quote.overnightFee > 0 && (
-                <Row label="Overnight fee" value={formatCurrency(quote.overnightFee)} emphasis="muted" />
-              )}
-              {quote.landingFees > 0 && (
-                <Row label="Landing fees" value={formatCurrency(quote.landingFees)} emphasis="muted" />
-              )}
-              {quote.handlingFees > 0 && (
-                <Row label="Handling fees" value={formatCurrency(quote.handlingFees)} emphasis="muted" />
-              )}
-              {additionalFees.map((fee, i) => (
-                <Row key={i} label={fee.label || "Fee"} value={formatCurrency(fee.amount)} emphasis="muted" />
               ))}
-              {quote.discount > 0 && (
-                <Row
-                  label="Discount"
-                  value={`-${formatCurrency(quote.discount)}`}
-                  emphasis="destructive"
-                />
-              )}
+              <div className="flex justify-between border-t border-border pt-1.5">
+                <span>Subtotal</span>
+                <span>{formatCurrency(preTaxSubtotal)}</span>
+              </div>
               {quote.fetTax > 0 && (
                 <Row label="Federal Excise Tax (7.5%)" value={formatCurrency(quote.fetTax)} emphasis="muted" />
               )}

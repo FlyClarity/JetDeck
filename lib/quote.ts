@@ -31,6 +31,18 @@ export function calculateQuoteTotals(input: QuotePricingInput) {
   return { flightCost, repoCost, feesTotal, subtotal, fetAmount, total };
 }
 
+// Splits a pre-tax total across legs proportionally by flight hours, so the
+// client sees one fee per segment instead of the internal cost breakdown
+// (hourly rate, repositioning, landing/handling fees) that produced it.
+// Falls back to an even split if hours are missing/zero everywhere.
+export function allocateProportionally(weights: number[], total: number): number[] {
+  const sumWeights = weights.reduce((s, w) => s + w, 0);
+  if (sumWeights <= 0) {
+    return weights.map(() => total / (weights.length || 1));
+  }
+  return weights.map((w) => (w / sumWeights) * total);
+}
+
 export function formatCurrency(value: number) {
   return value.toLocaleString("en-US", {
     style: "currency",
