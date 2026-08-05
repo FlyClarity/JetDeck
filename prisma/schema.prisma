@@ -18,6 +18,7 @@ model Operator {
   termsVersion     String? // hash of current terms, stored on acceptance
   notifyEmail      String? // internal notification address
   replyToEmail     String? // operator's charter inbox — Reply-To header on outbound quote emails, routes client replies back through triage
+  fromEmail        String? // "From" address on outbound email — must be on a domain verified in Resend, else falls back to EMAIL_FROM
   depositPercent   Float    @default(0.25) // 25% card hold default
   inboundEmail     String? // e.g. requests-clarity@inbound.jetdeck.app
 

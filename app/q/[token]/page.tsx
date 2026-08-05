@@ -191,6 +191,7 @@ async function acceptQuote(token: string, formData: FormData) {
         <p>— ${quote.operator.name}</p>
       `,
       replyTo: quote.operator.replyToEmail ?? undefined,
+      from: quote.operator.fromEmail,
     });
   }
 
@@ -206,6 +207,7 @@ async function acceptQuote(token: string, formData: FormData) {
           : ""
       }`,
       replyTo: requestorEmail,
+      from: quote.operator.fromEmail,
     });
   }
 
@@ -229,6 +231,7 @@ async function declineQuote(token: string) {
       subject: `Quote ${quote.quoteNumber} — declined`,
       html: `<p>${quote.tripRequest?.requestorName ?? "The client"} declined quote ${quote.quoteNumber}.</p>`,
       replyTo: quote.tripRequest?.requestorEmail,
+      from: quote.operator.fromEmail,
     });
   }
 
@@ -250,6 +253,7 @@ async function requestChanges(token: string, formData: FormData) {
       subject: `Change request — Quote ${quote.quoteNumber}`,
       html: `<p>${quote.tripRequest?.requestorName ?? "The client"} (${quote.tripRequest?.requestorEmail ?? "no email"}) requested changes to quote ${quote.quoteNumber}:</p><p style="white-space:pre-wrap">${message}</p>`,
       replyTo: quote.tripRequest?.requestorEmail,
+      from: quote.operator.fromEmail,
     });
   }
 

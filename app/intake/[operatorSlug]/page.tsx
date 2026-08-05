@@ -87,6 +87,7 @@ async function submitTripRequest(operatorSlug: string, formData: FormData) {
     to: requestorEmail,
     subject: `Request received — ${operator.name}`,
     html: `<p>Hi ${requestorName},</p><p>We received your trip request for ${routeSummary}. A member of our team will follow up shortly with a quote.</p><p>— ${operator.name}</p>`,
+    from: operator.fromEmail,
   });
 
   if (operator.notifyEmail) {
@@ -95,6 +96,7 @@ async function submitTripRequest(operatorSlug: string, formData: FormData) {
       subject: `New trip request — ${requestorName}`,
       html: `<p>New trip request from ${requestorName} (${requestorEmail}) for ${routeSummary}.</p>`,
       replyTo: requestorEmail,
+      from: operator.fromEmail,
     });
   }
 

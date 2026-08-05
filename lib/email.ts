@@ -9,6 +9,7 @@ export async function sendEmail(params: {
   subject: string;
   html: string;
   replyTo?: string;
+  from?: string | null;
 }) {
   if (!resend) {
     console.warn(
@@ -18,7 +19,7 @@ export async function sendEmail(params: {
   }
 
   await resend.emails.send({
-    from: process.env.EMAIL_FROM ?? "noreply@jetdeck.app",
+    from: params.from || process.env.EMAIL_FROM || "noreply@jetdeck.app",
     to: params.to,
     subject: params.subject,
     html: params.html,

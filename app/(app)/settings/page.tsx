@@ -20,6 +20,7 @@ async function updateSettings(formData: FormData) {
   const termsText = String(formData.get("termsText") ?? "");
   const replyToEmail = String(formData.get("replyToEmail") ?? "");
   const notifyEmail = String(formData.get("notifyEmail") ?? "").trim() || null;
+  const fromEmail = String(formData.get("fromEmail") ?? "").trim() || null;
   const depositPercentInput = Number(formData.get("depositPercent") ?? 25);
   const depositPercent = Math.min(Math.max(depositPercentInput, 0), 100) / 100;
   const termsVersion = termsText
@@ -38,6 +39,7 @@ async function updateSettings(formData: FormData) {
       termsVersion,
       replyToEmail,
       notifyEmail,
+      fromEmail,
       depositPercent,
       defaultBlockTimeBufferHours,
       defaultOvernightFee,
@@ -108,6 +110,22 @@ export default async function SettingsPage() {
             step={1}
             defaultValue={Math.round(operator.depositPercent * 100)}
           />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="fromEmail">From address</Label>
+          <Input
+            id="fromEmail"
+            name="fromEmail"
+            type="email"
+            defaultValue={operator.fromEmail ?? ""}
+            placeholder="charter@youroperator.com"
+          />
+          <p className="text-sm text-muted-foreground">
+            Sender address on outbound email. Must be on a domain verified in
+            Resend, or delivery will fail — leave blank to use the app
+            default.
+          </p>
         </div>
 
         <div className="flex flex-col gap-2">
