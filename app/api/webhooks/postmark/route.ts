@@ -66,6 +66,15 @@ export async function POST(req: NextRequest) {
     where: { inboundEmail: { equals: matchAddress, mode: "insensitive" } },
   });
 
+  // Unconditional, not just on failure — the last few rounds of debugging
+  // this in production kept hitting "200 but nothing shows up in the app"
+  // with no way to tell, from the outside, which of the early-return
+  // branches below actually fired. This line should appear for every
+  // single inbound webhook call, success or not.
+  console.log(
+    `[postmark webhook] messageId=${postmarkMessageId} toHeader=${toEmail} originalRecipient=${payload.OriginalRecipient ?? "(none)"} matchAddress=${matchAddress} operatorMatch=${operator ? operator.id : "NONE"}`
+  );
+
   if (!operator) {
     console.warn(`Inbound email to unrecognized address: ${matchAddress}`);
     // Still 200 — Postmark retries on non-2xx, and there's nothing to retry here.
@@ -82,6 +91,7 @@ export async function POST(req: NextRequest) {
       where: { postmarkMessageId },
     });
     if (existing) {
+      console.log(`[postmark webhook] duplicate delivery of ${postmarkMessageId}, skipping`);
       return new Response("OK (duplicate delivery)", { status: 200 });
     }
   }
