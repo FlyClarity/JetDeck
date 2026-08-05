@@ -1,10 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { extractJson } from "@/lib/ai/extract-json";
 import type { ExtractedLeg, ExtractedTripData } from "@/lib/ai/parse-email";
-
-const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  : null;
+import { anthropic } from "@/lib/ai/anthropic-client";
 
 export const EMAIL_CLASSIFICATIONS = [
   "new_trip_request",

@@ -1,9 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { extractJson } from "@/lib/ai/extract-json";
-
-const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  : null;
+import { anthropic } from "@/lib/ai/anthropic-client";
 
 export type ExtractedLeg = {
   depAirport: string;
