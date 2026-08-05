@@ -27,6 +27,16 @@ type PostmarkInboundPayload = {
   ReplyTo?: string;
   ToFull?: { Email?: string }[];
   To?: string;
+  // The actual SMTP RCPT TO address the message was delivered to — distinct
+  // from the To header above whenever mail arrives via a forward (e.g. an
+  // operator's real inbox auto-forwarding to their inbound.<domain>
+  // address). Gmail's transparent forwarding preserves the original To
+  // header rather than rewriting it, so a client's email to
+  // quotes@flyclarity.com still shows "To: quotes@flyclarity.com" even
+  // though it was actually routed to quotes@inbound.flyclarity.com — only
+  // OriginalRecipient reflects where it truly landed, which is what
+  // Operator.inboundEmail is meant to match against.
+  OriginalRecipient?: string;
   Subject?: string;
   TextBody?: string;
   HtmlBody?: string;
@@ -41,6 +51,7 @@ export async function POST(req: NextRequest) {
   const payload = (await req.json()) as PostmarkInboundPayload;
 
   const toEmail = payload.ToFull?.[0]?.Email ?? payload.To ?? "";
+  const matchAddress = payload.OriginalRecipient || toEmail;
   const fromEmail = payload.FromFull?.Email ?? payload.From ?? "";
   const fromName = payload.FromFull?.Name || null;
   const postmarkMessageId = payload.MessageID || null;
@@ -52,11 +63,11 @@ export async function POST(req: NextRequest) {
     replyToRaw && replyToRaw.toLowerCase() !== fromEmail.toLowerCase() ? replyToRaw : null;
 
   const operator = await prisma.operator.findFirst({
-    where: { inboundEmail: { equals: toEmail, mode: "insensitive" } },
+    where: { inboundEmail: { equals: matchAddress, mode: "insensitive" } },
   });
 
   if (!operator) {
-    console.warn(`Inbound email to unrecognized address: ${toEmail}`);
+    console.warn(`Inbound email to unrecognized address: ${matchAddress}`);
     // Still 200 — Postmark retries on non-2xx, and there's nothing to retry here.
     return new Response("No matching operator", { status: 200 });
   }
