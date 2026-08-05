@@ -162,11 +162,40 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   worth hardening later by storing a terms snapshot on the Quote at
   send time, matching how `Operator.termsVersion` already snapshots a
   hash on Settings save.
-- **Stripe card hold link in the acceptance email** (Step 17, not
-  started): the confirmation email sent on accept currently tells the
-  client wire instructions and says a card-hold link is coming
-  separately, since there's no Stripe integration yet to generate one.
-  Once Step 17 lands, that email should include the real Payment Link.
+- **Stripe card hold (Step 17) + Trip creation (Step 18) — shipped**:
+  `acceptQuote` (`app/q/[token]/page.tsx`) now does both on acceptance,
+  in order: creates a `Trip` record (`lib/trip-server.ts`'s
+  `generateTripNumber`, status `awaiting_payment`), updates
+  `Aircraft.currentBase` to the last leg's arrival airport (own-fleet
+  quotes only — reads the *full* itinerary including the trailing
+  repositioning-home leg, not just revenue legs, since that's where the
+  tail actually ends up), then creates a Stripe Checkout Session
+  (`lib/stripe.ts`) for the deposit amount with
+  `payment_intent_data.capture_method: "manual"` — a hold, not a charge.
+  The resulting `stripePaymentIntentId` and `cardHoldStatus: "pending"`
+  are stored on the Quote, and the real checkout link is included in the
+  client's confirmation email (falls back to the old "our team will
+  follow up" copy if `STRIPE_SECRET_KEY` isn't configured, same
+  graceful-degradation pattern as `lib/email.ts` when `RESEND_API_KEY`
+  is missing). A new webhook (`/api/webhooks/stripe`) verifies the
+  signature and updates `cardHoldStatus` as the hold progresses
+  (`amount_capturable_updated` → authorized, `canceled` → released,
+  `succeeded` → captured — that last one is for Phase 2's eventual
+  capture flow, unused for now since Phase 1 never captures). Status is
+  shown on both the operator's quote detail page and the client's
+  accepted-quote page.
+  Not tested live — no `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` in
+  this sandbox (same limitation as Postmark/live-DB testing elsewhere in
+  this project). Before trusting this unsupervised: create a Stripe
+  test-mode key, accept a quote with a deposit amount set, confirm the
+  Checkout Session opens and authorizes a test card
+  (`4000 0025 0000 3155` is Stripe's manual-capture-friendly test card),
+  and confirm the webhook flips `cardHoldStatus` to `authorized`.
+  Also not done: the checkout link is only ever sent once, at accept
+  time — if the client doesn't complete it before the Checkout Session
+  expires (24h default), there's no way from JetDeck to regenerate and
+  resend it. Worth a "Resend card hold link" action on the operator's
+  quote detail page once this comes up in practice.
 
 - **Buy a domain + finish Postmark setup** (raised after Step 13):
   inbound email (Step 7) is built but not actually live — `jetdeck.app`

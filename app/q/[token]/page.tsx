@@ -5,6 +5,9 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { formatCurrency } from "@/lib/quote";
 import { paxCount } from "@/lib/queue";
+import { getAppUrl } from "@/lib/url";
+import { generateTripNumber } from "@/lib/trip-server";
+import { createCardHoldCheckoutSession } from "@/lib/stripe";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
@@ -115,6 +118,48 @@ async function acceptQuote(token: string, formData: FormData) {
     },
   });
 
+  const tripNumber = await generateTripNumber(quote.operatorId);
+  await prisma.trip.create({
+    data: {
+      operatorId: quote.operatorId,
+      tripNumber,
+      quoteId: quote.id,
+      status: "awaiting_payment",
+    },
+  });
+
+  // Positioning tracking: the aircraft ends this trip wherever its last
+  // itinerary leg lands, whether that's the trip's actual destination or
+  // (when "returns to home base" is on) the trailing repositioning leg back
+  // home. Only own-fleet aircraft have a currentBase to update.
+  const allLegs = (quote.itinerary as { arrAirport?: string | null }[]) ?? [];
+  const lastArrAirport = allLegs[allLegs.length - 1]?.arrAirport;
+  if (quote.aircraftId && lastArrAirport) {
+    await prisma.aircraft.update({
+      where: { id: quote.aircraftId },
+      data: { currentBase: lastArrAirport },
+    });
+  }
+
+  const appUrl = await getAppUrl();
+  let cardHoldUrl: string | null = null;
+  if (quote.depositAmount && quote.depositAmount > 0) {
+    const session = await createCardHoldCheckoutSession({
+      quoteId: quote.id,
+      quoteNumber: quote.quoteNumber,
+      depositAmount: quote.depositAmount,
+      appUrl,
+      token,
+    });
+    if (session) {
+      cardHoldUrl = session.url;
+      await prisma.quote.update({
+        where: { id: quote.id },
+        data: { stripePaymentIntentId: session.paymentIntentId, cardHoldStatus: "pending" },
+      });
+    }
+  }
+
   const { route, date } = routeAndDateText(quote.itinerary);
   const requestorEmail = quote.tripRequest?.requestorEmail;
   const requestorName = quote.tripRequest?.requestorName ?? "there";
@@ -133,7 +178,11 @@ async function acceptQuote(token: string, formData: FormData) {
           quote.depositAmount ? `<br/><strong>Deposit due:</strong> ${formatCurrency(quote.depositAmount)}` : ""
         }</p>
         ${quote.operator.wireInstructions ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
-        <p>Our team will follow up shortly with a secure card authorization link for your deposit hold.</p>
+        ${
+          cardHoldUrl
+            ? `<p><strong>Card hold:</strong> please authorize your deposit hold now — no charge is made, this only places a hold: <a href="${cardHoldUrl}">${cardHoldUrl}</a></p>`
+            : `<p>Our team will follow up shortly with a secure card authorization link for your deposit hold.</p>`
+        }
         ${
           quote.operator.termsText
             ? `<p><strong>Charter terms you agreed to:</strong></p><p style="white-space:pre-wrap">${quote.operator.termsText}</p>`
@@ -387,6 +436,14 @@ export default async function ClientQuotePage({
                 Accepted {quote.acceptedAt?.toLocaleString()}. A confirmation email with your
                 charter agreement and wire instructions is on its way.
               </p>
+              {quote.cardHoldStatus === "pending" && (
+                <p className="mt-1 text-muted-foreground">
+                  Check your email for a secure link to authorize your deposit card hold.
+                </p>
+              )}
+              {quote.cardHoldStatus === "authorized" && (
+                <p className="mt-1 text-muted-foreground">Your deposit card hold is authorized.</p>
+              )}
             </div>
           ) : quote.status === "declined" ? (
             <div className="mt-6 rounded-md border border-border p-4 text-sm text-muted-foreground">

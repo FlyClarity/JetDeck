@@ -290,6 +290,11 @@ export default async function QuotePage({
             {quote.acceptedIp && (
               <p className="mt-1 text-xs text-muted-foreground">IP: {quote.acceptedIp}</p>
             )}
+            {quote.cardHoldStatus && (
+              <p className="mt-1 text-xs text-muted-foreground capitalize">
+                Card hold: {quote.cardHoldStatus}
+              </p>
+            )}
           </div>
 
           {quote.conflictWarning && (
