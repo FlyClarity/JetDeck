@@ -27,11 +27,12 @@ const VIEWS = [
   { key: "accepted", label: "Accepted" },
 ] as const;
 
+// "new" and "scoring" aren't included as filters — scoring runs
+// synchronously right after a trip request is created, so a request is
+// essentially never observed sitting in either state; filtering by them
+// only ever turns up empty. "Ready" is covered by its own top-level tab.
 const STATUS_FILTERS = [
   { key: "active", label: "Active" },
-  { key: "new", label: "New" },
-  { key: "scoring", label: "Scoring" },
-  { key: "ready", label: "Ready" },
   { key: "passed", label: "Passed" },
 ] as const;
 
@@ -118,10 +119,13 @@ export function QuoteQueue({
   const currentList = useMemo(() => {
     if (isQuoteView) return [];
     if (activeView === "ready") return tripRequests.filter((t) => t.status === "ready");
-    // "Active" hides passed/declined by default — the brief's own tab groups
-    // Passed with Declined/Expired, and in practice most requests end up here,
-    // so surfacing it by default would bury everything actionable under it.
-    if (statusFilter === "active") return tripRequests.filter((t) => t.status !== "passed");
+    // "Active" hides passed requests, and also hides quoted ones — once a
+    // trip request has a quote, it's tracked via the Draft/Sent/Accepted
+    // tabs instead, so leaving it in "All Requests" too just double-lists
+    // the same lead in two places.
+    if (statusFilter === "active") {
+      return tripRequests.filter((t) => t.status !== "passed" && t.status !== "quoted");
+    }
     return tripRequests.filter((t) => t.status === statusFilter);
   }, [isQuoteView, activeView, statusFilter, tripRequests]);
 

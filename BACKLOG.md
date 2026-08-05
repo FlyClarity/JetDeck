@@ -352,11 +352,15 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   need a UI to manage profiles per tail.
 
 - **Escape key in the Quote Builder → back to dashboard, saving work**
-  (raised after Step 14): today Escape only does something on the
-  dashboard itself (closes the detail pane). Inside `/quotes/new` or
-  `/quotes/[id]`, there's no keyboard way back, and — this is the
-  real ask — no autosave, so navigating away any other way loses
-  unsaved edits. Two things to design before building: (1) autosave
+  (raised after Step 14): Escape now navigates back on every page
+  *except* the quote builder (`components/escape-to-back.tsx`,
+  rendered in `app/(app)/layout.tsx` — explicitly excludes
+  `/dashboard`, which handles Escape itself, and `/quotes`, for the
+  reason below). Inside `/quotes/new` or `/quotes/[id]` there's still
+  no keyboard way back, because — this is the real ask — there's no
+  autosave, so navigating away on an accidental Escape (e.g. while
+  just trying to close a dropdown) would silently discard unsaved
+  pricing changes. Two things to design before building: (1) autosave
   itself — the existing `createQuote`/`updateQuote` server actions
   already persist the full form state, but they also each call
   `redirect()` to the quote detail page internally, so invoking them

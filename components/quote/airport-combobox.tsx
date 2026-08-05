@@ -23,8 +23,14 @@ export function AirportCombobox({
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Only resync the displayed text from an externally-changed value while
+  // the field isn't open/being edited. Without the `!open` guard, typing a
+  // replacement value eats its own first keystroke: onChange clears the
+  // parent's value in the same batch as updating query, and this sync (if
+  // unguarded) would see that value change on the next render and stomp
+  // the just-typed character back to empty before the user sees it.
   const [syncedIcao, setSyncedIcao] = useState(value?.icao ?? null);
-  if ((value?.icao ?? null) !== syncedIcao) {
+  if (!open && (value?.icao ?? null) !== syncedIcao) {
     setSyncedIcao(value?.icao ?? null);
     setQuery(value?.icao ?? "");
   }

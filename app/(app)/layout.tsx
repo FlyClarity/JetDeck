@@ -2,6 +2,7 @@ import Link from "next/link";
 import { CreateOrganization, OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { EscapeToBack } from "@/components/escape-to-back";
 
 export default async function AppLayout({
   children,
@@ -61,6 +62,7 @@ export default async function AppLayout({
 
   return (
     <div className="flex flex-1 flex-col">
+      <EscapeToBack />
       <header className="flex items-center justify-between border-b border-border px-6 py-3">
         <span className="text-sm font-semibold tracking-wide text-primary">
           JETDECK
