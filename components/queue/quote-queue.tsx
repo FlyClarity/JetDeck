@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { TripRequest, Prisma } from "@/lib/generated/prisma/client";
@@ -14,8 +14,37 @@ import {
 } from "@/lib/queue";
 import { formatCurrency } from "@/lib/quote";
 import { categoryLabel } from "@/lib/aircraft";
+import { revenueLegsOf } from "@/lib/itinerary";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+type RawLeg = { depAirport?: string | null; arrAirport?: string | null; date?: string | null };
+
+function formatLegDate(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// Full leg-by-leg routing for the detail pane — the list rows still use
+// routeSummary()'s collapsed "first → last +N more" for scannability, but
+// the pane has room to show every segment.
+function FullRouting({ legs }: { legs: RawLeg[] }) {
+  if (legs.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-col gap-1">
+      {legs.map((leg, i) => (
+        <div key={i} className="flex items-center justify-between text-sm">
+          <span>
+            {leg.depAirport ?? "?"} → {leg.arrAirport ?? "?"}
+          </span>
+          <span className="text-muted-foreground">{formatLegDate(leg.date)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 type QuoteWithTripRequest = Prisma.QuoteGetPayload<{ include: { tripRequest: true } }>;
 
@@ -89,6 +118,17 @@ export function QuoteQueue({
     openTrip?.status === "passed" ? "passed" : "active"
   );
   const [selectedId, setSelectedId] = useState<string | null>(() => openTrip?.id ?? null);
+  const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  // Keyboard nav (j/k) only ever moved the selection state — the list
+  // itself never scrolled to follow it, so moving past the visible rows
+  // left the highlighted row (and the native focus outline, previously
+  // stuck wherever a mouse last clicked) out of view or visually
+  // disconnected from the actual selection.
+  useEffect(() => {
+    if (!selectedId) return;
+    rowRefs.current.get(selectedId)?.scrollIntoView({ block: "nearest" });
+  }, [selectedId]);
 
   // Poll for fresh data instead of requiring a manual reload — new inbound
   // trip requests should show up without the operator remembering to hit
@@ -278,10 +318,14 @@ export function QuoteQueue({
                 return (
                   <button
                     key={q.id}
+                    ref={(el) => {
+                      if (el) rowRefs.current.set(q.id, el);
+                      else rowRefs.current.delete(q.id);
+                    }}
                     tabIndex={-1}
                     onClick={() => setSelectedId(q.id)}
                     className={cn(
-                      "flex w-full flex-col items-start gap-1 border-b border-border px-4 py-3 text-left transition-colors",
+                      "flex w-full flex-col items-start gap-1 border-b border-border px-4 py-3 text-left transition-colors focus:outline-none",
                       selectedId === q.id ? "bg-muted" : "hover:bg-muted/50"
                     )}
                   >
@@ -321,10 +365,14 @@ export function QuoteQueue({
               return (
                 <button
                   key={tr.id}
+                  ref={(el) => {
+                    if (el) rowRefs.current.set(tr.id, el);
+                    else rowRefs.current.delete(tr.id);
+                  }}
                   tabIndex={-1}
                   onClick={() => setSelectedId(tr.id)}
                   className={cn(
-                    "flex w-full flex-col items-start gap-1 border-b border-border px-4 py-3 text-left transition-colors",
+                    "flex w-full flex-col items-start gap-1 border-b border-border px-4 py-3 text-left transition-colors focus:outline-none",
                     selectedId === tr.id ? "bg-muted" : "hover:bg-muted/50"
                   )}
                 >
@@ -393,6 +441,7 @@ export function QuoteQueue({
             <p className="font-medium">
               {routeSummary(selectedTripRequest.legs, selectedTripRequest.tripType)}
             </p>
+            <FullRouting legs={(selectedTripRequest.legs as RawLeg[]) ?? []} />
             {selectedTripRequest.specialRequests && (
               <p className="mt-2 text-muted-foreground">{selectedTripRequest.specialRequests}</p>
             )}
@@ -466,7 +515,8 @@ export function QuoteQueue({
                 ? routeSummary(selectedQuote.tripRequest.legs, selectedQuote.tripRequest.tripType)
                 : "Route unknown"}
             </p>
-            <p className="mt-1 text-muted-foreground">{formatCurrency(selectedQuote.total)}</p>
+            <FullRouting legs={revenueLegsOf(selectedQuote.itinerary)} />
+            <p className="mt-2 text-muted-foreground">{formatCurrency(selectedQuote.total)}</p>
           </div>
 
           <div className="flex flex-wrap gap-2">

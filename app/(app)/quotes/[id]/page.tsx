@@ -7,9 +7,11 @@ import { routeSummary, relativeTime } from "@/lib/queue";
 import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES } from "@/lib/quote";
 import { finalizeBooking } from "@/lib/booking-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
+import { revenueLegsOf, legDate } from "@/lib/itinerary";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { OriginalRequestPanel } from "@/components/quote/original-request-panel";
+import { SendQuoteGate } from "@/components/quote/send-quote-gate";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -312,13 +314,24 @@ export default async function QuotePage({
       </div>
 
       {quote.status === "draft" ? (
-        <div className="mt-4 flex items-center gap-3">
+        <div className="mt-4 flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">
             Saved as a draft — edit anything below, then send when ready.
           </p>
-          <form action={sendQuoteWithId}>
-            <Button type="submit">Send Quote</Button>
-          </form>
+          <SendQuoteGate
+            action={sendQuoteWithId}
+            requestorName={quote.tripRequest?.requestorName ?? "the client"}
+            requestorEmail={quote.tripRequest?.requestorEmail ?? ""}
+            routeLines={revenueLegsOf(quote.itinerary).map(
+              (leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}`
+            )}
+            total={formatCurrency(quote.total)}
+            validUntil={quote.validUntil.toLocaleDateString("en-US", {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            })}
+          />
         </div>
       ) : (
         <div className="mt-4 flex items-center gap-3 text-sm text-muted-foreground">

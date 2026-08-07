@@ -19,7 +19,13 @@ export type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
 // relying on the model to reliably tell the two apart — they use nearly
 // identical shorthand (route, date, aircraft type). Add more prefixes here
 // as other non-request patterns show up in real feed traffic.
-const NON_REQUEST_SUBJECT_PREFIXES = [/^\s*HAVE\s*:/i];
+//
+// Tolerates an optional forwarding prefix (Fwd:, FW:, Re:, any repeated
+// combination — real feed traffic gets re-forwarded and these stack up)
+// before HAVE:, since the anchored match would otherwise silently miss
+// "Fwd: HAVE: ..." and let it through to the (more expensive, less
+// reliable) AI classification path instead.
+const NON_REQUEST_SUBJECT_PREFIXES = [/^(\s*(fwd?|re)\s*:\s*)*\s*HAVE\s*:/i];
 
 function isAvailabilityListing(subject: string | null): boolean {
   return Boolean(subject && NON_REQUEST_SUBJECT_PREFIXES.some((re) => re.test(subject)));
