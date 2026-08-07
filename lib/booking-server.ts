@@ -4,14 +4,25 @@ import { formatCurrency } from "@/lib/quote";
 import { getAppUrl } from "@/lib/url";
 import { generateTripNumber } from "@/lib/trip-server";
 import { createCardHoldCheckoutSession } from "@/lib/stripe";
-import { revenueLegsOf, legDate, legTimeLabel, routeAndDateText, findConflictingBooking } from "@/lib/itinerary";
+import {
+  revenueLegsOf,
+  legDate,
+  legTimeLabel,
+  routeAndDateText,
+  findConflictingBooking,
+  formatIsoDate,
+} from "@/lib/itinerary";
 
-// Same-aircraft, same-date conflicts against anything already committed to
-// that slot — "accepted" bookings, and other "pending_confirmation" requests
-// still waiting on a decision, so two near-simultaneous requests for the
-// same aircraft/dates both correctly see each other rather than only ever
-// checking against fully-resolved bookings. The actual date-overlap matching
-// is shared with the live in-builder check (see findConflictingBooking).
+// Same-aircraft, overlapping-away-window conflicts against anything already
+// committed to that slot — "accepted" bookings, and other
+// "pending_confirmation" requests still waiting on a decision, so two
+// near-simultaneous requests for the same aircraft/dates both correctly see
+// each other rather than only ever checking against fully-resolved
+// bookings. The actual overlap matching is shared with the live in-builder
+// check (see findConflictingBooking) — it compares each booking's full away
+// window (first leg to last leg), not just exact leg dates, so a multi-day
+// trip's middle days still register as a conflict even with no shared leg
+// date.
 export async function findBookingConflict(quote: {
   // Omitted for a not-yet-created quote (e.g. checking availability before
   // creating an internal trip directly) — nothing to exclude in that case.
@@ -31,7 +42,11 @@ export async function findBookingConflict(quote: {
 
   const conflict = findConflictingBooking(quote.aircraftId, quote.itinerary, others, quote.id);
   if (!conflict) return null;
-  return `Also booked on this aircraft for ${conflict.date} via quote ${conflict.booking.quoteNumber}.`;
+  const label =
+    conflict.startDate === conflict.endDate
+      ? formatIsoDate(conflict.startDate)
+      : `${formatIsoDate(conflict.startDate)} – ${formatIsoDate(conflict.endDate)}`;
+  return `Also booked on this aircraft ${label} via quote ${conflict.booking.quoteNumber}.`;
 }
 
 // Runs the full "this booking is definitely happening" pipeline: Trip

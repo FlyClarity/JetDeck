@@ -6,7 +6,12 @@ import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
 import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
 import { addHoursAcrossTimezones } from "@/lib/time";
-import { findConflictingBooking, routeAndDateText, type ConflictCandidate } from "@/lib/itinerary";
+import {
+  findConflictingBooking,
+  routeAndDateText,
+  formatIsoDate,
+  type ConflictCandidate,
+} from "@/lib/itinerary";
 import type { AirportOption } from "@/lib/airport-server";
 import { AirportCombobox } from "@/components/quote/airport-combobox";
 import {
@@ -676,7 +681,11 @@ export function QuoteBuilderForm({
           <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
             <p className="font-medium text-destructive">⚠️ Possible double-booking</p>
             <p className="mt-1">
-              This aircraft is already booked for {conflict.date} via{" "}
+              This aircraft is already away{" "}
+              {conflict.startDate === conflict.endDate
+                ? formatIsoDate(conflict.startDate)
+                : `${formatIsoDate(conflict.startDate)} – ${formatIsoDate(conflict.endDate)}`}{" "}
+              via{" "}
               <a
                 href={`/quotes/${conflict.booking.id}`}
                 target="_blank"

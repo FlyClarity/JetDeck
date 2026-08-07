@@ -133,6 +133,26 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   about flagging a conflict that falls *inside* a gap between two of the
   *same* quote's own legs, not against the quote as a whole).
 
+  **Follow-up fix, same day — exact-date matching missed multi-day
+  trips**: caught live in testing — an owner flight KSNA→PAKN Sep 11,
+  PAKN→KSNA Sep 18 (only two explicit leg dates) didn't flag a new quote
+  built for Sep 15–20, because the original matching compared exact leg
+  dates as a set intersection (`{Sep 11, Sep 18}` vs `{Sep 15, Sep 20}` —
+  no shared date) instead of asking whether the aircraft's away *window*
+  overlapped. This was a pre-existing bug in `findBookingConflict` too,
+  not something the live-check pass introduced — it always compared
+  exact dates, so the same scenario would have slipped through the
+  accept-time gate as well. Fixed by changing `findConflictingBooking`
+  (`lib/itinerary.ts`) to compute each booking's away window as
+  `[earliest revenue-leg date, latest revenue-leg date]` and check for
+  range overlap (`thisStart <= otherEnd && otherStart <= thisEnd`)
+  instead of exact-date intersection. `BookingConflict` now carries
+  `startDate`/`endDate` instead of a single `date`; both the
+  `findBookingConflict` message and the Quote Builder banner render a
+  range (e.g. "Sep 11 – Sep 18") when the two differ, a single date when
+  they don't. New `formatIsoDate()` helper extracted from `legDate()` for
+  formatting raw ISO strings outside the `StoredLeg` shape.
+
 - **Outbound email gaps — internal notify missing on inbound trip
   requests, inconsistent Reply-To — fixed**: two issues found doing an
   audit of every `sendEmail` call site. (1) The intake form path sent
