@@ -250,6 +250,18 @@ export default async function QuotePage({
     orderBy: { receivedAt: "asc" },
   });
 
+  // TripRequest doesn't store the email subject — it lives on the
+  // InboundEmail row that created it. Routing is often stated there (e.g.
+  // "TEB-PBI 9/15"), so it's worth surfacing next to the body for a quick
+  // sanity check against what the AI extracted.
+  const originalEmail = quote.tripRequest
+    ? await prisma.inboundEmail.findFirst({
+        where: { tripRequestId: quote.tripRequest.id },
+        orderBy: { receivedAt: "asc" },
+        select: { subject: true },
+      })
+    : null;
+
   // Fed into the Quote Builder for a live "is this aircraft already booked
   // over these dates?" check as the operator adjusts aircraft/legs — see
   // findConflictingBooking in lib/itinerary.ts.
@@ -264,7 +276,7 @@ export default async function QuotePage({
 
   const routeSummaryText = quote.tripRequest
     ? routeSummary(quote.tripRequest.legs, quote.tripRequest.tripType)
-    : "Route unknown";
+    : routeSummary(revenueLegsOf(quote.itinerary), "multi_leg");
   const requestorLine = quote.tripRequest
     ? [
         quote.tripRequest.requestorName,
@@ -473,6 +485,7 @@ export default async function QuotePage({
           <OriginalRequestPanel
             source={quote.tripRequest.source}
             rawEmailFrom={quote.tripRequest.rawEmailFrom}
+            rawEmailSubject={originalEmail?.subject}
             rawEmailBody={quote.tripRequest.rawEmailBody}
             specialRequests={quote.tripRequest.specialRequests}
           />

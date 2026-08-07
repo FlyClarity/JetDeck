@@ -348,7 +348,7 @@ export function QuoteQueue({
                     <p className="text-sm text-muted-foreground">
                       {q.tripRequest
                         ? routeSummary(q.tripRequest.legs, q.tripRequest.tripType)
-                        : "Route unknown"}
+                        : routeSummary(revenueLegsOf(q.itinerary), "multi_leg")}
                       {" · "}
                       {formatCurrency(q.total)}
                     </p>
@@ -524,7 +524,7 @@ export function QuoteQueue({
             <p className="font-medium">
               {selectedQuote.tripRequest
                 ? routeSummary(selectedQuote.tripRequest.legs, selectedQuote.tripRequest.tripType)
-                : "Route unknown"}
+                : routeSummary(revenueLegsOf(selectedQuote.itinerary), "multi_leg")}
             </p>
             <FullRouting legs={revenueLegsOf(selectedQuote.itinerary)} />
             <p className="mt-2 text-muted-foreground">{formatCurrency(selectedQuote.total)}</p>

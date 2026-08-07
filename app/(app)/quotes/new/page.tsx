@@ -244,6 +244,16 @@ export default async function NewQuotePage({
   });
   if (!tripRequest) notFound();
 
+  // TripRequest itself doesn't store the email subject — it lives on the
+  // InboundEmail row that created it. Routing is often stated there (e.g.
+  // "TEB-PBI 9/15"), so it's worth surfacing next to the body for a quick
+  // sanity check against what the AI extracted.
+  const originalEmail = await prisma.inboundEmail.findFirst({
+    where: { tripRequestId: tripRequest.id },
+    orderBy: { receivedAt: "asc" },
+    select: { subject: true },
+  });
+
   const aircraftList = await prisma.aircraft.findMany({
     where: { operatorId: operator.id, status: "active" },
     orderBy: { tailNumber: "asc" },
@@ -344,6 +354,7 @@ export default async function NewQuotePage({
         <OriginalRequestPanel
           source={tripRequest.source}
           rawEmailFrom={tripRequest.rawEmailFrom}
+          rawEmailSubject={originalEmail?.subject}
           rawEmailBody={tripRequest.rawEmailBody}
           specialRequests={tripRequest.specialRequests}
         />

@@ -2,6 +2,28 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **"Route unknown" on internal/owner trips — fixed**: the quote detail
+  page header, the dashboard queue list row, and the queue side pane all
+  computed the route summary from `quote.tripRequest.legs`, which is
+  `null` for internal trips (Log Internal Flight has no `TripRequest` at
+  all — see the earlier internal-trip-creation item). Even though the
+  itinerary legs were entered and saved correctly, the summary line
+  always fell back to a hardcoded "Route unknown" string instead of
+  reading `quote.itinerary`. Fixed all three spots to fall back to
+  `routeSummary(revenueLegsOf(quote.itinerary), "multi_leg")` when
+  there's no `tripRequest`.
+
+- **Original-request panel was missing the email subject — fixed**:
+  routing is frequently stated in the subject line (e.g. "TEB-PBI
+  9/15") rather than the body, and the operator needs to eyeball it
+  against what the AI extracted — but `TripRequest` never stored the
+  subject, and `OriginalRequestPanel` only rendered `rawEmailBody`.
+  Fixed by looking up the originating `InboundEmail` row (via its
+  `tripRequestId` link, which is already set when
+  `createTripRequestFromInboundEmail` runs) and passing its `subject`
+  into a new `rawEmailSubject` prop, rendered as its own line above the
+  body in both `/quotes/new` and `/quotes/[id]`.
+
 - **Airport city/state under ICAO on the client quote page — blocked on
   data** (raised directly, "ITEM 1"): the `Airport` table only has
   icao/iata/name/lat/lon — city (`municipality`) and state (`iso_region`
