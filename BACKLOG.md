@@ -43,37 +43,64 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   pass needed — harmless since everything's zeroed, just a bit of
   unnecessary UI for what's actually a non-revenue record.
 
-- **Overnight/repositioning logic overhaul — scoped, not started**
-  (raised directly, explicitly called "imperative" — the operator wants
-  the system checking real aircraft availability as a backstop once the
-  fleet has more aircraft with overlapping schedules, not just relying
-  on careful manual entry). Four scenarios to design against, all using
-  KSNA as the example home base:
-  1. Round trip to/from home base (KSNA→KTEB→KSNA): 0 repositioning
-     cost, both nights auto-added as overnights.
-  2. Round trip not from home base (KVNY→KTEB→KVNY): repositioning cost
-     on both ends (SNA↔VNY), plus both nights as overnights.
-  3. Round trip where the aircraft does NOT stay overnight because it's
-     needed elsewhere (e.g. a same-tail one-way booked in between):
-     drop pax and reposition home between legs instead of sitting overnight,
-     then reposition back out for the return leg — effectively turning
-     one "round trip" into two separate positioning cycles around the
-     other commitment.
-  4. The existing "reposition back to home base" checkbox is too blunt —
-     it just appends one trailing leg back home. Needs to become: default
-     behavior is the aircraft stays overnight on round trips (scenario
-     1/2); checking the box should instead bring the aircraft home after
-     *every* leg and reposition back out for the next one (scenario 3's
-     behavior), not just add one final leg.
-  Scenario 3 is the hard part — it requires cross-referencing *other*
-  already-booked quotes/trips for the same aircraft (now feasible via
-  `findBookingConflict`'s query pattern, which already does same-
-  aircraft lookups against `accepted`/`pending_confirmation` quotes) to
-  decide whether the aircraft can plausibly sit overnight or needs to
-  reposition home in between. Explicitly deferred until items above (the
-  airport data and internal-trip logging) are done — pick this up as its
-  own focused design pass, not bolted onto something else, given how
-  directly it affects what gets charged.
+- **Overnight/repositioning logic overhaul — core fix shipped, advisory
+  detection deferred** (raised directly, explicitly called "imperative").
+  The bug: "returns to home base" and "sits overnight between legs" were
+  treated as one mutually-exclusive toggle (checked = 0 nights + trailing
+  leg home; unchecked = manual nights, no trailing leg) when they're
+  actually independent — a trip can return to home base *and* still need
+  overnight nights at the away city in between. Fixed in
+  `components/quote/quote-builder-form.tsx`:
+  - Overnight nights (`autoNightsAway`) are now always auto-computed from
+    the date gap between consecutive revenue legs, not gated by the
+    toggle — covers scenario 1 (KSNA→KTEB→KSNA, 2 nights auto-added, 0
+    repositioning) and scenario 2 (KVNY→KTEB→KVNY, repositioning on both
+    ends *and* 2 nights) correctly now.
+  - The trailing repositioning-home leg is unconditional in
+    `buildInitialLegs`, same as the leading leg already was — no longer
+    tied to the checkbox at all.
+  - The checkbox itself was repurposed (scenario 4): now labeled
+    "Aircraft returns to base between each leg (no overnight stays)",
+    defaults unchecked (new default = stays overnight), and when checked,
+    `toggleReturnsToHomeBase` brackets every gap between consecutive
+    revenue legs with a repositioning-home + repositioning-back-out pair
+    instead of letting the aircraft sit — traced by hand against all four
+    of the user's scenarios and confirmed correct, including the 2-leg
+    and home-base-round-trip cases.
+  - New `LegRow.homeSide` ("dep" | "arr") replaces the old index-0-is-
+    outbound assumption for the aircraft-change resync effect, since
+    there can now be several repositioning legs (leading, trailing, and
+    any number of "between legs" pairs) instead of just one.
+  - New `LegRow.betweenLegs` flag marks which repositioning legs the
+    toggle inserted, so unchecking it removes exactly those and nothing
+    else (not the permanent leading/trailing ones, not anything added by
+    hand).
+  Known gap: reopening an already-saved quote only recognizes the
+  leading/trailing repositioning legs as auto-managed on reload (same
+  heuristic as before) — any "between legs" repositioning legs a quote
+  was built with don't get re-tagged `betweenLegs: true` on reload, so
+  toggling the checkbox off on a reopened quote won't auto-remove them
+  (they'd need removing by hand). Low-impact in practice since most
+  quotes are built once and sent, not heavily re-toggled after reload.
+  Also unchanged: editing a revenue leg's airports/dates after the
+  toggle is on doesn't reactively move the adjacent auto repositioning
+  legs to match — pre-existing limitation of the leading/trailing legs
+  too, not something this pass made worse.
+
+  **Scenario 3 (auto-detecting another booking during what would be an
+  overnight gap) was explicitly scoped out** — confirmed with the user
+  this doesn't need AI, just a date-range query against other
+  `accepted`/`pending_confirmation` quotes on the same aircraft (same
+  shape as `findBookingConflict`, which already does same-aircraft
+  lookups). Agreed to build as an **advisory nudge** ("N810D has another
+  trip during this gap, consider repositioning home instead") rather
+  than auto-toggling the checkbox — the literal "another booking exists"
+  case is reliably detectable, but the other reasons listed (crew
+  availability, etc.) aren't, since there's no crew data in JetDeck at
+  all yet, and a sometimes-right automatic toggle would just teach the
+  operator not to trust it. Not built yet — natural next step once the
+  above is confirmed working, reusing the same same-aircraft-date-range
+  query shape.
 
 - **Outbound email gaps — internal notify missing on inbound trip
   requests, inconsistent Reply-To — fixed**: two issues found doing an

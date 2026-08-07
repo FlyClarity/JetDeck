@@ -82,6 +82,17 @@ type LegRow = {
   id: string;
   billAs: "revenue" | "repositioning";
   auto: boolean;
+  // Which side of an auto repositioning leg is home base — lets the
+  // aircraft-change resync effect update the right endpoint no matter how
+  // many repositioning legs exist or where they sit (leading, trailing, or
+  // one of potentially several "between legs" pairs). Null for revenue
+  // legs and any repositioning leg the user added by hand.
+  homeSide: "dep" | "arr" | null;
+  // Only true for repositioning legs inserted by the "returns to base
+  // between legs" toggle — distinguishes them from the permanent leading/
+  // trailing repositioning legs (and anything added by hand) so switching
+  // the toggle back off removes exactly the right ones.
+  betweenLegs: boolean;
   dep: LegAirport | null;
   arr: LegAirport | null;
   date: string;
@@ -134,11 +145,43 @@ function needsRepositioning(a: LegAirport | null, b: LegAirport | null) {
   return a.icao !== b.icao;
 }
 
+function makeRepoLeg(
+  dep: LegAirport | null,
+  arr: LegAirport | null,
+  date: string,
+  homeSide: "dep" | "arr",
+  betweenLegs: boolean,
+  cruiseSpeedKts: number | null | undefined,
+  blockTimeBufferHours: number
+): LegRow {
+  const hrs = computeLegHours(dep, arr, cruiseSpeedKts, blockTimeBufferHours);
+  return {
+    id: rowId(),
+    billAs: "repositioning",
+    auto: true,
+    homeSide,
+    betweenLegs,
+    dep,
+    arr,
+    date,
+    flightHours: hrs !== null ? hrs.toFixed(1) : "",
+    dirty: false,
+    collapsed: true,
+    depTime: "",
+    depTimeTBD: true,
+    arrTime: "",
+    arrTimeDirty: false,
+  };
+}
+
+// The aircraft always ends the trip back at home base — that repositioning
+// leg is unconditional, same as the leading one. Whether it also comes home
+// *between* legs (instead of sitting overnight) is a separate, later choice
+// (see toggleReturnsToHomeBase) that a brand-new quote never starts with.
 function buildInitialLegs(
   requestedLegs: QuoteLegInput[],
   cruiseSpeedKts: number | null | undefined,
   homeBase: LegAirport | null,
-  returnsToHomeBase: boolean,
   blockTimeBufferHours: number
 ): LegRow[] {
   const rows: LegRow[] = [];
@@ -146,22 +189,9 @@ function buildInitialLegs(
   const lastLeg = requestedLegs[requestedLegs.length - 1];
 
   if (homeBase && firstLeg?.dep && needsRepositioning(homeBase, firstLeg.dep)) {
-    const hrs = computeLegHours(homeBase, firstLeg.dep, cruiseSpeedKts, blockTimeBufferHours);
-    rows.push({
-      id: rowId(),
-      billAs: "repositioning",
-      auto: true,
-      dep: homeBase,
-      arr: firstLeg.dep,
-      date: firstLeg.date,
-      flightHours: hrs !== null ? hrs.toFixed(1) : "",
-      dirty: false,
-      collapsed: true,
-      depTime: "",
-      depTimeTBD: true,
-      arrTime: "",
-      arrTimeDirty: false,
-    });
+    rows.push(
+      makeRepoLeg(homeBase, firstLeg.dep, firstLeg.date, "dep", false, cruiseSpeedKts, blockTimeBufferHours)
+    );
   }
 
   requestedLegs.forEach((leg) => {
@@ -174,6 +204,8 @@ function buildInitialLegs(
       id: rowId(),
       billAs: "revenue",
       auto: true,
+      homeSide: null,
+      betweenLegs: false,
       dep: leg.dep,
       arr: leg.arr,
       date: leg.date,
@@ -187,23 +219,10 @@ function buildInitialLegs(
     });
   });
 
-  if (returnsToHomeBase && homeBase && lastLeg?.arr && needsRepositioning(lastLeg.arr, homeBase)) {
-    const hrs = computeLegHours(lastLeg.arr, homeBase, cruiseSpeedKts, blockTimeBufferHours);
-    rows.push({
-      id: rowId(),
-      billAs: "repositioning",
-      auto: true,
-      dep: lastLeg.arr,
-      arr: homeBase,
-      date: lastLeg.date,
-      flightHours: hrs !== null ? hrs.toFixed(1) : "",
-      dirty: false,
-      collapsed: true,
-      depTime: "",
-      depTimeTBD: true,
-      arrTime: "",
-      arrTimeDirty: false,
-    });
+  if (homeBase && lastLeg?.arr && needsRepositioning(lastLeg.arr, homeBase)) {
+    rows.push(
+      makeRepoLeg(lastLeg.arr, homeBase, lastLeg.date, "arr", false, cruiseSpeedKts, blockTimeBufferHours)
+    );
   }
 
   return rows;
@@ -264,10 +283,19 @@ export function QuoteBuilderForm({
       const savedLegs = initialValues.legs;
       return savedLegs.map((leg, idx) => {
         const auto = leg.billAs === "repositioning" && (idx === 0 || idx === savedLegs.length - 1);
+        // Reload only ever recognizes the leading/trailing repositioning
+        // legs as auto-managed — any repositioning leg the "between legs"
+        // toggle inserted at save time reloads as a plain manual leg
+        // instead (betweenLegs: false), so toggling it back off here won't
+        // auto-remove those specific legs. Rare in practice (a
+        // freshly-built quote is the common path); acceptable gap for now.
+        const homeSide: "dep" | "arr" | null = auto ? (idx === 0 ? "dep" : "arr") : null;
         return {
           id: rowId(),
           billAs: leg.billAs,
           auto,
+          homeSide,
+          betweenLegs: false,
           dep: leg.dep,
           arr: leg.arr,
           date: leg.date,
@@ -285,26 +313,26 @@ export function QuoteBuilderForm({
       initialValues.requestedLegs,
       selectedAircraft?.cruiseSpeedKts,
       homeBaseAirport,
-      returnsToHomeBase,
       defaultBlockTimeBufferHours
     );
   });
 
   // Re-derive flight hours for non-dirty legs (new cruise speed), and refresh
   // auto repositioning legs' airports (new home base), whenever the selected
-  // aircraft changes. The outbound repositioning leg is always index 0.
+  // aircraft changes. homeSide says which endpoint is home for a given
+  // repositioning leg, since there can now be several of them (leading,
+  // trailing, and any "between legs" pairs) rather than just one at index 0.
   const [syncedAircraftId, setSyncedAircraftId] = useState(aircraftId);
   if (aircraftId !== syncedAircraftId) {
     setSyncedAircraftId(aircraftId);
     setLegs((prev) =>
       prev
-        .map((leg, idx) => {
+        .map((leg) => {
           let dep = leg.dep;
           let arr = leg.arr;
-          if (leg.auto && leg.billAs === "repositioning") {
-            const isOutbound = idx === 0;
-            dep = isOutbound ? homeBaseAirport : leg.dep;
-            arr = isOutbound ? leg.arr : homeBaseAirport;
+          if (leg.auto && leg.billAs === "repositioning" && leg.homeSide) {
+            dep = leg.homeSide === "dep" ? homeBaseAirport : leg.dep;
+            arr = leg.homeSide === "arr" ? homeBaseAirport : leg.arr;
           }
           if (leg.dirty) return { ...leg, dep, arr };
           const hrs = computeLegHours(
@@ -333,40 +361,57 @@ export function QuoteBuilderForm({
     );
   }
 
+  // Checked: instead of letting the aircraft sit overnight between legs, it
+  // comes home after each one and repositions back out for the next —
+  // bracket every internal gap between consecutive revenue legs with a
+  // repositioning-home and repositioning-back-out pair. The permanent
+  // leading/trailing legs (already unconditional — see buildInitialLegs)
+  // are untouched either way. Unchecked: drop exactly the legs this
+  // inserted (betweenLegs: true), leaving everything else as-is.
   function toggleReturnsToHomeBase(checked: boolean) {
     setReturnsToHomeBase(checked);
     setLegs((prev) => {
-      if (checked) {
-        const lastRevenue = [...prev].reverse().find((l) => l.billAs === "revenue") ?? prev[prev.length - 1];
-        if (!lastRevenue?.arr || !needsRepositioning(lastRevenue.arr, homeBaseAirport)) return prev;
-        const hrs = computeLegHours(
-          lastRevenue.arr,
-          homeBaseAirport,
-          selectedAircraft?.cruiseSpeedKts,
-          defaultBlockTimeBufferHours
-        );
-        return [
-          ...prev,
-          {
-            id: rowId(),
-            billAs: "repositioning",
-            auto: true,
-            dep: lastRevenue.arr,
-            arr: homeBaseAirport,
-            date: lastRevenue.date,
-            flightHours: hrs !== null ? hrs.toFixed(1) : "",
-            dirty: false,
-            collapsed: true,
-            depTime: "",
-            depTimeTBD: true,
-            arrTime: "",
-            arrTimeDirty: false,
-          },
-        ];
+      if (!checked) {
+        return prev.filter((l) => !l.betweenLegs);
       }
-      const last = prev[prev.length - 1];
-      if (last && last.auto && last.billAs === "repositioning") return prev.slice(0, -1);
-      return prev;
+
+      const revenueRows = prev.filter((l) => l.billAs === "revenue");
+      const result: LegRow[] = [];
+      prev.forEach((leg) => {
+        result.push(leg);
+        if (leg.billAs !== "revenue") return;
+        const revenueIdx = revenueRows.indexOf(leg);
+        const nextLeg = revenueRows[revenueIdx + 1];
+        if (!nextLeg) return; // last revenue leg — trailing leg already handles getting home
+
+        if (leg.arr && needsRepositioning(leg.arr, homeBaseAirport)) {
+          result.push(
+            makeRepoLeg(
+              leg.arr,
+              homeBaseAirport,
+              leg.date,
+              "arr",
+              true,
+              selectedAircraft?.cruiseSpeedKts,
+              defaultBlockTimeBufferHours
+            )
+          );
+        }
+        if (nextLeg.dep && needsRepositioning(homeBaseAirport, nextLeg.dep)) {
+          result.push(
+            makeRepoLeg(
+              homeBaseAirport,
+              nextLeg.dep,
+              nextLeg.date,
+              "dep",
+              true,
+              selectedAircraft?.cruiseSpeedKts,
+              defaultBlockTimeBufferHours
+            )
+          );
+        }
+      });
+      return result;
     });
   }
 
@@ -452,6 +497,8 @@ export function QuoteBuilderForm({
         id: rowId(),
         billAs: "revenue",
         auto: false,
+        homeSide: null,
+        betweenLegs: false,
         dep: null,
         arr: null,
         date: "",
@@ -833,10 +880,15 @@ export function QuoteBuilderForm({
               onChange={(e) => toggleReturnsToHomeBase(e.target.checked)}
             />
             <Label htmlFor="returnsToHomeBaseCheckbox">
-              Aircraft returns to home base after this trip
+              Aircraft returns to base between each leg (no overnight stays)
             </Label>
           </div>
-          {!returnsToHomeBase && (
+          {returnsToHomeBase ? (
+            <p className="pl-6 text-sm text-muted-foreground">
+              Repositioning legs added between each leg instead of overnight fees — the aircraft
+              comes home and goes back out for every one.
+            </p>
+          ) : (
             <div className="flex flex-col gap-2 pl-6">
               {autoNightsAway > 0 && (
                 <p className="text-sm text-muted-foreground">

@@ -127,8 +127,12 @@ async function createQuote(tripRequestId: string, formData: FormData) {
   const hourlyRate = Number(formData.get("hourlyRate") ?? 0);
   const repoHours = Number(formData.get("repoHours") ?? 0);
   const repoRate = Number(formData.get("repoRate") ?? 0);
+  // The client already computes the right number of nights for whichever
+  // mode the "returns to base between legs" toggle is in (0 when it's on,
+  // since gaps become repositioning legs instead of overnight stays) — no
+  // need to re-derive or override it here.
   const returnsToHomeBase = formData.get("returnsToHomeBase") === "on";
-  const overnightNights = returnsToHomeBase ? 0 : Number(formData.get("overnightNights") ?? 0);
+  const overnightNights = Number(formData.get("overnightNights") ?? 0);
   const overnightFee = overnightNights * operator.defaultOvernightFee;
   const landingFees = Number(formData.get("landingFees") ?? 0);
   const handlingFees = Number(formData.get("handlingFees") ?? 0);
@@ -347,7 +351,11 @@ export default async function NewQuotePage({
             requestedLegs,
             hourlyRate: defaultAircraft?.hourlyRate ?? 0,
             repoRate: defaultAircraft?.repoRate ?? defaultAircraft?.hourlyRate ?? 0,
-            returnsToHomeBase: true,
+            // Default is "stays overnight" now — the aircraft always
+            // repositions home at the very end of the trip regardless (see
+            // buildInitialLegs), this toggle is only about what happens
+            // *between* legs.
+            returnsToHomeBase: false,
             extraNightsAway: 0,
             landingFees: 0,
             handlingFees: 0,
