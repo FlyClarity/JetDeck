@@ -12,7 +12,7 @@ import {
   routeSummary,
   paxCount,
 } from "@/lib/queue";
-import { formatCurrency } from "@/lib/quote";
+import { formatCurrency, TRIP_PURPOSE_LABELS } from "@/lib/quote";
 import { categoryLabel } from "@/lib/aircraft";
 import { revenueLegsOf } from "@/lib/itinerary";
 import { Button } from "@/components/ui/button";
@@ -298,6 +298,9 @@ export function QuoteQueue({
                 ))}
               </div>
             )}
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/quotes/internal/new">+ Log Internal Flight</Link>
+            </Button>
             <Button size="sm" asChild>
               <Link href="/quotes/new">+ New Quote</Link>
             </Button>
@@ -314,7 +317,9 @@ export function QuoteQueue({
                   ? [q.tripRequest.requestorName, q.tripRequest.requestorCompany]
                       .filter(Boolean)
                       .join(" · ")
-                  : "";
+                  : q.tripPurpose
+                    ? TRIP_PURPOSE_LABELS[q.tripPurpose] ?? "Internal"
+                    : "";
                 return (
                   <button
                     key={q.id}
@@ -498,7 +503,7 @@ export function QuoteQueue({
             </button>
           </div>
 
-          {selectedQuote.tripRequest && (
+          {selectedQuote.tripRequest ? (
             <div className="flex flex-col gap-1 text-sm">
               <p className="font-medium">
                 {selectedQuote.tripRequest.requestorName}
@@ -507,6 +512,12 @@ export function QuoteQueue({
               </p>
               <p className="text-muted-foreground">{selectedQuote.tripRequest.requestorEmail}</p>
             </div>
+          ) : (
+            selectedQuote.tripPurpose && (
+              <p className="text-sm font-medium">
+                {TRIP_PURPOSE_LABELS[selectedQuote.tripPurpose] ?? "Internal"}
+              </p>
+            )
           )}
 
           <div className="rounded-md border border-border p-3 text-sm">

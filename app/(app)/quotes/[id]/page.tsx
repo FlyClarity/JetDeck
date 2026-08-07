@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { getAppUrl } from "@/lib/url";
 import { routeSummary, relativeTime } from "@/lib/queue";
-import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES } from "@/lib/quote";
+import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES, TRIP_PURPOSE_LABELS } from "@/lib/quote";
 import { finalizeBooking } from "@/lib/booking-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
@@ -307,7 +307,14 @@ export default async function QuotePage({
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">{quote.quoteNumber}</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">{quote.quoteNumber}</h1>
+          {quote.tripPurpose && (
+            <span className="rounded-full bg-accent/10 px-2.5 py-1 text-sm font-medium text-accent">
+              {TRIP_PURPOSE_LABELS[quote.tripPurpose] ?? "Internal"}
+            </span>
+          )}
+        </div>
         <span className="rounded-full bg-muted px-2.5 py-1 text-sm font-medium capitalize text-muted-foreground">
           {quote.status === "pending_confirmation" ? "Pending confirmation" : quote.status}
         </span>

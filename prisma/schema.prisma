@@ -193,6 +193,11 @@ model Quote {
   internalNotes String?
   validUntil    DateTime
 
+  // Non-revenue trips created directly (bypassing the client quoting
+  // pipeline entirely) — owner flights, maintenance ferries, etc. Null for
+  // every normal client-facing quote.
+  tripPurpose String? // "owner" | "maintenance" | "repositioning" | "other"
+
   // Client-facing
   token  String @unique @default(cuid())
   status String @default("draft")

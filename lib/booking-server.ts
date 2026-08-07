@@ -12,7 +12,9 @@ import { revenueLegsOf, legDateIso, legDate, legTimeLabel, routeAndDateText } fr
 // same aircraft/dates both correctly see each other rather than only ever
 // checking against fully-resolved bookings.
 export async function findBookingConflict(quote: {
-  id: string;
+  // Omitted for a not-yet-created quote (e.g. checking availability before
+  // creating an internal trip directly) — nothing to exclude in that case.
+  id?: string;
   aircraftId: string | null;
   itinerary: unknown;
 }): Promise<string | null> {
@@ -29,7 +31,7 @@ export async function findBookingConflict(quote: {
     where: {
       aircraftId: quote.aircraftId,
       status: { in: ["accepted", "pending_confirmation"] },
-      id: { not: quote.id },
+      ...(quote.id ? { id: { not: quote.id } } : {}),
     },
   });
 

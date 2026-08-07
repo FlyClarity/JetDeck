@@ -2,6 +2,79 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Airport city/state under ICAO on the client quote page — blocked on
+  data** (raised directly, "ITEM 1"): the `Airport` table only has
+  icao/iata/name/lat/lon — city (`municipality`) and state (`iso_region`
+  in OurAirports terms) were never imported, and the original source CSV
+  from the earlier airport-import session isn't available anymore to
+  backfill them. User is going to re-send the CSV later ("this is for
+  ITEM 1") once off airplane wifi — pick this up then: add the columns,
+  a migration to populate them, and render them under each leg's ICAO on
+  `/q/[token]`.
+
+- **Log Internal Flight — Trip creation without the client quoting
+  pipeline** (raised directly, for owner flights/maintenance/
+  repositioning that shouldn't go through pricing or client
+  acceptance): new `/quotes/internal/new` route
+  (`components/quote/internal-trip-form.tsx` +
+  `app/(app)/quotes/internal/new/page.tsx`). Operator picks a purpose
+  (Owner Flight / Maintenance / Repositioning / Other — see
+  `TRIP_PURPOSE_LABELS` in `lib/quote.ts`), aircraft, and legs; on submit
+  it creates a `Quote` directly (all pricing fields zeroed,
+  `tripPurpose` set, `status: "accepted"`, no `tripRequestId` at all —
+  that field was already optional) and a `Trip` (`status: "confirmed"`,
+  not `"awaiting_payment"` since nothing is owed), then updates
+  `Aircraft.currentBase` the same way a real acceptance does. No client
+  email, no Stripe hold, no "Send Quote" step — none of that applies.
+  Runs through the exact same `findBookingConflict` check as a real
+  client acceptance (per the user's explicit priority: the system should
+  always check current aircraft availability) — unlike the client flow,
+  which downgrades to `pending_confirmation` on a conflict, this refuses
+  to create outright and shows the conflict inline, since there's no
+  client already committed to reconcile after the fact — the operator is
+  creating it themselves in real time and can just fix the dates. New
+  `Quote.tripPurpose` field (migration
+  `20260807195655_quote_trip_purpose`) is what marks these; shown as a
+  badge on the quote detail page and in place of the (nonexistent)
+  requestor line in the Quoting Queue list/detail pane.
+  Not done: the quote detail page below the header still renders the
+  full `QuoteBuilderForm` (pricing fields, etc.) since building a
+  separate stripped-down internal-trip detail view was more than this
+  pass needed — harmless since everything's zeroed, just a bit of
+  unnecessary UI for what's actually a non-revenue record.
+
+- **Overnight/repositioning logic overhaul — scoped, not started**
+  (raised directly, explicitly called "imperative" — the operator wants
+  the system checking real aircraft availability as a backstop once the
+  fleet has more aircraft with overlapping schedules, not just relying
+  on careful manual entry). Four scenarios to design against, all using
+  KSNA as the example home base:
+  1. Round trip to/from home base (KSNA→KTEB→KSNA): 0 repositioning
+     cost, both nights auto-added as overnights.
+  2. Round trip not from home base (KVNY→KTEB→KVNY): repositioning cost
+     on both ends (SNA↔VNY), plus both nights as overnights.
+  3. Round trip where the aircraft does NOT stay overnight because it's
+     needed elsewhere (e.g. a same-tail one-way booked in between):
+     drop pax and reposition home between legs instead of sitting overnight,
+     then reposition back out for the return leg — effectively turning
+     one "round trip" into two separate positioning cycles around the
+     other commitment.
+  4. The existing "reposition back to home base" checkbox is too blunt —
+     it just appends one trailing leg back home. Needs to become: default
+     behavior is the aircraft stays overnight on round trips (scenario
+     1/2); checking the box should instead bring the aircraft home after
+     *every* leg and reposition back out for the next one (scenario 3's
+     behavior), not just add one final leg.
+  Scenario 3 is the hard part — it requires cross-referencing *other*
+  already-booked quotes/trips for the same aircraft (now feasible via
+  `findBookingConflict`'s query pattern, which already does same-
+  aircraft lookups against `accepted`/`pending_confirmation` quotes) to
+  decide whether the aircraft can plausibly sit overnight or needs to
+  reposition home in between. Explicitly deferred until items above (the
+  airport data and internal-trip logging) are done — pick this up as its
+  own focused design pass, not bolted onto something else, given how
+  directly it affects what gets charged.
+
 - **Outbound email gaps — internal notify missing on inbound trip
   requests, inconsistent Reply-To — fixed**: two issues found doing an
   audit of every `sendEmail` call site. (1) The intake form path sent

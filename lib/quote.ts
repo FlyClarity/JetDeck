@@ -56,3 +56,12 @@ export const QUOTE_MESSAGE_BADGES: Record<string, { emoji: string; label: string
   quote_response_accepted: { emoji: "✅", label: "Accepted" },
   quote_response_declined: { emoji: "❌", label: "Declined" },
 };
+
+// Non-null only on internal trips created directly via /quotes/internal/new
+// (owner flights, maintenance, etc.), bypassing the client quoting pipeline.
+export const TRIP_PURPOSE_LABELS: Record<string, string> = {
+  owner: "Owner Flight",
+  maintenance: "Maintenance",
+  repositioning: "Repositioning",
+  other: "Internal",
+};
