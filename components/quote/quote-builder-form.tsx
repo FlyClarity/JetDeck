@@ -6,6 +6,7 @@ import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
 import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
 import { addHoursAcrossTimezones } from "@/lib/time";
+import { findConflictingBooking, routeAndDateText, type ConflictCandidate } from "@/lib/itinerary";
 import type { AirportOption } from "@/lib/airport-server";
 import { AirportCombobox } from "@/components/quote/airport-combobox";
 import {
@@ -233,6 +234,7 @@ export function QuoteBuilderForm({
   requestorLine,
   aircraftList,
   airportsByIcao,
+  existingBookings,
   initialValues,
   priceSuggestionPromise,
   depositPercent,
@@ -246,6 +248,11 @@ export function QuoteBuilderForm({
   requestorLine: string;
   aircraftList: Aircraft[];
   airportsByIcao: Record<string, AirportOption>;
+  // Other operator bookings already accepted or awaiting confirmation — fed
+  // into a live, purely client-side overlap check (see
+  // findConflictingBooking) so a double-booking surfaces the moment the
+  // operator picks the aircraft/dates, not just when the client accepts.
+  existingBookings: ConflictCandidate[];
   initialValues: QuoteBuilderInitialValues;
   priceSuggestionPromise: Promise<PriceSuggestion>;
   depositPercent: number;
@@ -581,6 +588,16 @@ export function QuoteBuilderForm({
     [flightHours, hourlyRate, repoHours, repoRate, overnightFee, landingFees, handlingFees, additionalFees, fetTax, discount]
   );
 
+  const conflict = useMemo(() => {
+    const itineraryForCheck = legs.map((l) => ({
+      billAs: l.billAs,
+      depAirport: l.dep?.icao ?? null,
+      arrAirport: l.arr?.icao ?? null,
+      date: l.date,
+    }));
+    return findConflictingBooking(aircraftId, itineraryForCheck, existingBookings);
+  }, [aircraftId, legs, existingBookings]);
+
   const discountPercentOfSubtotal =
     totals.subtotal > 0 ? ((Number(discount) || 0) / totals.subtotal) * 100 : 0;
   const needsDiscountNote = discountPercentOfSubtotal > 10;
@@ -654,6 +671,25 @@ export function QuoteBuilderForm({
             </SelectContent>
           </Select>
         </div>
+
+        {conflict && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+            <p className="font-medium text-destructive">⚠️ Possible double-booking</p>
+            <p className="mt-1">
+              This aircraft is already booked for {conflict.date} via{" "}
+              <a
+                href={`/quotes/${conflict.booking.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-4"
+              >
+                {conflict.booking.quoteNumber}
+              </a>{" "}
+              ({routeAndDateText(conflict.booking.itinerary).route}). Pick a different aircraft, or
+              adjust this trip&apos;s dates to avoid the overlap.
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-2">

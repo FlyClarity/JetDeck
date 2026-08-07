@@ -4,13 +4,14 @@ import { formatCurrency } from "@/lib/quote";
 import { getAppUrl } from "@/lib/url";
 import { generateTripNumber } from "@/lib/trip-server";
 import { createCardHoldCheckoutSession } from "@/lib/stripe";
-import { revenueLegsOf, legDateIso, legDate, legTimeLabel, routeAndDateText } from "@/lib/itinerary";
+import { revenueLegsOf, legDate, legTimeLabel, routeAndDateText, findConflictingBooking } from "@/lib/itinerary";
 
 // Same-aircraft, same-date conflicts against anything already committed to
 // that slot — "accepted" bookings, and other "pending_confirmation" requests
 // still waiting on a decision, so two near-simultaneous requests for the
 // same aircraft/dates both correctly see each other rather than only ever
-// checking against fully-resolved bookings.
+// checking against fully-resolved bookings. The actual date-overlap matching
+// is shared with the live in-builder check (see findConflictingBooking).
 export async function findBookingConflict(quote: {
   // Omitted for a not-yet-created quote (e.g. checking availability before
   // creating an internal trip directly) — nothing to exclude in that case.
@@ -20,13 +21,6 @@ export async function findBookingConflict(quote: {
 }): Promise<string | null> {
   if (!quote.aircraftId) return null;
 
-  const thisDates = new Set(
-    revenueLegsOf(quote.itinerary)
-      .map(legDateIso)
-      .filter((d): d is string => Boolean(d))
-  );
-  if (thisDates.size === 0) return null;
-
   const others = await prisma.quote.findMany({
     where: {
       aircraftId: quote.aircraftId,
@@ -35,15 +29,9 @@ export async function findBookingConflict(quote: {
     },
   });
 
-  for (const other of others) {
-    const overlap = revenueLegsOf(other.itinerary)
-      .map(legDateIso)
-      .find((d) => d && thisDates.has(d));
-    if (overlap) {
-      return `Also booked on this aircraft for ${overlap} via quote ${other.quoteNumber}.`;
-    }
-  }
-  return null;
+  const conflict = findConflictingBooking(quote.aircraftId, quote.itinerary, others, quote.id);
+  if (!conflict) return null;
+  return `Also booked on this aircraft for ${conflict.date} via quote ${conflict.booking.quoteNumber}.`;
 }
 
 // Runs the full "this booking is definitely happening" pipeline: Trip

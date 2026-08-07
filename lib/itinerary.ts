@@ -40,3 +40,47 @@ export function routeAndDateText(itinerary: unknown) {
   const date = first ? legDate(first) : "";
   return { route, date };
 }
+
+export type ConflictCandidate = {
+  id: string;
+  quoteNumber: string;
+  aircraftId: string | null;
+  itinerary: unknown;
+};
+
+export type BookingConflict = {
+  booking: ConflictCandidate;
+  date: string;
+};
+
+// Pure same-aircraft, same-date overlap check — no database access, so it can
+// run both server-side (lib/booking-server.ts, backed by a Prisma query) and
+// client-side (the Quote Builder, backed by candidates fetched once on page
+// load) for instant feedback as the operator edits aircraft/legs.
+export function findConflictingBooking(
+  aircraftId: string | null | undefined,
+  itinerary: unknown,
+  candidates: ConflictCandidate[],
+  excludeId?: string | null
+): BookingConflict | null {
+  if (!aircraftId) return null;
+
+  const thisDates = new Set(
+    revenueLegsOf(itinerary)
+      .map(legDateIso)
+      .filter((d): d is string => Boolean(d))
+  );
+  if (thisDates.size === 0) return null;
+
+  for (const other of candidates) {
+    if (other.aircraftId !== aircraftId) continue;
+    if (excludeId && other.id === excludeId) continue;
+    const overlap = revenueLegsOf(other.itinerary)
+      .map(legDateIso)
+      .find((d) => d && thisDates.has(d));
+    if (overlap) {
+      return { booking: other, date: overlap };
+    }
+  }
+  return null;
+}

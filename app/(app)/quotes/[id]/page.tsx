@@ -250,6 +250,18 @@ export default async function QuotePage({
     orderBy: { receivedAt: "asc" },
   });
 
+  // Fed into the Quote Builder for a live "is this aircraft already booked
+  // over these dates?" check as the operator adjusts aircraft/legs — see
+  // findConflictingBooking in lib/itinerary.ts.
+  const existingBookings = await prisma.quote.findMany({
+    where: {
+      operatorId: operator.id,
+      status: { in: ["accepted", "pending_confirmation"] },
+      id: { not: quote.id },
+    },
+    select: { id: true, quoteNumber: true, aircraftId: true, itinerary: true },
+  });
+
   const routeSummaryText = quote.tripRequest
     ? routeSummary(quote.tripRequest.legs, quote.tripRequest.tripType)
     : "Route unknown";
@@ -522,6 +534,7 @@ export default async function QuotePage({
           requestorLine={requestorLine}
           aircraftList={aircraftList}
           airportsByIcao={airportsByIcao}
+          existingBookings={existingBookings}
           initialValues={{
             aircraftId: quote.aircraftId,
             requestedLegs: [],

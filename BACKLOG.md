@@ -102,6 +102,37 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   above is confirmed working, reusing the same same-aircraft-date-range
   query shape.
 
+- **Live double-booking warning in the Quote Builder** (raised directly:
+  "if there is a trip that is already booked/accepted, then that needs
+  to be flagged on the quote page ... so we can either decide to pass,
+  or adjust the quoting trip"). Previously `findBookingConflict` only
+  ran server-side at the moment the client accepted (or when creating an
+  internal trip) — the operator building the quote had no visibility
+  into a conflict until then. Extracted the pure same-aircraft/
+  same-date matching logic out of `findBookingConflict`
+  (`lib/booking-server.ts`, which imports Prisma and can't be used
+  client-side) into a new `findConflictingBooking()` in `lib/itinerary.ts`
+  (already zero-server-dependency, safe for "use client" components);
+  `findBookingConflict` now just runs its Prisma query and hands the
+  results to the shared pure function. Both `/quotes/new` and
+  `/quotes/[id]` now fetch the operator's other `accepted`/
+  `pending_confirmation` quotes (`id`, `quoteNumber`, `aircraftId`,
+  `itinerary` only) and pass them into `QuoteBuilderForm` as
+  `existingBookings`; the form recomputes the conflict in a `useMemo`
+  keyed on `[aircraftId, legs, existingBookings]`, so it updates
+  instantly as the operator changes aircraft or edits leg dates — no
+  network round-trip. A conflict renders as a dismissable-by-editing (not
+  literally dismissable, just resolved by changing something) red banner
+  right under the aircraft picker with the interrupting quote's number
+  (linked), route, and date. Purely advisory — doesn't block saving or
+  sending; the actual enforcement is still the existing accept-time gate
+  (`pending_confirmation` status) and the internal-trip-creation hard
+  block. This is the in-builder half of the same-aircraft-conflict work;
+  the Scenario 3 "advisory nudge for another booking during an overnight
+  gap" item above is a distinct, still-unbuilt follow-up (that one is
+  about flagging a conflict that falls *inside* a gap between two of the
+  *same* quote's own legs, not against the quote as a whole).
+
 - **Outbound email gaps — internal notify missing on inbound trip
   requests, inconsistent Reply-To — fixed**: two issues found doing an
   audit of every `sendEmail` call site. (1) The intake form path sent

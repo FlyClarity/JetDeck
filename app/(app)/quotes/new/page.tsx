@@ -249,6 +249,15 @@ export default async function NewQuotePage({
     orderBy: { tailNumber: "asc" },
   });
 
+  // Fed into the Quote Builder for a live "is this aircraft already booked
+  // over these dates?" check as the operator picks an aircraft and edits
+  // legs — no round-trip needed since the comparison itself is pure (see
+  // findConflictingBooking).
+  const existingBookings = await prisma.quote.findMany({
+    where: { operatorId: operator.id, status: { in: ["accepted", "pending_confirmation"] } },
+    select: { id: true, quoteNumber: true, aircraftId: true, itinerary: true },
+  });
+
   const defaultAircraft =
     aircraftList.find((a) => a.category === tripRequest.aircraftPref) ?? aircraftList[0] ?? null;
 
@@ -346,6 +355,7 @@ export default async function NewQuotePage({
           requestorLine={requestorLine}
           aircraftList={aircraftList}
           airportsByIcao={airportsByIcao}
+          existingBookings={existingBookings}
           initialValues={{
             aircraftId: defaultAircraft?.id ?? null,
             requestedLegs,
