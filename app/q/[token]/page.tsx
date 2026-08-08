@@ -173,6 +173,23 @@ export default async function ClientQuotePage({
   const legs = revenueLegsOf(quote.itinerary);
   const pax = tripRequest ? paxCount(tripRequest.legs) : null;
 
+  // Client-facing page, no operator session — query Airport directly
+  // (global reference data, not tenant-scoped) rather than going through
+  // getAirportsByIcao, which requires an authenticated tenant context.
+  const legAirportCodes = [
+    ...new Set(legs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))),
+  ];
+  const legAirports = await prisma.airport.findMany({
+    where: { icao: { in: legAirportCodes } },
+    select: { icao: true, city: true, state: true },
+  });
+  const cityStateByIcao = Object.fromEntries(
+    legAirports.map((a) => [
+      a.icao,
+      [a.city, a.state].filter(Boolean).join(", "),
+    ])
+  );
+
   // Client-facing pricing shows one fee per segment, not the internal cost
   // breakdown (hourly rate, repositioning, landing/handling fees, discount)
   // that produced it — those stay internal-only, visible on the operator's
@@ -240,8 +257,16 @@ export default async function ClientQuotePage({
                   key={i}
                   className="flex items-center justify-between rounded-md border border-border p-3 text-sm"
                 >
-                  <span className="font-medium">
-                    {leg.depAirport} → {leg.arrAirport}
+                  <span>
+                    <span className="font-medium">
+                      {leg.depAirport} → {leg.arrAirport}
+                    </span>
+                    {(cityStateByIcao[leg.depAirport ?? ""] || cityStateByIcao[leg.arrAirport ?? ""]) && (
+                      <span className="block text-xs text-muted-foreground">
+                        {cityStateByIcao[leg.depAirport ?? ""] ?? "—"} →{" "}
+                        {cityStateByIcao[leg.arrAirport ?? ""] ?? "—"}
+                      </span>
+                    )}
                   </span>
                   <span className="text-right text-muted-foreground">
                     <span className="block">{legDate(leg)}</span>

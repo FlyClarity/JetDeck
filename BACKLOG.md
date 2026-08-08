@@ -24,15 +24,36 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   into a new `rawEmailSubject` prop, rendered as its own line above the
   body in both `/quotes/new` and `/quotes/[id]`.
 
-- **Airport city/state under ICAO on the client quote page — blocked on
-  data** (raised directly, "ITEM 1"): the `Airport` table only has
-  icao/iata/name/lat/lon — city (`municipality`) and state (`iso_region`
-  in OurAirports terms) were never imported, and the original source CSV
-  from the earlier airport-import session isn't available anymore to
-  backfill them. User is going to re-send the CSV later ("this is for
-  ITEM 1") once off airplane wifi — pick this up then: add the columns,
-  a migration to populate them, and render them under each leg's ICAO on
-  `/q/[token]`.
+- **Airport city/state under ICAO on the client quote page — shipped
+  ("ITEM 1")**: user sent the OurAirports source CSV. Added
+  `Airport.city`/`Airport.state` (migration
+  `20260808100000_add_airport_city_state`) and backfilled them by
+  matching each CSV row's `icao_code` (falling back to `ident` when
+  blank — the same fallback OurAirports itself derives, and the one the
+  original re-import used to choose each row's `icao`) against the
+  existing `Airport.icao`. Deliberately an UPDATE, not a rebuild — the
+  two prior airport migrations carefully filtered the dataset down
+  (worldwide large/medium, US small airports with a runway ≥ 3000ft),
+  and that set had to be preserved exactly; a row from the CSV whose
+  icao doesn't match anything already in the table is just a silent
+  no-op, not an error, so it was safe to generate updates from the
+  full CSV without needing to know the current table contents from this
+  sandbox (no live DB access here, same limitation as always). Filtered
+  the ~85k-row CSV down to ~20.5k candidate rows first (large/medium
+  worldwide, or small + `iso_country = "US"`) to keep the migration file
+  a reasonable size instead of generating all 85k as one statement.
+  `state` stores just the region code with the country prefix stripped
+  (`"US-CA"` → `"CA"`) for readability. `/q/[token]` now queries
+  `Airport` directly for the legs' city/state (a plain `prisma.airport`
+  call, not `getAirportsByIcao`, since that helper requires an
+  authenticated tenant context and this is the public client-facing
+  page) and renders it under each leg's ICAO pair.
+  Noted in passing, not acted on: 13 of the ~20.5k CSV rows have a
+  corrupted `ident`/`icao_code` that looks like Excel scientific
+  notation (e.g. `"1.00E+02"`) — an artifact in the source CSV itself,
+  not something this migration introduced. Harmless (those keys simply
+  never match a real `Airport.icao`), but flagging in case the same
+  corruption shows up in a future data refresh from the same source.
 
 - **Log Internal Flight — Trip creation without the client quoting
   pipeline** (raised directly, for owner flights/maintenance/
@@ -110,19 +131,15 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   too, not something this pass made worse.
 
   **Scenario 3 (auto-detecting another booking during what would be an
-  overnight gap) was explicitly scoped out** — confirmed with the user
-  this doesn't need AI, just a date-range query against other
-  `accepted`/`pending_confirmation` quotes on the same aircraft (same
-  shape as `findBookingConflict`, which already does same-aircraft
-  lookups). Agreed to build as an **advisory nudge** ("N810D has another
-  trip during this gap, consider repositioning home instead") rather
-  than auto-toggling the checkbox — the literal "another booking exists"
-  case is reliably detectable, but the other reasons listed (crew
-  availability, etc.) aren't, since there's no crew data in JetDeck at
-  all yet, and a sometimes-right automatic toggle would just teach the
-  operator not to trust it. Not built yet — natural next step once the
-  above is confirmed working, reusing the same same-aircraft-date-range
-  query shape.
+  overnight gap) — shipped, as a side effect of the away-windows
+  segmentation fix below** rather than as a separate function. Once
+  `findConflictingBooking` computes away time per *segment* instead of
+  one whole-trip span, a gap the operator left as a plain overnight stay
+  (no repositioning leg bridging it) is just another away segment like
+  any other — so an overlapping booking during that gap surfaces through
+  the same live Quote Builder banner described below, no separate
+  "advisory nudge" UI needed. See the away-windows entry for the
+  mechanics.
 
 - **Live double-booking warning in the Quote Builder** (raised directly:
   "if there is a trip that is already booked/accepted, then that needs
@@ -174,6 +191,58 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   range (e.g. "Sep 11 – Sep 18") when the two differ, a single date when
   they don't. New `formatIsoDate()` helper extracted from `legDate()` for
   formatting raw ISO strings outside the `StoredLeg` shape.
+
+  **Second follow-up, same day — away windows now split around
+  repositioning legs instead of spanning the whole trip**: the range-
+  overlap fix above (whole-trip `[first leg date, last leg date]`) fixed
+  the continuous-away case but introduced a converse false-positive: a
+  quote with "returns to base between each leg" on (so the aircraft
+  actually comes home and goes back out between two widely-spaced
+  revenue legs, e.g. a one-day trip on the 5th and another one-day trip
+  on the 20th) would still flag *any* other booking landing anywhere in
+  that 15-day span, even though the aircraft was actually home and free
+  the whole time in between. Fixed by having `awayWindows()`
+  (`lib/itinerary.ts`, replacing the single-range `awayWindow()`) split
+  the trip into separate away segments wherever a repositioning leg sits
+  between two revenue legs — a repositioning leg's date always lands on
+  one of its adjacent revenue legs' own dates (see `makeRepoLeg` in the
+  Quote Builder), so its presence there, chronologically, reliably means
+  the gap was bridged rather than sat through, with no need to know the
+  aircraft's actual home base to tell the two cases apart. A trip with
+  no repositioning between two revenue legs still collapses to one
+  continuous segment (correctly catching the Sep 11–18 owner-trip case
+  from the first fix); a trip with repositioning between them now
+  produces two short segments instead of one long one, closing the false
+  positive. `findConflictingBooking` now checks every segment pair
+  between the two itineraries instead of one whole-trip range each.
+
+- **Cancelled/declined quotes had no dashboard tab — fixed**: cancelling
+  an accepted quote (or a client declining a sent one) moved it out of
+  every visible Quoting Queue tab with no way to find it again
+  afterward. Added a combined "Inactive" tab
+  (`components/queue/quote-queue.tsx`) covering both terminal states
+  rather than two separate tabs, per the option already flagged here —
+  low expected volume for either status individually didn't justify
+  splitting them. `QUOTE_ACTION_LABEL` gained `declined`/`cancelled`
+  entries so the list row shows "Declined — view →" / "Cancelled — view
+  →" instead of the generic fallback.
+
+- **Arrival time now flags a day change — shipped**: a long or
+  eastbound-heavy leg can land the next calendar day, but the `Arrives`
+  field is a plain time-of-day input with nothing to show that. Rather
+  than adding a whole date component to the field, `lib/time.ts`'s
+  `addHoursToTime`/`addHoursAcrossTimezones` now return
+  `{ time, dayOffset }` instead of a bare string (`dayOffset` computed by
+  comparing the arrival's local calendar date, in the arrival zone, to
+  the leg's own departure date — not raw UTC days, so the timezone shift
+  itself is never miscounted as a day change). `LegRow` gained
+  `arrDayOffset`, threaded through every place that derives `arrTime` in
+  `quote-builder-form.tsx`; a small "+1d" (or "+2d", "-1d", etc.) badge
+  renders next to the "Arrives" label whenever it's nonzero. Only ever
+  populated for an auto-derived arrival time — a manually-typed time (or
+  one reloaded from a saved quote) has no date attached to compare
+  against, so `arrDayOffset` resets to 0 in both cases rather than
+  guessing.
 
 - **Outbound email gaps — internal notify missing on inbound trip
   requests, inconsistent Reply-To — fixed**: two issues found doing an
@@ -296,13 +365,6 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   extraction accuracy both still hold before trusting it unsupervised.
   If the combined prompt's length ever crosses 1024 tokens, prompt
   caching becomes worth revisiting too.
-- **Arrival-time timezone conversion doesn't flag a day change**: the
-  new `addHoursAcrossTimezones` (lib/time.ts) correctly converts the
-  computed arrival time into the destination's local clock, but a long
-  or heavily-eastbound trip can land on the next calendar day and the
-  UI has no way to show that today (`Arrives` is a plain time input,
-  no date component). Worth a small "+1 day" indicator if this comes
-  up in practice.
 - **Opportunity scoring: repositioning uses aircraft base, not a live
   fleet-tracking feed** (raised alongside the scoring refinement below):
   the new distance-tiered scoring still reasons from
@@ -351,12 +413,6 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   conflicting slot could both still slip through as a narrow race —
   closing that fully would need serializable isolation or a unique
   constraint, not attempted here.
-- **No dashboard view for cancelled bookings** (raised alongside
-  Cancel Booking): cancelling an accepted quote moves it to a
-  `cancelled` status with no tab to find it again afterward — same gap
-  already noted above for `declined` quotes. Both should probably be
-  solved together once there's enough terminal-state volume to
-  justify a tab (or a combined "Inactive" filter).
 - **Client quote page — terms-hash snapshotting** (raised while building
   Step 15/16): `acceptedTermsHash` is computed at accept time from
   whatever `operator.termsText` currently holds, not from a snapshot
@@ -566,12 +622,14 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   rows are now excluded from the tab order (`tabIndex={-1}`) so `Tab`
   stays a clean left-to-right pass across the dashboard's tabs/filters
   and `j`/`k` is the only way to move through a list.
-  Known gap: declining a sent quote (or a client declining by email)
-  moves it out of every visible tab — there's no "Declined" view yet
-  to see where it went, matching the original brief's status list
-  (Draft/Sent/Accepted/**Declined**/Expired/Passed) which only
-  partially exists today. Worth adding once there's enough of that
-  state to be worth a tab.
+  Known gap, since closed: declining a sent quote (or a client
+  declining by email) used to move it out of every visible tab with no
+  way to see where it went — fixed by the combined "Inactive" tab noted
+  elsewhere in this file (covers both `declined` and `cancelled`).
+  `expired` still isn't a real status anywhere in the schema (checked
+  computed on the fly from `validUntil`, not stored) — the brief's full
+  Draft/Sent/Accepted/Declined/Expired/Passed list is otherwise
+  covered now.
 
 - **Pricing profiles per aircraft, by client type** (raised after
   Step 14): the user wants different rates for the same aircraft

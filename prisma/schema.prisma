@@ -93,6 +93,8 @@ model Airport {
   lon       Float
   elevation Int? // feet
   timezone  String? // IANA tz name, e.g. "America/New_York"
+  city      String? // OurAirports "municipality"
+  state     String? // OurAirports "iso_region", country prefix stripped (e.g. "CA", not "US-CA")
   createdAt DateTime @default(now())
 }
 

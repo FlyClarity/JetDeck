@@ -5,7 +5,7 @@ import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
 import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
-import { addHoursAcrossTimezones } from "@/lib/time";
+import { addHoursAcrossTimezones, type TimeWithDayOffset } from "@/lib/time";
 import {
   findConflictingBooking,
   routeAndDateText,
@@ -111,6 +111,10 @@ type LegRow = {
   // false = arrTime is auto-derived from depTime + flightHours; true = the
   // user typed an arrival time directly, so stop overwriting it.
   arrTimeDirty: boolean;
+  // 0 unless auto-derived from a firm departure time — a manually-typed
+  // arrival time (or one reloaded from a saved quote) has no reliable date
+  // to compare against, since the field only ever stores a time of day.
+  arrDayOffset: number;
 };
 
 // Best-effort arrival time: only fills in when we actually have a firm
@@ -124,10 +128,10 @@ function computeArrTime(
   flightHours: string,
   dep: LegAirport | null,
   arr: LegAirport | null
-): string {
-  if (depTimeTBD || !depTime) return "";
+): TimeWithDayOffset {
+  if (depTimeTBD || !depTime) return { time: "", dayOffset: 0 };
   const hrs = Number(flightHours);
-  if (!Number.isFinite(hrs) || hrs <= 0) return "";
+  if (!Number.isFinite(hrs) || hrs <= 0) return { time: "", dayOffset: 0 };
   return addHoursAcrossTimezones(date, depTime, hrs, dep?.timezone ?? null, arr?.timezone ?? null);
 }
 
@@ -177,6 +181,7 @@ function makeRepoLeg(
     depTimeTBD: true,
     arrTime: "",
     arrTimeDirty: false,
+    arrDayOffset: 0,
   };
 }
 
@@ -206,6 +211,8 @@ function buildInitialLegs(
     const flightHours = hrs !== null && hrs !== undefined ? Number(hrs).toFixed(1) : "";
     const depTime = leg.depTime ?? "";
     const depTimeTBD = leg.depTimeTBD ?? !leg.depTime;
+    const computedArr = computeArrTime(leg.date, depTime, depTimeTBD, flightHours, leg.dep, leg.arr);
+    const arrTimeDirty = Boolean(leg.arrTime);
     rows.push({
       id: rowId(),
       billAs: "revenue",
@@ -220,8 +227,9 @@ function buildInitialLegs(
       collapsed: false,
       depTime,
       depTimeTBD,
-      arrTime: leg.arrTime || computeArrTime(leg.date, depTime, depTimeTBD, flightHours, leg.dep, leg.arr),
-      arrTimeDirty: Boolean(leg.arrTime),
+      arrTime: leg.arrTime || computedArr.time,
+      arrTimeDirty,
+      arrDayOffset: arrTimeDirty ? 0 : computedArr.dayOffset,
     });
   });
 
@@ -317,7 +325,10 @@ export function QuoteBuilderForm({
           depTime: leg.depTime ?? "",
           depTimeTBD: leg.depTimeTBD ?? !leg.depTime,
           arrTime: leg.arrTime ?? "",
+          // Reloaded from a saved time-of-day string with no date attached
+          // to compare against — no way to know if it crossed a day.
           arrTimeDirty: Boolean(leg.arrTime),
+          arrDayOffset: 0,
         };
       });
     }
@@ -354,14 +365,15 @@ export function QuoteBuilderForm({
             defaultBlockTimeBufferHours
           );
           const flightHours = hrs !== null ? hrs.toFixed(1) : leg.flightHours;
+          if (leg.arrTimeDirty) return { ...leg, dep, arr, flightHours };
+          const computedArr = computeArrTime(leg.date, leg.depTime, leg.depTimeTBD, flightHours, dep, arr);
           return {
             ...leg,
             dep,
             arr,
             flightHours,
-            arrTime: leg.arrTimeDirty
-              ? leg.arrTime
-              : computeArrTime(leg.date, leg.depTime, leg.depTimeTBD, flightHours, dep, arr),
+            arrTime: computedArr.time,
+            arrDayOffset: computedArr.dayOffset,
           };
         })
         // Dropping the aircraft onto a plane already based at this leg's
@@ -443,8 +455,9 @@ export function QuoteBuilderForm({
         }
         if ("arrTime" in patch) {
           updated.arrTimeDirty = true;
+          updated.arrDayOffset = 0;
         } else if (!updated.arrTimeDirty) {
-          updated.arrTime = computeArrTime(
+          const computedArr = computeArrTime(
             updated.date,
             updated.depTime,
             updated.depTimeTBD,
@@ -452,6 +465,8 @@ export function QuoteBuilderForm({
             updated.dep,
             updated.arr
           );
+          updated.arrTime = computedArr.time;
+          updated.arrDayOffset = computedArr.dayOffset;
         }
         return updated;
       })
@@ -469,13 +484,14 @@ export function QuoteBuilderForm({
           defaultBlockTimeBufferHours
         );
         const flightHours = hrs !== null ? hrs.toFixed(1) : leg.flightHours;
+        if (leg.arrTimeDirty) return { ...leg, dirty: false, flightHours };
+        const computedArr = computeArrTime(leg.date, leg.depTime, leg.depTimeTBD, flightHours, leg.dep, leg.arr);
         return {
           ...leg,
           dirty: false,
           flightHours,
-          arrTime: leg.arrTimeDirty
-            ? leg.arrTime
-            : computeArrTime(leg.date, leg.depTime, leg.depTimeTBD, flightHours, leg.dep, leg.arr),
+          arrTime: computedArr.time,
+          arrDayOffset: computedArr.dayOffset,
         };
       })
     );
@@ -483,22 +499,23 @@ export function QuoteBuilderForm({
 
   function resetArrTime(id: string) {
     setLegs((prev) =>
-      prev.map((leg) =>
-        leg.id === id
-          ? {
-              ...leg,
-              arrTimeDirty: false,
-              arrTime: computeArrTime(
-                leg.date,
-                leg.depTime,
-                leg.depTimeTBD,
-                leg.flightHours,
-                leg.dep,
-                leg.arr
-              ),
-            }
-          : leg
-      )
+      prev.map((leg) => {
+        if (leg.id !== id) return leg;
+        const computedArr = computeArrTime(
+          leg.date,
+          leg.depTime,
+          leg.depTimeTBD,
+          leg.flightHours,
+          leg.dep,
+          leg.arr
+        );
+        return {
+          ...leg,
+          arrTimeDirty: false,
+          arrTime: computedArr.time,
+          arrDayOffset: computedArr.dayOffset,
+        };
+      })
     );
   }
 
@@ -521,6 +538,7 @@ export function QuoteBuilderForm({
         depTimeTBD: true,
         arrTime: "",
         arrTimeDirty: false,
+        arrDayOffset: 0,
       },
     ]);
   }
@@ -840,7 +858,21 @@ export function QuoteBuilderForm({
                   </label>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <Label className="text-xs">Arrives</Label>
+                  <Label className="text-xs">
+                    Arrives
+                    {leg.arrDayOffset !== 0 && (
+                      <span
+                        className="ml-1 text-accent"
+                        title={
+                          leg.arrDayOffset > 0
+                            ? `Lands ${leg.arrDayOffset === 1 ? "the next" : `${leg.arrDayOffset} days`} calendar day${leg.arrDayOffset === 1 ? "" : "s"} later`
+                            : "Lands a calendar day earlier"
+                        }
+                      >
+                        {leg.arrDayOffset > 0 ? `+${leg.arrDayOffset}d` : `${leg.arrDayOffset}d`}
+                      </span>
+                    )}
+                  </Label>
                   <Input
                     type="time"
                     className="w-24"

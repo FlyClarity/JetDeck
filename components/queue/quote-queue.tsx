@@ -55,6 +55,7 @@ const VIEWS = [
   { key: "sent", label: "Sent" },
   { key: "pending_confirmation", label: "Needs Confirmation" },
   { key: "accepted", label: "Accepted" },
+  { key: "inactive", label: "Inactive" },
 ] as const;
 
 // "new" and "scoring" aren't included as filters — scoring runs
@@ -69,14 +70,18 @@ const STATUS_FILTERS = [
 type ViewKey = (typeof VIEWS)[number]["key"];
 type StatusFilterKey = (typeof STATUS_FILTERS)[number]["key"];
 
-const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "pending_confirmation", "accepted"];
+const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "pending_confirmation", "accepted", "inactive"];
 
 const QUOTE_ACTION_LABEL: Record<string, string> = {
   draft: "Continue draft →",
   sent: "Sent — view →",
   pending_confirmation: "Needs your confirmation →",
   accepted: "Accepted — view →",
+  declined: "Declined — view →",
+  cancelled: "Cancelled — view →",
 };
+
+const INACTIVE_QUOTE_STATUSES = ["declined", "cancelled"];
 
 const TRIP_TYPE_LABELS: Record<string, string> = {
   one_way: "One-way",
@@ -159,7 +164,10 @@ export function QuoteQueue({
   const isQuoteView = QUOTE_VIEWS.includes(activeView);
 
   const quoteList = useMemo(
-    () => quotes.filter((q) => q.status === activeView),
+    () =>
+      activeView === "inactive"
+        ? quotes.filter((q) => INACTIVE_QUOTE_STATUSES.includes(q.status))
+        : quotes.filter((q) => q.status === activeView),
     [quotes, activeView]
   );
 

@@ -37,23 +37,33 @@ export function normalizeTimeString(raw: string | null | undefined): string | nu
   return null;
 }
 
+export type TimeWithDayOffset = {
+  time: string;
+  // 0 = same calendar day as departure, 1 = lands the next day, etc.
+  // Always 0 alongside an empty time.
+  dayOffset: number;
+};
+
 // Adds a fractional number of hours to a "HH:MM" string, wrapping at
-// midnight. Returns "" if the input isn't a valid time. No timezone
-// awareness — same-clock addition only; see addHoursAcrossTimezones for
-// the timezone-correct version used whenever both airports' zones are known.
-export function addHoursToTime(time: string, hours: number): string {
+// midnight and reporting how many calendar days that wrap crossed. Returns
+// "" (dayOffset 0) if the input isn't a valid time. No timezone awareness —
+// same-clock addition only; see addHoursAcrossTimezones for the
+// timezone-correct version used whenever both airports' zones are known.
+export function addHoursToTime(time: string, hours: number): TimeWithDayOffset {
   const m = time.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return "";
+  if (!m) return { time: "", dayOffset: 0 };
   const h = Number(m[1]);
   const min = Number(m[2]);
-  if (h >= 24 || min >= 60) return "";
+  if (h >= 24 || min >= 60) return { time: "", dayOffset: 0 };
 
-  const totalMinutes = ((h * 60 + min + Math.round(hours * 60)) % 1440 + 1440) % 1440;
+  const rawMinutes = h * 60 + min + Math.round(hours * 60);
+  const totalMinutes = ((rawMinutes % 1440) + 1440) % 1440;
+  const dayOffset = Math.floor(rawMinutes / 1440);
   const hh = Math.floor(totalMinutes / 60)
     .toString()
     .padStart(2, "0");
   const mm = (totalMinutes % 60).toString().padStart(2, "0");
-  return `${hh}:${mm}`;
+  return { time: `${hh}:${mm}`, dayOffset };
 }
 
 // UTC offset, in minutes, of an IANA timezone at a given instant (handles
@@ -84,29 +94,28 @@ function utcOffsetMinutes(timeZone: string, instant: Date): number {
 }
 
 // Adds a fractional number of hours to a local "HH:MM" departure time and
-// returns the resulting *local* arrival time — converting across timezones
-// when both airports' IANA zones are known, instead of naively adding hours
-// as if the clock didn't change crossing zones. Falls back to plain
-// same-zone addition when either zone is missing or they match. Doesn't
-// signal a day rollover; the returned HH:MM can represent the next
-// calendar day for long or eastbound-heavy trips.
+// returns the resulting *local* arrival time plus how many calendar days
+// (in the arrival zone's own local date) that crossed — converting across
+// timezones when both airports' IANA zones are known, instead of naively
+// adding hours as if the clock didn't change crossing zones. Falls back to
+// plain same-zone addition when either zone is missing or they match.
 export function addHoursAcrossTimezones(
   date: string,
   depTime: string,
   hours: number,
   depTimezone: string | null,
   arrTimezone: string | null
-): string {
+): TimeWithDayOffset {
   if (!depTimezone || !arrTimezone || depTimezone === arrTimezone) {
     return addHoursToTime(depTime, hours);
   }
-  if (!/^\d{1,2}:\d{2}$/.test(depTime)) return "";
+  if (!/^\d{1,2}:\d{2}$/.test(depTime)) return { time: "", dayOffset: 0 };
 
   // Treat the wall-clock departure as if it were UTC to get a stable
   // reference instant, then correct by the departure zone's real offset at
   // that moment to find the true UTC instant of departure.
   const naiveUtcMs = Date.parse(`${date}T${depTime}:00Z`);
-  if (Number.isNaN(naiveUtcMs)) return "";
+  if (Number.isNaN(naiveUtcMs)) return { time: "", dayOffset: 0 };
   const depOffsetMin = utcOffsetMinutes(depTimezone, new Date(naiveUtcMs));
   const departureUtcMs = naiveUtcMs - depOffsetMin * 60000;
 
@@ -117,5 +126,14 @@ export function addHoursAcrossTimezones(
   const arrLocal = new Date(arrLocalAsUtcMs);
   const hh = arrLocal.getUTCHours().toString().padStart(2, "0");
   const mm = arrLocal.getUTCMinutes().toString().padStart(2, "0");
-  return `${hh}:${mm}`;
+
+  // Day offset relative to the leg's own local departure date — comparing
+  // local Y-M-D strings in each zone directly, rather than raw UTC days, so
+  // the timezone shift itself never gets miscounted as a day change.
+  const arrLocalDateStr = `${arrLocal.getUTCFullYear()}-${String(arrLocal.getUTCMonth() + 1).padStart(2, "0")}-${String(arrLocal.getUTCDate()).padStart(2, "0")}`;
+  const dayOffset = Math.round(
+    (Date.parse(`${arrLocalDateStr}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86400000
+  );
+
+  return { time: `${hh}:${mm}`, dayOffset };
 }
