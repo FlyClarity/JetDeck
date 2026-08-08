@@ -5,7 +5,10 @@ import { sendEmail } from "@/lib/email";
 import { getAppUrl } from "@/lib/url";
 import { routeSummary, relativeTime } from "@/lib/queue";
 import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES, TRIP_PURPOSE_LABELS } from "@/lib/quote";
-import { finalizeBooking } from "@/lib/booking-server";
+import {
+  confirmPendingBookingForOperator,
+  declinePendingBookingForOperator,
+} from "@/lib/booking-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
@@ -187,17 +190,9 @@ async function confirmPendingBooking(id: string) {
 
   const scoped = await getScopedQuote(id);
   if (!scoped) return;
-  const { quote } = scoped;
-  if (quote.status !== "pending_confirmation") return;
+  await confirmPendingBookingForOperator(scoped.operator.id, id);
 
-  // The client already legally accepted (terms/IP/timestamp recorded when
-  // they clicked) — this just runs the same finalize pipeline their
-  // acceptance would have triggered automatically if there'd been no
-  // conflict: Trip creation, positioning update, Stripe hold, and the real
-  // confirmation email with wire instructions.
-  await finalizeBooking(quote.id);
-
-  redirect(`/quotes/${quote.id}`);
+  redirect(`/quotes/${id}`);
 }
 
 async function declinePendingBooking(id: string, formData: FormData) {
@@ -205,29 +200,10 @@ async function declinePendingBooking(id: string, formData: FormData) {
 
   const scoped = await getScopedQuote(id);
   if (!scoped) return;
-  const { quote, operator } = scoped;
-  if (quote.status !== "pending_confirmation") return;
-
   const note = String(formData.get("declineNote") ?? "").trim();
-  if (!note) return;
+  await declinePendingBookingForOperator(scoped.operator.id, id, note);
 
-  await prisma.quote.update({
-    where: { id: quote.id },
-    data: { status: "declined", declinedAt: new Date() },
-  });
-
-  if (quote.tripRequest?.requestorEmail) {
-    await sendEmail({
-      to: quote.tripRequest.requestorEmail,
-      subject: `Unable to confirm — ${quote.quoteNumber}`,
-      html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>We're sorry — we're unable to confirm your booking (${quote.quoteNumber}): ${note}</p><p>Please contact us so we can help find another solution.</p><p>— ${operator.name}</p>`,
-      replyTo: operator.replyToEmail ?? undefined,
-      from: operator.fromEmail,
-      fromName: operator.name,
-    });
-  }
-
-  redirect(`/quotes/${quote.id}`);
+  redirect(`/quotes/${id}`);
 }
 
 export default async function QuotePage({

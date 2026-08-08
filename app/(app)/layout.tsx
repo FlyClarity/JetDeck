@@ -34,9 +34,14 @@ export default async function AppLayout({
   });
 
   const needsReviewCount = operator
-    ? await prisma.inboundEmail.count({
-        where: { operatorId: operator.id, status: "needs_review" },
-      })
+    ? await Promise.all([
+        prisma.inboundEmail.count({
+          where: { operatorId: operator.id, status: "needs_review" },
+        }),
+        prisma.quote.count({
+          where: { operatorId: operator.id, status: "pending_confirmation" },
+        }),
+      ]).then(([emailCount, pendingBookingCount]) => emailCount + pendingBookingCount)
     : 0;
 
   if (!operator) {

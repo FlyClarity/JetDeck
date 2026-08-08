@@ -1,10 +1,17 @@
+import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
+import {
+  confirmPendingBookingForOperator,
+  declinePendingBookingForOperator,
+} from "@/lib/booking-server";
+import { TRIP_PURPOSE_LABELS } from "@/lib/quote";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   createTripRequestFromInboundEmail,
   logInboundEmailAsInquiry,
@@ -84,98 +91,209 @@ async function attachToQuoteAction(id: string, formData: FormData) {
   revalidatePath("/inbox/review");
 }
 
+async function confirmPendingBookingAction(id: string) {
+  "use server";
+  const operator = await getCurrentOperator();
+  if (!operator) return;
+
+  await confirmPendingBookingForOperator(operator.id, id);
+  revalidatePath("/inbox/review");
+}
+
+async function declinePendingBookingAction(id: string, formData: FormData) {
+  "use server";
+  const operator = await getCurrentOperator();
+  if (!operator) return;
+
+  const note = String(formData.get("declineNote") ?? "").trim();
+  await declinePendingBookingForOperator(operator.id, id, note);
+  revalidatePath("/inbox/review");
+}
+
 export default async function NeedsReviewPage() {
   const operator = await getCurrentOperator();
   if (!operator) return null;
 
-  const emails = await prisma.inboundEmail.findMany({
-    where: { operatorId: operator.id, status: "needs_review" },
-    orderBy: { receivedAt: "desc" },
-  });
+  const [emails, pendingQuotes] = await Promise.all([
+    prisma.inboundEmail.findMany({
+      where: { operatorId: operator.id, status: "needs_review" },
+      orderBy: { receivedAt: "desc" },
+    }),
+    prisma.quote.findMany({
+      where: { operatorId: operator.id, status: "pending_confirmation" },
+      include: { tripRequest: true },
+      orderBy: { acceptedAt: "desc" },
+    }),
+  ]);
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Needs Review</h1>
       <p className="mt-1 text-muted-foreground">
-        Emails the AI couldn&apos;t confidently triage. Goal: keep this at zero.
+        Emails the AI couldn&apos;t confidently triage, and bookings waiting on your
+        confirmation. Goal: keep this at zero.
       </p>
 
-      {emails.length === 0 ? (
+      {emails.length === 0 && pendingQuotes.length === 0 ? (
         <p className="mt-8 text-muted-foreground">Nothing waiting — you&apos;re caught up.</p>
       ) : (
-        <div className="mt-8 flex flex-col gap-6">
-          {emails.map((email) => {
-            const createAction = createTripRequestAction.bind(null, email.id);
-            const inquiryAction = logAsInquiryAction.bind(null, email.id);
-            const discardEmailAction = discardAction.bind(null, email.id);
-            const attachAction = attachToQuoteAction.bind(null, email.id);
+        <>
+          {pendingQuotes.length > 0 && (
+            <div className="mt-8 flex flex-col gap-6">
+              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Bookings needing confirmation
+              </h2>
+              {pendingQuotes.map((quote) => {
+                const confirmAction = confirmPendingBookingAction.bind(null, quote.id);
+                const declineAction = declinePendingBookingAction.bind(null, quote.id);
 
-            return (
-              <div key={email.id} className="rounded-md border border-border p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="font-medium">
-                      {email.fromName ?? email.fromEmail}{" "}
-                      <span className="font-normal text-muted-foreground">
-                        &lt;{email.fromEmail}&gt;
-                      </span>
-                    </p>
-                    {email.replyToEmail && (
-                      <p className="text-sm text-muted-foreground">
-                        Reply-To: {email.replyToEmail}
+                return (
+                  <div
+                    key={quote.id}
+                    className="rounded-md border border-destructive/40 bg-destructive/5 p-5"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="font-medium">
+                          {quote.quoteNumber}{" "}
+                          <span className="font-normal text-muted-foreground">
+                            ·{" "}
+                            {quote.tripRequest
+                              ? quote.tripRequest.requestorName
+                              : (quote.tripPurpose && TRIP_PURPOSE_LABELS[quote.tripPurpose]) ??
+                                "Internal"}
+                          </span>
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {quote.acceptedByName || quote.tripRequest?.requestorName || "The client"}{" "}
+                          accepted{quote.acceptedAt && ` on ${quote.acceptedAt.toLocaleString()}`} —
+                          awaiting your confirmation
+                        </p>
+                      </div>
+                      <Link
+                        href={`/quotes/${quote.id}`}
+                        className="shrink-0 text-sm text-foreground underline underline-offset-4"
+                      >
+                        View quote
+                      </Link>
+                    </div>
+
+                    {quote.conflictWarning && (
+                      <p className="mt-3 text-sm text-destructive">
+                        ⚠️ {quote.conflictWarning}
                       </p>
                     )}
-                    <p className="text-sm text-muted-foreground">
-                      {email.subject || "(no subject)"}
-                    </p>
+
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <form action={confirmAction}>
+                        <Button type="submit" size="sm">
+                          Confirm Booking
+                        </Button>
+                      </form>
+                      <details className="text-sm">
+                        <summary className="cursor-pointer text-muted-foreground">
+                          Decline instead
+                        </summary>
+                        <form action={declineAction} className="mt-3 flex flex-col gap-2">
+                          <Textarea
+                            name="declineNote"
+                            rows={2}
+                            placeholder="Reason — this is sent to the client"
+                            required
+                          />
+                          <Button type="submit" variant="destructive" size="sm" className="self-start">
+                            Decline
+                          </Button>
+                        </form>
+                      </details>
+                    </div>
                   </div>
-                  <span className="shrink-0 text-sm text-muted-foreground">
-                    {email.receivedAt.toLocaleString()}
-                  </span>
-                </div>
+                );
+              })}
+            </div>
+          )}
 
-                {email.classificationReason && (
-                  <p className="mt-2 text-sm text-muted-foreground italic">
-                    AI: {email.classification} ({email.classificationConfidence}) —{" "}
-                    {email.classificationReason}
-                  </p>
-                )}
+          {emails.length > 0 && (
+            <div className="mt-8 flex flex-col gap-6">
+              {pendingQuotes.length > 0 && (
+                <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                  Emails
+                </h2>
+              )}
+              {emails.map((email) => {
+                const createAction = createTripRequestAction.bind(null, email.id);
+                const inquiryAction = logAsInquiryAction.bind(null, email.id);
+                const discardEmailAction = discardAction.bind(null, email.id);
+                const attachAction = attachToQuoteAction.bind(null, email.id);
 
-                <pre className="mt-3 max-h-48 overflow-y-auto rounded-md bg-muted p-3 text-sm whitespace-pre-wrap">
-                  {email.bodyText}
-                </pre>
+                return (
+                  <div key={email.id} className="rounded-md border border-border p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="font-medium">
+                          {email.fromName ?? email.fromEmail}{" "}
+                          <span className="font-normal text-muted-foreground">
+                            &lt;{email.fromEmail}&gt;
+                          </span>
+                        </p>
+                        {email.replyToEmail && (
+                          <p className="text-sm text-muted-foreground">
+                            Reply-To: {email.replyToEmail}
+                          </p>
+                        )}
+                        <p className="text-sm text-muted-foreground">
+                          {email.subject || "(no subject)"}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm text-muted-foreground">
+                        {email.receivedAt.toLocaleString()}
+                      </span>
+                    </div>
 
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <form action={createAction}>
-                    <Button type="submit" size="sm" variant="outline">
-                      Create Trip Request
-                    </Button>
-                  </form>
-                  <form action={inquiryAction}>
-                    <Button type="submit" size="sm" variant="outline">
-                      Log as Inquiry
-                    </Button>
-                  </form>
-                  <form action={discardEmailAction}>
-                    <Button type="submit" size="sm" variant="outline">
-                      Discard
-                    </Button>
-                  </form>
-                  <form action={attachAction} className="flex items-center gap-2">
-                    <Input
-                      name="quoteNumber"
-                      placeholder="Q-2024-0042"
-                      className="h-8 w-36"
-                    />
-                    <Button type="submit" size="sm" variant="outline">
-                      Attach to Quote
-                    </Button>
-                  </form>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                    {email.classificationReason && (
+                      <p className="mt-2 text-sm text-muted-foreground italic">
+                        AI: {email.classification} ({email.classificationConfidence}) —{" "}
+                        {email.classificationReason}
+                      </p>
+                    )}
+
+                    <pre className="mt-3 max-h-48 overflow-y-auto rounded-md bg-muted p-3 text-sm whitespace-pre-wrap">
+                      {email.bodyText}
+                    </pre>
+
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <form action={createAction}>
+                        <Button type="submit" size="sm" variant="outline">
+                          Create Trip Request
+                        </Button>
+                      </form>
+                      <form action={inquiryAction}>
+                        <Button type="submit" size="sm" variant="outline">
+                          Log as Inquiry
+                        </Button>
+                      </form>
+                      <form action={discardEmailAction}>
+                        <Button type="submit" size="sm" variant="outline">
+                          Discard
+                        </Button>
+                      </form>
+                      <form action={attachAction} className="flex items-center gap-2">
+                        <Input
+                          name="quoteNumber"
+                          placeholder="Q-2024-0042"
+                          className="h-8 w-36"
+                        />
+                        <Button type="submit" size="sm" variant="outline">
+                          Attach to Quote
+                        </Button>
+                      </form>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

@@ -219,13 +219,55 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
 - **Cancelled/declined quotes had no dashboard tab — fixed**: cancelling
   an accepted quote (or a client declining a sent one) moved it out of
   every visible Quoting Queue tab with no way to find it again
-  afterward. Added a combined "Inactive" tab
-  (`components/queue/quote-queue.tsx`) covering both terminal states
-  rather than two separate tabs, per the option already flagged here —
-  low expected volume for either status individually didn't justify
-  splitting them. `QUOTE_ACTION_LABEL` gained `declined`/`cancelled`
-  entries so the list row shows "Declined — view →" / "Cancelled — view
-  →" instead of the generic fallback.
+  afterward. Added a combined "Inactive" status covering both terminal
+  states rather than two separate ones, per the option already flagged
+  here — low expected volume for either status individually didn't
+  justify splitting them. `QUOTE_ACTION_LABEL` gained `declined`/
+  `cancelled` entries so the list row shows "Declined — view →" /
+  "Cancelled — view →" instead of the generic fallback.
+
+  **Follow-up, same day — moved from its own tab into a filter under
+  "All Requests"** (raised directly: "I think inactive should be a
+  filter tab under all requests instead of its own header"). Initially
+  shipped as a seventh top-level `VIEWS` tab, competing for header space
+  with Ready/All/Draft/Sent/Accepted; moved into the existing `STATUS_FILTERS`
+  bar (`components/queue/quote-queue.tsx`) that already toggles
+  Active/Passed under "All Requests" — "Inactive" is a third option
+  there now. Since that filter bar drives the trip-request list
+  normally, but "Inactive" needs to show *quotes* instead, added a
+  `showingInactiveQuotes` flag (`activeView === "all" && statusFilter
+  === "inactive"`) that folds into the existing `isQuoteView` check, so
+  the same quote-rendering/selection code path used by Draft/Sent/
+  Accepted picks it up automatically rather than needing its own
+  branch.
+
+  **Second follow-up, same day — "Needs Confirmation" removed as its
+  own tab too, surfaced on Needs Review instead** (raised directly:
+  "instead of a needs confirmation tab, they should go under needs
+  review, and in the acceptance email there is a notification to the
+  operator that verification is needed" — the operator's already
+  emailed a direct link when a conflict is found at accept time, so a
+  second "needs my attention" tab in the Quoting Queue was redundant
+  with `/inbox/review`, which already exists as the one inbox for
+  things needing a human decision). Removed `pending_confirmation` from
+  `VIEWS`/`QUOTE_VIEWS` entirely — those quotes no longer appear
+  anywhere in the Quoting Queue. `/inbox/review` now fetches them
+  alongside its existing `needs_review` emails and renders a "Bookings
+  needing confirmation" section above the email list, with inline
+  Confirm Booking / Decline actions (a textarea + button, same pattern
+  as the email cards' forms) and a "View quote" link through to the
+  full detail page. The Confirm/Decline logic itself was extracted out
+  of `app/(app)/quotes/[id]/page.tsx`'s page-scoped server actions into
+  two new shared, operator-scoped helpers in `lib/booking-server.ts` —
+  `confirmPendingBookingForOperator(operatorId, quoteId)` and
+  `declinePendingBookingForOperator(operatorId, quoteId, note)` — since
+  both the quote detail page (which still keeps its own Confirm/Decline
+  UI, for acting from the full quote view) and the new Needs Review
+  section now need to trigger the same outcome from different page
+  contexts with different scoping already done. The nav's "Needs
+  Review" unread badge (`app/(app)/layout.tsx`) now counts
+  `pending_confirmation` quotes alongside `needs_review` emails, so it
+  stays the one number that means "something needs you."
 
 - **Arrival time now flags a day change — shipped**: a long or
   eastbound-heavy leg can land the next calendar day, but the `Arrives`

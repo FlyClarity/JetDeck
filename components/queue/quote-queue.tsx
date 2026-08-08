@@ -48,34 +48,40 @@ function FullRouting({ legs }: { legs: RawLeg[] }) {
 
 type QuoteWithTripRequest = Prisma.QuoteGetPayload<{ include: { tripRequest: true } }>;
 
+// pending_confirmation quotes (a conflict found at accept time) don't get
+// their own tab here — the operator's already emailed when one comes in, so
+// they're surfaced for action on /inbox/review alongside everything else
+// waiting on a human decision, not fragmented into a second "needs my
+// attention" tab in the queue too.
 const VIEWS = [
   { key: "ready", label: "Ready to Quote" },
   { key: "all", label: "All Requests" },
   { key: "draft", label: "Draft" },
   { key: "sent", label: "Sent" },
-  { key: "pending_confirmation", label: "Needs Confirmation" },
   { key: "accepted", label: "Accepted" },
-  { key: "inactive", label: "Inactive" },
 ] as const;
 
 // "new" and "scoring" aren't included as filters — scoring runs
 // synchronously right after a trip request is created, so a request is
 // essentially never observed sitting in either state; filtering by them
 // only ever turns up empty. "Ready" is covered by its own top-level tab.
+// "Inactive" (declined/cancelled quotes) lives here too rather than as its
+// own top-level tab, alongside the trip-request-only filters, even though
+// it switches the list over to quotes underneath.
 const STATUS_FILTERS = [
   { key: "active", label: "Active" },
   { key: "passed", label: "Passed" },
+  { key: "inactive", label: "Inactive" },
 ] as const;
 
 type ViewKey = (typeof VIEWS)[number]["key"];
 type StatusFilterKey = (typeof STATUS_FILTERS)[number]["key"];
 
-const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "pending_confirmation", "accepted", "inactive"];
+const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "accepted"];
 
 const QUOTE_ACTION_LABEL: Record<string, string> = {
   draft: "Continue draft →",
   sent: "Sent — view →",
-  pending_confirmation: "Needs your confirmation →",
   accepted: "Accepted — view →",
   declined: "Declined — view →",
   cancelled: "Cancelled — view →",
@@ -156,19 +162,23 @@ export function QuoteQueue({
 
   const draftCount = useMemo(() => quotes.filter((q) => q.status === "draft").length, [quotes]);
 
-  const pendingConfirmationCount = useMemo(
-    () => quotes.filter((q) => q.status === "pending_confirmation").length,
+  const inactiveCount = useMemo(
+    () => quotes.filter((q) => INACTIVE_QUOTE_STATUSES.includes(q.status)).length,
     [quotes]
   );
 
-  const isQuoteView = QUOTE_VIEWS.includes(activeView);
+  // "Inactive" only exists as a filter under "All Requests" (see
+  // STATUS_FILTERS), but it switches the list over to quotes underneath —
+  // same underlying rendering/selection path as the other quote tabs.
+  const showingInactiveQuotes = activeView === "all" && statusFilter === "inactive";
+  const isQuoteView = QUOTE_VIEWS.includes(activeView) || showingInactiveQuotes;
 
   const quoteList = useMemo(
     () =>
-      activeView === "inactive"
+      showingInactiveQuotes
         ? quotes.filter((q) => INACTIVE_QUOTE_STATUSES.includes(q.status))
         : quotes.filter((q) => q.status === activeView),
-    [quotes, activeView]
+    [quotes, activeView, showingInactiveQuotes]
   );
 
   const currentList = useMemo(() => {
@@ -274,11 +284,6 @@ export function QuoteQueue({
                 {view.key === "draft" && draftCount > 0 && (
                   <span className="ml-1.5 text-xs text-muted-foreground">{draftCount}</span>
                 )}
-                {view.key === "pending_confirmation" && pendingConfirmationCount > 0 && (
-                  <span className="ml-1.5 text-xs font-medium text-destructive">
-                    {pendingConfirmationCount}
-                  </span>
-                )}
               </button>
             ))}
           </div>
@@ -301,6 +306,9 @@ export function QuoteQueue({
                     {f.label}
                     {f.key === "passed" && passedCount > 0 && (
                       <span className="ml-1 text-muted-foreground">{passedCount}</span>
+                    )}
+                    {f.key === "inactive" && inactiveCount > 0 && (
+                      <span className="ml-1 text-muted-foreground">{inactiveCount}</span>
                     )}
                   </button>
                 ))}

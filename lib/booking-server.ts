@@ -158,3 +158,54 @@ export async function finalizeBooking(quoteId: string) {
     });
   }
 }
+
+// Shared by both places a pending_confirmation booking gets resolved: the
+// quote detail page and the Needs Review inbox (the operator's already
+// emailed a direct link when the conflict is found, so both surfaces just
+// need to trigger the same outcome). Each does its own operator-scoped
+// lookup rather than trusting a quote object handed in, since callers come
+// from different page contexts with different scoping already done.
+export async function confirmPendingBookingForOperator(operatorId: string, quoteId: string) {
+  const quote = await prisma.quote.findFirst({
+    where: { id: quoteId, operatorId },
+  });
+  if (!quote || quote.status !== "pending_confirmation") return false;
+
+  // The client already legally accepted (terms/IP/timestamp recorded when
+  // they clicked) — this just runs the same finalize pipeline their
+  // acceptance would have triggered automatically if there'd been no
+  // conflict: Trip creation, positioning update, Stripe hold, and the real
+  // confirmation email with wire instructions.
+  await finalizeBooking(quote.id);
+  return true;
+}
+
+export async function declinePendingBookingForOperator(
+  operatorId: string,
+  quoteId: string,
+  note: string
+) {
+  const quote = await prisma.quote.findFirst({
+    where: { id: quoteId, operatorId },
+    include: { operator: true, tripRequest: true },
+  });
+  if (!quote || quote.status !== "pending_confirmation") return false;
+  if (!note.trim()) return false;
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { status: "declined", declinedAt: new Date() },
+  });
+
+  if (quote.tripRequest?.requestorEmail) {
+    await sendEmail({
+      to: quote.tripRequest.requestorEmail,
+      subject: `Unable to confirm — ${quote.quoteNumber}`,
+      html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>We're sorry — we're unable to confirm your booking (${quote.quoteNumber}): ${note}</p><p>Please contact us so we can help find another solution.</p><p>— ${quote.operator.name}</p>`,
+      replyTo: quote.operator.replyToEmail ?? undefined,
+      from: quote.operator.fromEmail,
+      fromName: quote.operator.name,
+    });
+  }
+  return true;
+}
