@@ -14,15 +14,16 @@ import {
 } from "@/lib/itinerary";
 
 // Same-aircraft, overlapping-away-window conflicts against anything already
-// committed to that slot — "accepted" bookings, and other
-// "pending_confirmation" requests still waiting on a decision, so two
-// near-simultaneous requests for the same aircraft/dates both correctly see
-// each other rather than only ever checking against fully-resolved
-// bookings. The actual overlap matching is shared with the live in-builder
-// check (see findConflictingBooking) — it compares each booking's full away
-// window (first leg to last leg), not just exact leg dates, so a multi-day
-// trip's middle days still register as a conflict even with no shared leg
-// date.
+// committed to that slot — "accepted" bookings, "approved" ones still
+// awaiting the client's signature (the operator already said yes, so that
+// slot is effectively spoken for), and "pending_confirmation" requests
+// still waiting on a decision — so two near-simultaneous requests for the
+// same aircraft/dates all correctly see each other rather than only ever
+// checking against fully-resolved bookings. The actual overlap matching is
+// shared with the live in-builder check (see findConflictingBooking) — it
+// compares each booking's full away window (first leg to last leg), not
+// just exact leg dates, so a multi-day trip's middle days still register as
+// a conflict even with no shared leg date.
 export async function findBookingConflict(quote: {
   // Omitted for a not-yet-created quote (e.g. checking availability before
   // creating an internal trip directly) — nothing to exclude in that case.
@@ -35,7 +36,7 @@ export async function findBookingConflict(quote: {
   const others = await prisma.quote.findMany({
     where: {
       aircraftId: quote.aircraftId,
-      status: { in: ["accepted", "pending_confirmation"] },
+      status: { in: ["accepted", "approved", "pending_confirmation"] },
       ...(quote.id ? { id: { not: quote.id } } : {}),
     },
   });
@@ -51,9 +52,10 @@ export async function findBookingConflict(quote: {
 
 // Runs the full "this booking is definitely happening" pipeline: Trip
 // record, aircraft positioning update, Stripe card hold, and the client's
-// real confirmation email (wire instructions + card hold link). Shared by
-// the client's direct accept (no conflict found) and the operator's manual
-// Confirm Booking action (conflict was found, operator resolved it).
+// real confirmation email (wire instructions + card hold link). Only ever
+// called once the client has actually signed (the "I Accept — Book This
+// Charter" step, which only appears after the operator has approved their
+// Request to Book) — see acceptQuote in app/q/[token]/page.tsx.
 export async function finalizeBooking(quoteId: string) {
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
@@ -159,27 +161,48 @@ export async function finalizeBooking(quoteId: string) {
   }
 }
 
-// Shared by both places a pending_confirmation booking gets resolved: the
-// quote detail page and the Needs Review inbox (the operator's already
-// emailed a direct link when the conflict is found, so both surfaces just
-// need to trigger the same outcome). Each does its own operator-scoped
-// lookup rather than trusting a quote object handed in, since callers come
-// from different page contexts with different scoping already done.
+// Shared by both places a pending_confirmation request gets resolved: the
+// quote detail page and the Needs Review inbox. Each does its own
+// operator-scoped lookup rather than trusting a quote object handed in,
+// since callers come from different page contexts with different scoping
+// already done.
+//
+// The client only ever clicked a non-binding "Request to Book" to get here
+// — no terms shown, no signature, nothing legally committed yet — so
+// confirming availability doesn't finalize anything by itself. It moves the
+// quote to "approved" and emails the client a link back to /q/[token],
+// where they now see the real "I Accept — Book This Charter" terms/
+// signature step for the first time.
 export async function confirmPendingBookingForOperator(operatorId: string, quoteId: string) {
   const quote = await prisma.quote.findFirst({
     where: { id: quoteId, operatorId },
+    include: { operator: true, tripRequest: true },
   });
   if (!quote || quote.status !== "pending_confirmation") return false;
 
-  // The client already legally accepted (terms/IP/timestamp recorded when
-  // they clicked) — this just runs the same finalize pipeline their
-  // acceptance would have triggered automatically if there'd been no
-  // conflict: Trip creation, positioning update, Stripe hold, and the real
-  // confirmation email with wire instructions.
-  await finalizeBooking(quote.id);
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { status: "approved", approvedAt: new Date() },
+  });
+
+  const requestorEmail = quote.tripRequest?.requestorEmail;
+  if (requestorEmail) {
+    const appUrl = await getAppUrl();
+    await sendEmail({
+      to: requestorEmail,
+      subject: `Good news — ${quote.quoteNumber} is available!`,
+      html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>We can confirm ${quote.operator.name} has your aircraft available for this trip. Please finalize your booking — review the charter terms and authorize your deposit hold: <a href="${appUrl}/q/${quote.token}">${appUrl}/q/${quote.token}</a></p><p>— ${quote.operator.name}</p>`,
+      replyTo: quote.operator.replyToEmail ?? undefined,
+      from: quote.operator.fromEmail,
+      fromName: quote.operator.name,
+    });
+  }
   return true;
 }
 
+// Declining is valid from either side of the "approved" step — before it
+// (operator reviewing the initial request) or after (operator or
+// circumstances change before the client comes back to sign).
 export async function declinePendingBookingForOperator(
   operatorId: string,
   quoteId: string,
@@ -189,7 +212,7 @@ export async function declinePendingBookingForOperator(
     where: { id: quoteId, operatorId },
     include: { operator: true, tripRequest: true },
   });
-  if (!quote || quote.status !== "pending_confirmation") return false;
+  if (!quote || !["pending_confirmation", "approved"].includes(quote.status)) return false;
   if (!note.trim()) return false;
 
   await prisma.quote.update({

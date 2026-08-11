@@ -245,7 +245,7 @@ export default async function QuotePage({
   const existingBookings = await prisma.quote.findMany({
     where: {
       operatorId: operator.id,
-      status: { in: ["accepted", "pending_confirmation"] },
+      status: { in: ["accepted", "approved", "pending_confirmation"] },
       id: { not: quote.id },
     },
     select: { id: true, quoteNumber: true, aircraftId: true, itinerary: true },
@@ -321,7 +321,11 @@ export default async function QuotePage({
           )}
         </div>
         <span className="rounded-full bg-muted px-2.5 py-1 text-sm font-medium capitalize text-muted-foreground">
-          {quote.status === "pending_confirmation" ? "Pending confirmation" : quote.status}
+          {quote.status === "pending_confirmation"
+            ? "Needs your review"
+            : quote.status === "approved"
+              ? "Approved — awaiting signature"
+              : quote.status}
         </span>
       </div>
 
@@ -364,14 +368,14 @@ export default async function QuotePage({
         <div className="mt-4 flex flex-col gap-3">
           <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm">
             <p className="font-medium">
-              {quote.acceptedByName || quote.tripRequest?.requestorName || "The client"} accepted
-              {quote.acceptedAt && ` on ${quote.acceptedAt.toLocaleString()}`} — awaiting your
-              confirmation
+              {quote.tripRequest?.requestorName || "The client"} requested to book
+              {quote.requestedAt && ` on ${quote.requestedAt.toLocaleString()}`} — needs your
+              review
             </p>
             <p className="mt-1 text-muted-foreground">
-              The client has legally accepted (terms, IP, and timestamp are recorded), but
-              nothing&apos;s been finalized yet — no Trip, no card hold, no confirmation email —
-              until you resolve the conflict below.
+              This is a non-binding request — nothing&apos;s been signed yet. Confirming
+              availability emails the client to review the charter terms and finalize; declining
+              lets them know it&apos;s not available.
             </p>
           </div>
 
@@ -385,7 +389,7 @@ export default async function QuotePage({
           <div className="flex flex-wrap items-center gap-3">
             <form action={confirmPendingBookingWithId}>
               <Button type="submit" size="sm">
-                Confirm Booking
+                Confirm Availability
               </Button>
             </form>
             <details className="text-sm">
@@ -403,6 +407,38 @@ export default async function QuotePage({
               </form>
             </details>
           </div>
+        </div>
+      )}
+
+      {quote.status === "approved" && (
+        <div className="mt-4 flex flex-col gap-3">
+          <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm">
+            <p className="font-medium">
+              Approved{quote.approvedAt && ` on ${quote.approvedAt.toLocaleString()}`} — awaiting
+              the client&apos;s signature
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              They&apos;ve been emailed a link to review the charter terms and authorize their
+              deposit hold. Nothing&apos;s finalized yet.
+            </p>
+          </div>
+
+          <details className="text-sm">
+            <summary className="cursor-pointer text-muted-foreground">
+              Aircraft no longer available after all?
+            </summary>
+            <form action={declinePendingBookingWithId} className="mt-3 flex flex-col gap-2">
+              <Textarea
+                name="declineNote"
+                rows={2}
+                placeholder="Reason — this is sent to the client"
+                required
+              />
+              <Button type="submit" variant="destructive" size="sm" className="self-start">
+                Decline
+              </Button>
+            </form>
+          </details>
         </div>
       )}
 
@@ -552,7 +588,7 @@ export default async function QuotePage({
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}
           defaultBlockTimeBufferHours={operator.defaultBlockTimeBufferHours}
-          isAccepted={quote.status === "accepted" || quote.status === "pending_confirmation"}
+          isAccepted={["pending_confirmation", "approved", "accepted"].includes(quote.status)}
           action={updateQuoteWithId}
           submitLabel="Save Changes"
         />

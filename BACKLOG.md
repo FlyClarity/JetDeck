@@ -2,6 +2,61 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Two-step booking flow — shipped** (raised directly: "I think we need
+  to move the booking process to a two step process"). Previously a
+  single client click ("I Accept — Book This Charter") was both the
+  non-negotiable legal signature *and* the only trigger for an operator
+  availability review, and that review only happened automatically when
+  a same-aircraft conflict was detected — otherwise the booking
+  finalized (Trip, Stripe hold, confirmation email) immediately with no
+  human in the loop at all. Restructured into two steps:
+  1. Client clicks **"Request to Book"** on `/q/[token]` — a plain,
+     non-binding button (no terms shown, no name/signature collected,
+     confirmed directly with the user rather than assumed). Quote moves
+     to `pending_confirmation`, `requestedAt` is set, and the same
+     conflict check runs and gets stored as advisory context
+     (`conflictWarning`) — it's just no longer a hard gate, since the
+     review step is unconditional now regardless of whether a conflict
+     was found.
+  2. Operator reviews on **Needs Review** (reusing the
+     `pending_confirmation` UI/actions already built for the old
+     conflict-only gate — same Confirm/Decline buttons, same shared
+     helpers) and either **declines** (client gets the existing "unable
+     to confirm" email, done) or **confirms availability** — which no
+     longer finalizes anything by itself. It moves the quote to a new
+     `approved` status and emails the client a link back to
+     `/q/[token]`, where they *now* see the real terms/signature step
+     for the first time (`TermsAcceptGate`, unchanged component,
+     unchanged "I Accept — Book This Charter" wording — the E-SIGN/UETA
+     clickwrap moment just moved later in the flow, not away). Signing
+     re-runs the conflict check once more as a safety net (in case
+     something else got booked in the gap between approval and
+     signature) — if a fresh one turns up, it drops back to
+     `pending_confirmation` instead of finalizing, reusing the exact
+     same conflict-branch logic the old single-step flow already had.
+  New `Quote.approved`/`requestedAt`/`approvedAt` fields (migration
+  `20260811170000_quote_two_step_booking`); `confirmPendingBookingForOperator`
+  (`lib/booking-server.ts`) now transitions to `approved` + emails the
+  client instead of calling `finalizeBooking` directly;
+  `declinePendingBookingForOperator`'s guard broadened to accept either
+  `pending_confirmation` or `approved`, since the operator can still back
+  out after approving but before the client signs. Same-aircraft
+  conflict checks (`findBookingConflict`'s own candidate query, and both
+  Quote Builder pages' `existingBookings` fetches) now also treat
+  `approved` bookings as taken, alongside `accepted` and
+  `pending_confirmation` — an approved-but-unsigned booking still
+  represents a real commitment. `approved` quotes fold into the existing
+  "Sent" tab in the Quoting Queue (both are "out to the client, awaiting
+  their action") rather than getting a dedicated tab.
+  Noted in passing, not fixed (pre-existing, not introduced by this
+  pass): the client-facing page has no explicit branch for a
+  `cancelled` quote (post-acceptance operator cancellation) — it falls
+  through to the last conditional branch, which now shows the "Request
+  to Book" button rather than anything cancellation-appropriate. Low
+  practical risk (the `requestToBook` action's own status guard still
+  refuses to act on it), but worth a real "this booking was cancelled"
+  branch next time this file is touched.
+
 - **Manually-added overnight nights dropped on save/reload — fixed**
   (raised directly). Only the combined `Quote.overnightNights` total was
   ever persisted, not the split between auto-computed (from leg date

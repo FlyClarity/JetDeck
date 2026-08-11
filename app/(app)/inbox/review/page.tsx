@@ -165,9 +165,9 @@ export default async function NeedsReviewPage() {
                           </span>
                         </p>
                         <p className="text-sm text-muted-foreground">
-                          {quote.acceptedByName || quote.tripRequest?.requestorName || "The client"}{" "}
-                          accepted{quote.acceptedAt && ` on ${quote.acceptedAt.toLocaleString()}`} —
-                          awaiting your confirmation
+                          {quote.tripRequest?.requestorName || "The client"} requested to book
+                          {quote.requestedAt && ` on ${quote.requestedAt.toLocaleString()}`} —
+                          needs your review
                         </p>
                       </div>
                       <Link
@@ -187,7 +187,7 @@ export default async function NeedsReviewPage() {
                     <div className="mt-4 flex flex-wrap items-center gap-2">
                       <form action={confirmAction}>
                         <Button type="submit" size="sm">
-                          Confirm Booking
+                          Confirm Availability
                         </Button>
                       </form>
                       <details className="text-sm">

@@ -643,13 +643,16 @@ export function QuoteBuilderForm({
           <div className="rounded-md border border-amber-400/50 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
             {locked ? (
               <>
-                <p className="font-medium">This quote has already been accepted by the client.</p>
+                <p className="font-medium">
+                  The client has already taken action on this quote (requested to book, been
+                  approved, or accepted).
+                </p>
                 <button
                   type="button"
                   onClick={() => {
                     if (
                       window.confirm(
-                        "This quote has already been accepted by the client. Are you sure you want to change the pricing?"
+                        "The client has already taken action on this quote. Are you sure you want to change the pricing?"
                       )
                     ) {
                       setUnlocked(true);
@@ -662,8 +665,8 @@ export function QuoteBuilderForm({
               </>
             ) : (
               <p className="font-medium">
-                Pricing unlocked — this quote was already accepted, so double-check any changes
-                before saving.
+                Pricing unlocked — the client has already taken action on this quote, so
+                double-check any changes before saving.
               </p>
             )}
           </div>

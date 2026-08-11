@@ -82,6 +82,7 @@ const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "accepted"];
 const QUOTE_ACTION_LABEL: Record<string, string> = {
   draft: "Continue draft →",
   sent: "Sent — view →",
+  approved: "Approved — awaiting signature →",
   accepted: "Accepted — view →",
   declined: "Declined — view →",
   cancelled: "Cancelled — view →",
@@ -178,13 +179,15 @@ export function QuoteQueue({
   const showingInactiveQuotes = activeView === "all" && statusFilter === "inactive";
   const isQuoteView = QUOTE_VIEWS.includes(activeView) || showingInactiveQuotes;
 
-  const quoteList = useMemo(
-    () =>
-      showingInactiveQuotes
-        ? quotes.filter((q) => INACTIVE_QUOTE_STATUSES.includes(q.status))
-        : quotes.filter((q) => q.status === activeView),
-    [quotes, activeView, showingInactiveQuotes]
-  );
+  const quoteList = useMemo(() => {
+    if (showingInactiveQuotes) return quotes.filter((q) => INACTIVE_QUOTE_STATUSES.includes(q.status));
+    // "approved" (operator confirmed availability, awaiting the client's
+    // signature) folds into the "Sent" tab — both are "out to the client,
+    // awaiting their action" from the operator's point of view, not
+    // distinct enough to warrant a separate tab.
+    if (activeView === "sent") return quotes.filter((q) => q.status === "sent" || q.status === "approved");
+    return quotes.filter((q) => q.status === activeView);
+  }, [quotes, activeView, showingInactiveQuotes]);
 
   const currentList = useMemo(() => {
     if (isQuoteView) return [];

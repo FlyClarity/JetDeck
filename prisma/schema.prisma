@@ -204,15 +204,27 @@ model Quote {
   // Client-facing
   token  String @unique @default(cuid())
   status String @default("draft")
-  // "draft" | "sent" | "pending_confirmation" | "accepted" | "declined" | "expired" | "converted" | "cancelled"
-  // pending_confirmation: client legally accepted (terms/IP/timestamp
-  // recorded) but a same-aircraft/date conflict was found, so nothing else
-  // (Trip, Stripe hold, confirmation email) fires until the operator
-  // resolves it — see lib/booking-server.ts
+  // "draft" | "sent" | "pending_confirmation" | "approved" | "accepted"
+  // | "declined" | "expired" | "converted" | "cancelled"
+  // Two-step booking: client clicks "Request to Book" (non-binding, no
+  // terms/signature yet) -> pending_confirmation, requestedAt set. Operator
+  // reviews (same-aircraft conflict check runs automatically as advisory
+  // context) and either declines, or confirms -> approved, approvedAt set,
+  // client emailed to come finalize. Only then does the client see the
+  // legal "I Accept — Book This Charter" terms/signature step -> accepted
+  // (via finalizeBooking: Trip, Stripe hold, confirmation email). A fresh
+  // conflict check re-runs at that final signature too, as a safety net for
+  // the rare case something else got booked in between operator approval
+  // and client signature — if one turns up, it drops back to
+  // pending_confirmation instead of finalizing. See lib/booking-server.ts.
 
-  sentAt DateTime?
+  sentAt      DateTime?
+  requestedAt DateTime? // client clicked "Request to Book"
+  approvedAt  DateTime? // operator confirmed availability
 
-  // Legal acceptance record
+  // Legal acceptance record — set only at the final "I Accept" signature
+  // step (status approved -> accepted), not at the earlier non-binding
+  // "Request to Book" click.
   acceptedAt        DateTime?
   acceptedByName    String? // name the client typed to confirm they read the terms
   acceptedIp        String?
@@ -221,9 +233,11 @@ model Quote {
 
   declinedAt DateTime?
 
-  // Set when accepting this quote finds another accepted quote on the same
-  // aircraft with overlapping dates — surfaced to the operator so they can
-  // resolve the conflict manually (e.g. cancel one of the two bookings).
+  // Set when requesting to book (or, on the rare re-check, finalizing) finds
+  // another accepted/pending quote on the same aircraft with overlapping
+  // dates — surfaced to the operator as advisory context for their
+  // availability decision, not a hard gate (the review step is now
+  // unconditional either way).
   conflictWarning String?
 
   // Set when the operator cancels an already-accepted booking (aircraft/crew

@@ -19,11 +19,57 @@ async function getQuoteByToken(token: string) {
   });
 }
 
-async function acceptQuote(token: string, formData: FormData) {
+// Step 1 of 2: a non-binding "I'd like to book this" click — no terms shown,
+// no signature, nothing legally committed yet. Just tells the operator to
+// go check availability. The conflict check still runs here so it's ready
+// as advisory context the moment the operator looks at it, but it no
+// longer branches the outcome — every request goes to pending_confirmation
+// either way, since the operator review is now unconditional.
+async function requestToBook(token: string) {
   "use server";
 
   const quote = await getQuoteByToken(token);
   if (!quote || quote.status !== "sent") return;
+  if (quote.validUntil < new Date()) return;
+
+  const conflictWarning = await findBookingConflict(quote);
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { status: "pending_confirmation", requestedAt: new Date(), conflictWarning },
+  });
+
+  if (quote.operator.notifyEmail) {
+    const appUrl = await getAppUrl();
+    const requestorName = quote.tripRequest?.requestorName ?? "A client";
+    await sendEmail({
+      to: quote.operator.notifyEmail,
+      subject: `New booking request — Quote ${quote.quoteNumber}`,
+      html: `<p>${requestorName} requested to book quote ${quote.quoteNumber} (${formatCurrency(quote.total)}).</p>${
+        conflictWarning
+          ? `<p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p>`
+          : ""
+      }<p>Review and confirm or decline availability: <a href="${appUrl}/quotes/${quote.id}">${appUrl}/quotes/${quote.id}</a></p>`,
+      replyTo: quote.tripRequest?.requestorEmail,
+      from: quote.operator.fromEmail,
+      fromName: quote.operator.name,
+    });
+  }
+
+  redirect(`/q/${token}`);
+}
+
+// Step 2 of 2: the real legal acceptance — only reachable once the operator
+// has approved the request (status "approved"). Records the clickwrap
+// moment (terms agreement, deposit authorization — E-SIGN/UETA) and, unless
+// a fresh conflict has appeared since approval (rare — something else got
+// booked in the gap between the operator's approval and the client coming
+// back to sign), finalizes the booking immediately.
+async function acceptQuote(token: string, formData: FormData) {
+  "use server";
+
+  const quote = await getQuoteByToken(token);
+  if (!quote || quote.status !== "approved") return;
   if (quote.validUntil < new Date()) return;
 
   const acceptedByName = String(formData.get("acceptedByName") ?? "").trim() || null;
@@ -37,11 +83,6 @@ async function acceptQuote(token: string, formData: FormData) {
     : null;
   const acceptedAt = new Date();
 
-  // The legal acceptance (terms agreement, deposit authorization) is
-  // recorded right here regardless of what happens next — that's the
-  // clickwrap moment (E-SIGN/UETA), an operational question about aircraft
-  // availability shouldn't gate it. A conflict only determines whether the
-  // booking finalizes immediately or waits on the operator to resolve it.
   const conflictWarning = await findBookingConflict(quote);
 
   await prisma.quote.update({
@@ -67,7 +108,7 @@ async function acceptQuote(token: string, formData: FormData) {
       await sendEmail({
         to: requestorEmail,
         subject: `Confirming availability — ${quote.quoteNumber}`,
-        html: `<p>Hi ${requestorName},</p><p>Thanks for accepting quote ${quote.quoteNumber} — we're confirming aircraft availability for your dates and will follow up shortly with final confirmation.</p><p>— ${quote.operator.name}</p>`,
+        html: `<p>Hi ${requestorName},</p><p>Thanks for signing quote ${quote.quoteNumber} — we're re-confirming aircraft availability for your dates and will follow up shortly with final confirmation.</p><p>— ${quote.operator.name}</p>`,
         replyTo: quote.operator.replyToEmail ?? undefined,
         from: quote.operator.fromEmail,
         fromName: quote.operator.name,
@@ -78,7 +119,7 @@ async function acceptQuote(token: string, formData: FormData) {
       await sendEmail({
         to: quote.operator.notifyEmail,
         subject: `⚠️ Booking conflict — Quote ${quote.quoteNumber} needs your confirmation`,
-        html: `<p>${acceptedByName} (${requestorName}) accepted quote ${quote.quoteNumber} (${formatCurrency(quote.total)}), but a conflict was found:</p><p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p><p>Review and confirm or decline from the <a href="${appUrl}/quotes/${quote.id}">quote detail page</a> — nothing has been finalized with the client yet.</p>`,
+        html: `<p>${acceptedByName} (${requestorName}) signed quote ${quote.quoteNumber} (${formatCurrency(quote.total)}), but a new conflict was found since you approved it:</p><p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p><p>Review and confirm or decline from the <a href="${appUrl}/quotes/${quote.id}">quote detail page</a> — nothing has been finalized with the client yet.</p>`,
         replyTo: requestorEmail,
         from: quote.operator.fromEmail,
         fromName: quote.operator.name,
@@ -95,7 +136,7 @@ async function declineQuote(token: string) {
   "use server";
 
   const quote = await getQuoteByToken(token);
-  if (!quote || quote.status !== "sent") return;
+  if (!quote || !["sent", "approved"].includes(quote.status)) return;
 
   await prisma.quote.update({
     where: { id: quote.id },
@@ -202,12 +243,13 @@ export default async function ClientQuotePage({
     preTaxSubtotal
   );
 
-  const isExpired = quote.status === "sent" && quote.validUntil < new Date();
-  const pendingDecision = quote.status === "sent" && !isExpired;
+  const isExpired = ["sent", "approved"].includes(quote.status) && quote.validUntil < new Date();
+  const pendingDecision = ["sent", "approved"].includes(quote.status) && !isExpired;
   const daysRemaining = Math.ceil(
     (quote.validUntil.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)
   );
 
+  const requestToBookWithToken = requestToBook.bind(null, token);
   const acceptQuoteWithToken = acceptQuote.bind(null, token);
   const declineQuoteWithToken = declineQuote.bind(null, token);
   const requestChangesWithToken = requestChanges.bind(null, token);
@@ -218,6 +260,34 @@ export default async function ClientQuotePage({
       ? `${quote.brokeredAircraft.make ?? ""} ${quote.brokeredAircraft.model ?? ""}`.trim() ||
         "Aircraft to be confirmed"
       : "Aircraft to be confirmed";
+
+  // Shared by both decision-pending states ("sent", before requesting, and
+  // "approved", before signing) — the client can back out or ask for
+  // changes at either point.
+  const requestChangesOrDecline = (
+    <details className="text-sm text-muted-foreground">
+      <summary className="cursor-pointer">Need changes, or can&apos;t book as-is?</summary>
+      <form action={requestChangesWithToken} className="mt-3 flex flex-col gap-2">
+        <Textarea
+          name="message"
+          rows={3}
+          placeholder="Let us know what you'd like to change"
+          required
+        />
+        <Button type="submit" variant="outline" size="sm" className="self-start">
+          Send Request
+        </Button>
+      </form>
+      <form action={declineQuoteWithToken} className="mt-3">
+        <button
+          type="submit"
+          className="text-sm text-muted-foreground underline underline-offset-4 hover:text-destructive"
+        >
+          Decline this quote
+        </button>
+      </form>
+    </details>
+  );
 
   return (
     <div className="min-h-screen bg-muted/20">
@@ -242,8 +312,10 @@ export default async function ClientQuotePage({
               {isExpired
                 ? "Expired"
                 : quote.status === "pending_confirmation"
-                  ? "Confirming"
-                  : quote.status}
+                  ? "Confirming availability"
+                  : quote.status === "approved"
+                    ? "Ready to finalize"
+                    : quote.status}
             </span>
           </div>
 
@@ -338,7 +410,7 @@ export default async function ClientQuotePage({
           <p className="mt-6 text-sm text-muted-foreground">
             Valid until {quote.validUntil.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
             {!isExpired &&
-              quote.status === "sent" &&
+              ["sent", "approved"].includes(quote.status) &&
               (daysRemaining > 0
                 ? ` — ${daysRemaining} day${daysRemaining === 1 ? "" : "s"} remaining`
                 : " — expires today")}
@@ -362,10 +434,10 @@ export default async function ClientQuotePage({
             </div>
           ) : quote.status === "pending_confirmation" ? (
             <div className="mt-6 rounded-md border border-accent/40 bg-accent/10 p-4 text-sm">
-              <p className="font-medium">Confirming your booking</p>
+              <p className="font-medium">Confirming availability</p>
               <p className="mt-1 text-muted-foreground">
-                Thanks for accepting — we&apos;re confirming aircraft availability for your dates
-                and will follow up shortly with final confirmation.
+                Thanks for your request — we&apos;re confirming aircraft availability for your
+                dates and will follow up shortly.
               </p>
             </div>
           ) : quote.status === "declined" ? (
@@ -376,36 +448,35 @@ export default async function ClientQuotePage({
             <div className="mt-6 rounded-md border border-border p-4 text-sm text-muted-foreground">
               This quote has expired. Contact {operator.name} for an updated quote.
             </div>
-          ) : (
+          ) : quote.status === "approved" ? (
             <div className="mt-8 flex flex-col gap-4 border-t border-border pt-6">
+              <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm">
+                <p className="font-medium">Good news — your aircraft is available!</p>
+                <p className="mt-1 text-muted-foreground">
+                  Review the charter terms below and sign to finalize your booking.
+                </p>
+              </div>
               <TermsAcceptGate
                 termsText={operator.termsText}
                 depositPercent={operator.depositPercent}
                 action={acceptQuoteWithToken}
               />
-
-              <details className="text-sm text-muted-foreground">
-                <summary className="cursor-pointer">Need changes, or can&apos;t accept as-is?</summary>
-                <form action={requestChangesWithToken} className="mt-3 flex flex-col gap-2">
-                  <Textarea
-                    name="message"
-                    rows={3}
-                    placeholder="Let us know what you'd like to change"
-                    required
-                  />
-                  <Button type="submit" variant="outline" size="sm" className="self-start">
-                    Send Request
+              {requestChangesOrDecline}
+            </div>
+          ) : (
+            <div className="mt-8 flex flex-col gap-4 border-t border-border pt-6">
+              <div className="flex flex-col gap-2">
+                <p className="text-sm text-muted-foreground">
+                  Requesting to book doesn&apos;t charge or commit you yet — we&apos;ll confirm
+                  aircraft availability and follow up before anything is finalized.
+                </p>
+                <form action={requestToBookWithToken}>
+                  <Button type="submit" size="lg" className="w-full">
+                    Request to Book
                   </Button>
                 </form>
-                <form action={declineQuoteWithToken} className="mt-3">
-                  <button
-                    type="submit"
-                    className="text-sm text-muted-foreground underline underline-offset-4 hover:text-destructive"
-                  >
-                    Decline this quote
-                  </button>
-                </form>
-              </details>
+              </div>
+              {requestChangesOrDecline}
             </div>
           )}
 

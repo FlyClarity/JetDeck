@@ -265,7 +265,10 @@ export default async function NewQuotePage({
   // legs — no round-trip needed since the comparison itself is pure (see
   // findConflictingBooking).
   const existingBookings = await prisma.quote.findMany({
-    where: { operatorId: operator.id, status: { in: ["accepted", "pending_confirmation"] } },
+    where: {
+      operatorId: operator.id,
+      status: { in: ["accepted", "approved", "pending_confirmation"] },
+    },
     select: { id: true, quoteNumber: true, aircraftId: true, itinerary: true },
   });
 
