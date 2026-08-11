@@ -192,7 +192,8 @@ model Quote {
   aiPriceSuggestion Float?
   aiPriceReasoning  String?
 
-  internalNotes String?
+  internalNotes String? // operator-only, never shown to the client
+  clientNotes   String? // shown on the client-facing quote page (/q/[token])
   validUntil    DateTime
 
   // Non-revenue trips created directly (bypassing the client quoting

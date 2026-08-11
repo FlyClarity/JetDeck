@@ -205,6 +205,7 @@ async function createQuote(tripRequestId: string, formData: FormData) {
       total,
       depositAmount: total * operator.depositPercent,
       internalNotes: String(formData.get("internalNotes") ?? "") || null,
+      clientNotes: String(formData.get("clientNotes") ?? "") || null,
       validUntil: new Date(validUntil),
       createdBy: userId,
     },
@@ -385,6 +386,7 @@ export default async function NewQuotePage({
             discount: 0,
             discountNote: "",
             internalNotes: "",
+            clientNotes: "",
             validUntil: defaultValidUntil(),
           }}
           priceSuggestionPromise={priceSuggestionPromise}

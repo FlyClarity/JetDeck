@@ -2,6 +2,30 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Manually-added overnight nights dropped on save/reload — fixed**
+  (raised directly). Only the combined `Quote.overnightNights` total was
+  ever persisted, not the split between auto-computed (from leg date
+  gaps) and manually-added "extra" nights — reopening a saved quote
+  always reset the extra-nights input to 0 (a documented known gap),
+  which looked like the manual addition had silently vanished, and
+  resaving from there would actually drop it from the stored total for
+  real. Fixed by adding `autoNightsAwayOf()` (`lib/itinerary.ts`, same
+  gap-between-consecutive-revenue-legs math the Quote Builder already
+  runs live, just against a saved itinerary instead of live leg state)
+  and using it to back out the correct split on reload:
+  `extraNightsAway = max(0, overnightNights - autoNightsAwayOf(itinerary))`
+  in `app/(app)/quotes/[id]/page.tsx`.
+
+- **Client-visible notes on quotes — shipped** (raised directly: "need a
+  way to add notes for the client to see on the quote"). New
+  `Quote.clientNotes` field (migration
+  `20260811160000_quote_client_notes`), distinct from the existing
+  `internalNotes` (operator-only, never shown to the client) — a
+  "Notes for client" textarea in the Quote Builder, saved by both
+  `createQuote`/`updateQuote`, and rendered in its own "Notes" section
+  on `/q/[token]` (only when non-empty) between the itinerary and
+  pricing sections.
+
 - **Dashboard was pulling unbounded data on every load and every poll —
   fixed** (raised directly after hitting Neon's data-transfer/egress
   limit): `DashboardPage`'s two queries

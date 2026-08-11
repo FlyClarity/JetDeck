@@ -281,6 +281,15 @@ export default async function ClientQuotePage({
             </p>
           </section>
 
+          {quote.clientNotes && (
+            <section className="mt-6">
+              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Notes
+              </h2>
+              <p className="mt-2 text-sm whitespace-pre-wrap">{quote.clientNotes}</p>
+            </section>
+          )}
+
           <section className="mt-6">
             <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Pricing

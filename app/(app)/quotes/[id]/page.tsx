@@ -10,7 +10,7 @@ import {
   declinePendingBookingForOperator,
 } from "@/lib/booking-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
-import { revenueLegsOf, legDate } from "@/lib/itinerary";
+import { revenueLegsOf, legDate, autoNightsAwayOf } from "@/lib/itinerary";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { OriginalRequestPanel } from "@/components/quote/original-request-panel";
@@ -120,6 +120,7 @@ async function updateQuote(id: string, formData: FormData) {
       total,
       depositAmount: total * scoped.operator.depositPercent,
       internalNotes: String(formData.get("internalNotes") ?? "") || null,
+      clientNotes: String(formData.get("clientNotes") ?? "") || null,
       validUntil: validUntil ? new Date(validUntil) : quote.validUntil,
     },
   });
@@ -531,10 +532,12 @@ export default async function QuotePage({
             hourlyRate: quote.hourlyRate,
             repoRate: quote.repoRate,
             returnsToHomeBase: quote.returnsToHomeBase,
-            // Nights are recomputed from the reloaded legs' dates below; we
-            // only stored the combined total at save time, not the auto vs.
-            // manual split, so "extra" resets to 0 on reload.
-            extraNightsAway: 0,
+            // Only the combined total is stored (Quote.overnightNights) —
+            // split it back into auto (from the reloaded legs' own dates)
+            // vs. manually-added extra so a manual addition doesn't
+            // silently disappear (and get lost for real on the next save)
+            // when reopening an existing quote.
+            extraNightsAway: Math.max(0, quote.overnightNights - autoNightsAwayOf(quote.itinerary)),
             landingFees: quote.landingFees,
             handlingFees: quote.handlingFees,
             additionalFees: (quote.additionalFees as { label: string; amount: number }[]) ?? [],
@@ -542,6 +545,7 @@ export default async function QuotePage({
             discount: quote.discount,
             discountNote: quote.discountNote ?? "",
             internalNotes: quote.internalNotes ?? "",
+            clientNotes: quote.clientNotes ?? "",
             validUntil: quote.validUntil.toISOString().slice(0, 10),
           }}
           priceSuggestionPromise={Promise.resolve(null)}

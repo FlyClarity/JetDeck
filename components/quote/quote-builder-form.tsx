@@ -72,6 +72,7 @@ export type QuoteBuilderInitialValues = {
   discount: number;
   discountNote: string;
   internalNotes: string;
+  clientNotes: string;
   validUntil: string;
 };
 
@@ -1108,6 +1109,17 @@ export function QuoteBuilderForm({
             rows={3}
             defaultValue={initialValues.internalNotes}
             placeholder="Not visible to the client"
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="clientNotes">Notes for client</Label>
+          <Textarea
+            id="clientNotes"
+            name="clientNotes"
+            rows={3}
+            defaultValue={initialValues.clientNotes}
+            placeholder="Shown on the client's quote page — e.g. catering, ground transport, special instructions"
           />
         </div>
 

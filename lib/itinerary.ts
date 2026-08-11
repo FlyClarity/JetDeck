@@ -1,3 +1,5 @@
+import { nightsBetween } from "@/lib/geo";
+
 export type StoredLeg = {
   billAs?: string;
   depAirport?: string | null;
@@ -34,6 +36,22 @@ export function legDate(leg: StoredLeg): string {
 export function legTimeLabel(leg: StoredLeg): string {
   const dep = leg.depTimeTBD || !leg.depTime ? "TBD" : leg.depTime;
   return leg.arrTime ? `Departs ${dep} · Arrives ${leg.arrTime}` : `Departs ${dep}`;
+}
+
+// Same gap-between-consecutive-revenue-legs math the Quote Builder uses live
+// (see autoNightsAway in quote-builder-form.tsx), but computed from a saved
+// itinerary instead of live leg state — used to split a saved
+// Quote.overnightNights total back into its auto vs. manually-added-extra
+// portions on reload, since only the combined total gets persisted.
+export function autoNightsAwayOf(itinerary: unknown): number {
+  const legs = revenueLegsOf(itinerary);
+  let nights = 0;
+  for (let i = 0; i < legs.length - 1; i++) {
+    const start = legDateIso(legs[i]);
+    const end = legDateIso(legs[i + 1]);
+    if (start && end) nights += nightsBetween(start, end);
+  }
+  return nights;
 }
 
 export function routeAndDateText(itinerary: unknown) {
