@@ -84,15 +84,26 @@ export default async function DashboardPage() {
   const operator = await getCurrentOperator();
   if (!operator) return null;
 
+  // Capped rather than unbounded — this fetches on every page load and every
+  // 30s dashboard poll (see quote-queue.tsx), so without a limit the payload
+  // (and Neon data-transfer usage) grows forever as history accumulates,
+  // even though the queue's tabs only ever need recent/active items in
+  // practice. 500 is generous headroom over realistic day-to-day volume;
+  // revisit with real pagination if an operator's active (non-passed,
+  // non-terminal) volume ever approaches it.
+  const RECENT_LIMIT = 500;
+
   const tripRequests = await prisma.tripRequest.findMany({
     where: { operatorId: operator.id },
     orderBy: { createdAt: "desc" },
+    take: RECENT_LIMIT,
   });
 
   const quotes = await prisma.quote.findMany({
     where: { operatorId: operator.id },
     include: { tripRequest: true },
     orderBy: { createdAt: "desc" },
+    take: RECENT_LIMIT,
   });
 
   return (

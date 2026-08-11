@@ -2,6 +2,28 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Dashboard was pulling unbounded data on every load and every poll —
+  fixed** (raised directly after hitting Neon's data-transfer/egress
+  limit): `DashboardPage`'s two queries
+  (`prisma.tripRequest.findMany`/`prisma.quote.findMany`, both scoped
+  only by `operatorId`) had no `take` limit at all — every page load,
+  and every 30s dashboard poll, fetched the operator's *entire* history
+  of trip requests and quotes, growing without bound as more accumulate
+  (thousands of `passed` trip requests over time, for instance). Capped
+  both to the 500 most recent (`RECENT_LIMIT` in
+  `app/(app)/dashboard/page.tsx`) — comfortably more than any tab
+  realistically needs day-to-day, but no longer unbounded. Also
+  lengthened the dashboard's `router.refresh()` poll interval
+  (`components/queue/quote-queue.tsx`) from 30s to 2 minutes, since it
+  re-fetches that same full payload on every tick — a tighter interval
+  directly multiplies transfer usage per open tab without meaningfully
+  improving freshness for a sales queue.
+  Not done: real pagination/an archive view for very old records — the
+  500 cap is a stopgap, not a fix for the underlying "all filtering
+  happens client-side over the full fetched set" design once an
+  operator's genuinely *active* (non-terminal) volume approaches it.
+  Worth revisiting if that happens in practice.
+
 - **"Route unknown" on internal/owner trips — fixed**: the quote detail
   page header, the dashboard queue list row, and the queue side pane all
   computed the route summary from `quote.tripRequest.legs`, which is

@@ -145,8 +145,13 @@ export function QuoteQueue({
   // trip requests should show up without the operator remembering to hit
   // refresh. router.refresh() re-fetches this page's server data in place;
   // it doesn't reset component state (selected item, active tab, etc.).
+  // 2 minutes rather than 30s — this refetches the operator's full trip
+  // request/quote list every time (see dashboard/page.tsx), so a tighter
+  // interval directly multiplies Neon data-transfer usage for every tab
+  // left open, without meaningfully improving how "live" the queue feels
+  // for a sales queue (as opposed to, say, a chat).
   useEffect(() => {
-    const interval = setInterval(() => router.refresh(), 30000);
+    const interval = setInterval(() => router.refresh(), 120000);
     return () => clearInterval(interval);
   }, [router]);
 
