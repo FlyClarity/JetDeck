@@ -624,13 +624,43 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   NBAA Air Mail, since nothing can forward mail to an address that
   doesn't resolve anywhere yet.
 
-- **Aircraft photos + expanded amenities** (raised after Step 5): Fleet
-  currently only tracks `hasWifi` as a boolean. Eventually needs:
-  - Photo upload/gallery per aircraft (Vercel Blob is the natural fit
-    since we're already on Vercel)
-  - Amenities as a flexible list (e.g. JSON array like
-    `["wifi", "galley", "lavatory", "flat_screen"]`) rather than one
-    boolean column per amenity
+- **Aircraft photos + expanded amenities — shipped**: `Aircraft.hasWifi`
+  (a single boolean) replaced with `photos String[]` and
+  `amenities String[]` (migration
+  `20260812120000_aircraft_photos_amenities`, backfilling `hasWifi: true`
+  aircraft to `amenities: ["wifi"]` before dropping the column). Managed
+  entirely in the Fleet section:
+  - `/fleet/[id]` (edit page): a photo gallery with per-photo Remove,
+    plus an upload form — new `uploadPhoto`/`removePhoto` server actions
+    using `@vercel/blob`'s `put()`/`del()` (`access: "public"`, since
+    the client-facing quote page that displays them has no auth session
+    at all). Basic guardrails: image-mimetype check, 8MB cap. Upload
+    failures (most likely a missing `BLOB_READ_WRITE_TOKEN`) are caught
+    and logged rather than crashing the page — same graceful-degradation
+    pattern used everywhere else an external service's credentials might
+    not be configured yet (Resend, Stripe, Postmark).
+  - `/fleet/new` and `/fleet/[id]`: a checkbox grid against a new
+    `AIRCRAFT_AMENITIES` list in `lib/aircraft.ts` (wifi, galley,
+    lavatory, flat-screen displays, leather seating, berthing, pet
+    friendly, wheelchair accessible), replacing the single Wi-Fi
+    checkbox. Photo upload isn't offered on `/fleet/new` — the aircraft
+    needs to exist first (nothing to attach a blob to yet) — the create
+    form says as much and points to the edit page afterward.
+  - `/fleet` (list page): a small thumbnail per row from the aircraft's
+    first photo, a plain placeholder box when there isn't one yet.
+  Rendered on the client-facing quote page (`/q/[token]`) in a new
+  "Aircraft" section — a horizontally-scrolling photo strip plus amenity
+  badges — shown only when the aircraft actually has photos or
+  amenities set, and only for owned-fleet aircraft (`quote.aircraft`);
+  brokered third-party aircraft (`BrokeredAircraft`) don't have a photo/
+  amenity model yet, out of scope for this pass.
+  Not tested live — this sandbox has no `BLOB_READ_WRITE_TOKEN`, same
+  limitation as everywhere else external-service-related in this
+  project. Before trusting this unsupervised: in the Vercel dashboard,
+  add a Blob store to the project (Storage tab) — this auto-populates
+  `BLOB_READ_WRITE_TOKEN` as an env var — then upload a photo on an
+  existing aircraft's edit page and confirm it appears there and on that
+  aircraft's quotes' `/q/[token]` pages.
 
 - **In-app calendar view** (raised after Step 6): a calendar grid of
   trips inside JetDeck itself — organized by date + tail for

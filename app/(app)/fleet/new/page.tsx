@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AIRCRAFT_CATEGORIES } from "@/lib/aircraft";
+import { AIRCRAFT_CATEGORIES, AIRCRAFT_AMENITIES } from "@/lib/aircraft";
 
 async function createAircraft(formData: FormData) {
   "use server";
@@ -45,7 +45,7 @@ async function createAircraft(formData: FormData) {
       cruiseSpeedKts: formData.get("cruiseSpeedKts")
         ? Number(formData.get("cruiseSpeedKts"))
         : null,
-      hasWifi: formData.get("hasWifi") === "on",
+      amenities: formData.getAll("amenities").map(String),
     },
   });
 
@@ -130,14 +130,27 @@ export default async function NewAircraftPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <input
-            id="hasWifi"
-            name="hasWifi"
-            type="checkbox"
-            className="size-4 rounded border-input"
-          />
-          <Label htmlFor="hasWifi">Has Wi-Fi</Label>
+        <div className="flex flex-col gap-2">
+          <Label>Amenities</Label>
+          <div className="grid grid-cols-2 gap-2">
+            {AIRCRAFT_AMENITIES.map((a) => (
+              <div key={a.value} className="flex items-center gap-2">
+                <input
+                  id={`amenity-${a.value}`}
+                  name="amenities"
+                  type="checkbox"
+                  value={a.value}
+                  className="size-4 rounded border-input"
+                />
+                <Label htmlFor={`amenity-${a.value}`} className="font-normal">
+                  {a.label}
+                </Label>
+              </div>
+            ))}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Photos can be added once the aircraft is saved.
+          </p>
         </div>
 
         <Button type="submit" className="self-start">

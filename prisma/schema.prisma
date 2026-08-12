@@ -74,11 +74,18 @@ model Aircraft {
   hourlyRate     Float
   repoRate       Float? // if different from hourly (often discounted)
   minHoursPerDay Float    @default(2.0)
-  hasWifi        Boolean  @default(false)
   rangeNm        Int?
   cruiseSpeedKts Float? // true cruise airspeed — manufacturer spec, entered once per aircraft; drives flight-time estimation
   status         String   @default("active")
   createdAt      DateTime @default(now())
+
+  // Photo gallery (Vercel Blob URLs, public access) and a flexible amenity
+  // list (see AIRCRAFT_AMENITIES in lib/aircraft.ts) — replaces the old
+  // single hasWifi boolean, which didn't scale to "what's actually on this
+  // plane" for the client quote page. Managed in the Fleet section, shown
+  // to the client on /q/[token].
+  photos    String[] @default([])
+  amenities String[] @default([])
 
   quotes Quote[]
 }

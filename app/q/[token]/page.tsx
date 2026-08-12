@@ -8,6 +8,7 @@ import { paxCount } from "@/lib/queue";
 import { getAppUrl } from "@/lib/url";
 import { findBookingConflict, finalizeBooking } from "@/lib/booking-server";
 import { revenueLegsOf, legDate, legTimeLabel } from "@/lib/itinerary";
+import { amenityLabel } from "@/lib/aircraft";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
@@ -352,6 +353,39 @@ export default async function ClientQuotePage({
               {pax !== null && ` · ${pax} passengers`}
             </p>
           </section>
+
+          {quote.aircraft && (quote.aircraft.photos.length > 0 || quote.aircraft.amenities.length > 0) && (
+            <section className="mt-6">
+              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Aircraft
+              </h2>
+              {quote.aircraft.photos.length > 0 && (
+                <div className="mt-2 flex gap-2 overflow-x-auto">
+                  {quote.aircraft.photos.map((url) => (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={url}
+                      src={url}
+                      alt={aircraftLabel}
+                      className="h-32 w-48 shrink-0 rounded-md border border-border object-cover"
+                    />
+                  ))}
+                </div>
+              )}
+              {quote.aircraft.amenities.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {quote.aircraft.amenities.map((a) => (
+                    <span
+                      key={a}
+                      className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground"
+                    >
+                      {amenityLabel(a)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {quote.clientNotes && (
             <section className="mt-6">

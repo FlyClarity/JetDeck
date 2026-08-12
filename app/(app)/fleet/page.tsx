@@ -47,6 +47,7 @@ export default async function FleetPage() {
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-border text-muted-foreground">
+                <th className="py-2 pr-4 font-medium" />
                 <th className="py-2 pr-4 font-medium">Tail</th>
                 <th className="py-2 pr-4 font-medium">Aircraft</th>
                 <th className="py-2 pr-4 font-medium">Category</th>
@@ -60,6 +61,18 @@ export default async function FleetPage() {
             <tbody>
               {aircraft.map((a) => (
                 <tr key={a.id} className="border-b border-border last:border-0">
+                  <td className="py-3 pr-4">
+                    {a.photos[0] ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={a.photos[0]}
+                        alt=""
+                        className="h-10 w-16 rounded object-cover"
+                      />
+                    ) : (
+                      <div className="h-10 w-16 rounded bg-muted" />
+                    )}
+                  </td>
                   <td className="py-3 pr-4 font-medium">{a.tailNumber}</td>
                   <td className="py-3 pr-4">
                     {a.make} {a.model}
