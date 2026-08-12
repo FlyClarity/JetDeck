@@ -117,10 +117,8 @@ async function uploadPhotos(
     uploadedUrls = blobs.map((b) => b.url);
   } catch (err) {
     console.error("Failed to upload aircraft photo(s)", err);
-    return {
-      error:
-        "Upload failed — make sure a Blob store is connected to this project (Vercel dashboard → Storage → Blob) and BLOB_READ_WRITE_TOKEN is set, then redeploy.",
-    };
+    const detail = err instanceof Error ? err.message : String(err);
+    return { error: `Upload failed: ${detail}` };
   }
 
   await prisma.aircraft.update({
