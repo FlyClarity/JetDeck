@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AIRCRAFT_CATEGORIES, AIRCRAFT_STATUSES, AIRCRAFT_AMENITIES } from "@/lib/aircraft";
+import { AircraftPhotoManager } from "@/components/fleet/aircraft-photo-manager";
 
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 
@@ -80,35 +81,55 @@ async function deleteAircraft(id: string) {
   redirect("/fleet");
 }
 
-async function uploadPhoto(id: string, formData: FormData) {
+// Accepts multiple files at once (formData.getAll — the <input> has
+// `multiple`). Errors are returned to the client component instead of just
+// logged — a silent failure here previously left the operator with no way
+// to tell "nothing happened" apart from "it worked," which is exactly what
+// happened when BLOB_READ_WRITE_TOKEN wasn't hooked up yet.
+async function uploadPhotos(
+  id: string,
+  _prevState: { error: string } | null,
+  formData: FormData
+): Promise<{ error: string } | null> {
   "use server";
 
   const operatorId = await getScopedOperatorId();
-  if (!operatorId) return;
+  if (!operatorId) return { error: "Not signed in." };
 
   const existing = await prisma.aircraft.findFirst({ where: { id, operatorId } });
-  if (!existing) return;
+  if (!existing) return { error: "Aircraft not found." };
 
-  const file = formData.get("photo");
-  if (!(file instanceof File) || file.size === 0) return;
-  if (!file.type.startsWith("image/") || file.size > MAX_PHOTO_BYTES) return;
+  const files = formData
+    .getAll("photos")
+    .filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) return { error: "Choose at least one photo." };
 
+  const invalid = files.find((f) => !f.type.startsWith("image/") || f.size > MAX_PHOTO_BYTES);
+  if (invalid) return { error: `"${invalid.name}" isn't an image under 8MB.` };
+
+  let uploadedUrls: string[];
   try {
-    const blob = await put(`aircraft/${id}/${randomUUID()}-${file.name}`, file, {
-      access: "public",
-    });
-    await prisma.aircraft.update({
-      where: { id },
-      data: { photos: { push: blob.url } },
-    });
+    const blobs = await Promise.all(
+      files.map((file) =>
+        put(`aircraft/${id}/${randomUUID()}-${file.name}`, file, { access: "public" })
+      )
+    );
+    uploadedUrls = blobs.map((b) => b.url);
   } catch (err) {
-    // Most likely BLOB_READ_WRITE_TOKEN isn't configured yet (same
-    // graceful-degradation pattern as Resend/Stripe elsewhere) — log and
-    // move on rather than crashing the page.
-    console.error("Failed to upload aircraft photo — check BLOB_READ_WRITE_TOKEN", err);
+    console.error("Failed to upload aircraft photo(s)", err);
+    return {
+      error:
+        "Upload failed — make sure a Blob store is connected to this project (Vercel dashboard → Storage → Blob) and BLOB_READ_WRITE_TOKEN is set, then redeploy.",
+    };
   }
 
+  await prisma.aircraft.update({
+    where: { id },
+    data: { photos: { push: uploadedUrls } },
+  });
+
   revalidatePath(`/fleet/${id}`);
+  return null;
 }
 
 async function removePhoto(id: string, url: string) {
@@ -134,6 +155,26 @@ async function removePhoto(id: string, url: string) {
   revalidatePath(`/fleet/${id}`);
 }
 
+// Photos display in array order, and the first one doubles as the cover
+// (fleet list thumbnail, first image on the client quote page) — no
+// separate "coverPhotoUrl" field needed, just reorder the array.
+async function setCoverPhoto(id: string, url: string) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+
+  const existing = await prisma.aircraft.findFirst({ where: { id, operatorId } });
+  if (!existing || !existing.photos.includes(url)) return;
+
+  await prisma.aircraft.update({
+    where: { id },
+    data: { photos: [url, ...existing.photos.filter((p) => p !== url)] },
+  });
+
+  revalidatePath(`/fleet/${id}`);
+}
+
 export default async function EditAircraftPage({
   params,
 }: {
@@ -153,7 +194,9 @@ export default async function EditAircraftPage({
 
   const updateWithId = updateAircraft.bind(null, aircraft.id);
   const deleteWithId = deleteAircraft.bind(null, aircraft.id);
-  const uploadPhotoWithId = uploadPhoto.bind(null, aircraft.id);
+  const uploadPhotosWithId = uploadPhotos.bind(null, aircraft.id);
+  const removePhotoWithId = removePhoto.bind(null, aircraft.id);
+  const setCoverPhotoWithId = setCoverPhoto.bind(null, aircraft.id);
 
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-10">
@@ -164,43 +207,14 @@ export default async function EditAircraftPage({
       <div className="mt-8 flex flex-col gap-3">
         <Label>Photos</Label>
         <p className="text-sm text-muted-foreground">
-          Shown to clients on their quote page.
+          Shown to clients on their quote page — the cover photo shows first.
         </p>
-        {aircraft.photos.length > 0 && (
-          <div className="grid grid-cols-3 gap-3">
-            {aircraft.photos.map((url) => {
-              const removePhotoWithArgs = removePhoto.bind(null, aircraft.id, url);
-              return (
-                <div key={url} className="group relative aspect-video overflow-hidden rounded-md border border-border">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={url} alt="" className="h-full w-full object-cover" />
-                  <form action={removePhotoWithArgs} className="absolute top-1 right-1">
-                    <Button
-                      type="submit"
-                      size="sm"
-                      variant="destructive"
-                      className="h-6 px-2 text-xs opacity-0 transition-opacity group-hover:opacity-100"
-                    >
-                      Remove
-                    </Button>
-                  </form>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <form action={uploadPhotoWithId} className="flex items-center gap-2">
-          <input
-            type="file"
-            name="photo"
-            accept="image/*"
-            required
-            className="text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-sm file:font-medium"
-          />
-          <Button type="submit" variant="outline" size="sm">
-            Upload
-          </Button>
-        </form>
+        <AircraftPhotoManager
+          photos={aircraft.photos}
+          uploadAction={uploadPhotosWithId}
+          removeAction={removePhotoWithId}
+          setCoverAction={setCoverPhotoWithId}
+        />
       </div>
 
       <form action={updateWithId} className="mt-8 flex flex-col gap-6">

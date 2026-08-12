@@ -662,6 +662,34 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   existing aircraft's edit page and confirm it appears there and on that
   aircraft's quotes' `/q/[token]` pages.
 
+  **Follow-up, same day — upload did nothing after connecting the Blob
+  store, multi-upload + cover photo added**: user connected a Blob
+  store to all three environments and redeployed, but the upload button
+  silently did nothing (store stayed empty) — and the original
+  implementation's failure path was `console.error` only, with no
+  feedback to the operator at all, so there was no way to tell "it
+  failed" from "it worked" without server log access neither of us had.
+  Rebuilt as a proper client component
+  (`components/fleet/aircraft-photo-manager.tsx`) using
+  `useActionState`, so `uploadPhotos` (renamed from `uploadPhoto`) now
+  returns a real `{ error }` message rendered inline instead of just
+  logging — the next attempt should actually say what's wrong rather
+  than nothing happening. While rebuilding this, added the two other
+  things asked for at the same time: the file input now accepts
+  `multiple`, uploading everything selected in one submit
+  (`formData.getAll("photos")`, one `put()` per file, one combined
+  `photos: { push: [...] }` update); and each non-first photo gets a
+  "Set as cover" button that reorders the array to put it first — no
+  separate `coverPhotoUrl` field, the first photo in `photos` doubles
+  as the cover everywhere it's already used (fleet list thumbnail,
+  first image on `/q/[token]`), so this was purely a reordering
+  operation. Root cause of the original silent failure is still
+  unconfirmed (no log access) — the improved error message is meant to
+  surface it on the next real attempt; if it turns out to be something
+  other than credentials (e.g. the store not actually scoped to the
+  Preview environment this branch deploys to, despite "all three" being
+  selected), that'll need a follow-up once known.
+
 - **In-app calendar view** (raised after Step 6): a calendar grid of
   trips inside JetDeck itself — organized by date + tail for
   part135/hybrid operators, by date only for pure brokers (no fleet
