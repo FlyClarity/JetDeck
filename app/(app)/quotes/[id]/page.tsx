@@ -4,12 +4,13 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { getAppUrl } from "@/lib/url";
 import { routeSummary, relativeTime } from "@/lib/queue";
-import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES, TRIP_PURPOSE_LABELS } from "@/lib/quote";
+import { formatCurrency, QUOTE_MESSAGE_BADGES, TRIP_PURPOSE_LABELS } from "@/lib/quote";
 import {
   confirmPendingBookingForOperator,
   declinePendingBookingForOperator,
   resendCardHoldLink,
 } from "@/lib/booking-server";
+import { parseOptionFromFormData, parseOptionCount } from "@/lib/quote-option-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { revenueLegsOf, legDate, autoNightsAwayOf } from "@/lib/itinerary";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
@@ -40,92 +41,55 @@ async function updateQuote(id: string, formData: FormData) {
 
   const scoped = await getScopedQuote(id);
   if (!scoped) return;
-  const { quote, option } = scoped;
+  const { quote, operator } = scoped;
 
-  const aircraftId = String(formData.get("aircraftId") ?? "");
-  const flightHours = Number(formData.get("flightHours") ?? 0);
-  const hourlyRate = Number(formData.get("hourlyRate") ?? 0);
-  const repoHours = Number(formData.get("repoHours") ?? 0);
-  const repoRate = Number(formData.get("repoRate") ?? 0);
-  // The client already computes the right number of nights for whichever
-  // mode the "returns to base between legs" toggle is in (0 when it's on,
-  // since gaps become repositioning legs instead of overnight stays) — no
-  // need to re-derive or override it here.
-  const returnsToHomeBase = formData.get("returnsToHomeBase") === "on";
-  const overnightNights = Number(formData.get("overnightNights") ?? 0);
-  const overnightFee = overnightNights * scoped.operator.defaultOvernightFee;
-  const landingFees = Number(formData.get("landingFees") ?? 0);
-  const handlingFees = Number(formData.get("handlingFees") ?? 0);
-  const fetTaxEnabled = formData.get("fetTax") === "on";
-  const discount = Number(formData.get("discount") ?? 0);
-  const discountNote = String(formData.get("discountNote") ?? "") || null;
+  const optionCount = parseOptionCount(formData);
+  const parsedOptions = Array.from({ length: optionCount }, (_, i) =>
+    parseOptionFromFormData(formData, `option_${i}_`, operator.defaultOvernightFee)
+  );
 
-  let additionalFees: { label: string; amount: number }[] = [];
-  try {
-    additionalFees = JSON.parse(String(formData.get("additionalFeesJson") ?? "[]"));
-  } catch {
-    additionalFees = [];
-  }
-
-  const { subtotal, total, fetAmount } = calculateQuoteTotals({
-    flightHours,
-    hourlyRate,
-    repoHours,
-    repoRate,
-    overnightFee,
-    landingFees,
-    handlingFees,
-    additionalFees,
-    fetTax: fetTaxEnabled,
-    discount,
-  });
-
-  let legsJson: unknown[] = [];
-  try {
-    legsJson = JSON.parse(String(formData.get("legsJson") ?? "[]"));
-  } catch {
-    legsJson = [];
-  }
-  const itinerary = (legsJson as Record<string, unknown>[]).map((leg) => ({
-    billAs: String(leg.billAs ?? "revenue"),
-    depAirport: leg.depAirport ? String(leg.depAirport) : null,
-    arrAirport: leg.arrAirport ? String(leg.arrAirport) : null,
-    date: leg.date ? String(leg.date) : null,
-    flightHours: Number(leg.flightHours) || 0,
-    depTime: leg.depTime ? String(leg.depTime) : null,
-    depTimeTBD: Boolean(leg.depTimeTBD),
-    arrTime: leg.arrTime ? String(leg.arrTime) : null,
-  }));
+  // Options aren't referenced by id anywhere except Quote.selectedOptionId
+  // (Trip and the Stripe hold reference Quote directly, not any one
+  // option) — simplest and most robust to just replace the whole set on
+  // every save rather than diffing which tab is "the same" option as
+  // before, mirroring how itinerary legs were already fully replaced
+  // wholesale on every save pre-Options.
+  await prisma.quoteOption.deleteMany({ where: { quoteId: quote.id } });
+  const createdOptions = await Promise.all(
+    parsedOptions.map((o) =>
+      prisma.quoteOption.create({
+        data: {
+          quoteId: quote.id,
+          label: o.label ?? "Option A",
+          aircraftId: o.aircraftId,
+          itinerary: o.itinerary,
+          flightHours: o.flightHours,
+          hourlyRate: o.hourlyRate,
+          repoHours: o.repoHours,
+          repoRate: o.repoRate,
+          returnsToHomeBase: o.returnsToHomeBase,
+          overnightNights: o.overnightNights,
+          overnightFee: o.overnightFee,
+          landingFees: o.landingFees,
+          handlingFees: o.handlingFees,
+          additionalFees: o.additionalFees,
+          fetTax: o.fetTax,
+          discount: o.discount,
+          discountNote: o.discountNote,
+          subtotal: o.subtotal,
+          total: o.total,
+          depositAmount: o.total * operator.depositPercent,
+        },
+      })
+    )
+  );
 
   const validUntil = String(formData.get("validUntil") ?? "");
-
-  await prisma.quoteOption.update({
-    where: { id: option.id },
-    data: {
-      aircraftId: aircraftId || null,
-      itinerary,
-      flightHours,
-      hourlyRate,
-      repoHours,
-      repoRate,
-      returnsToHomeBase,
-      overnightNights,
-      overnightFee,
-      landingFees,
-      handlingFees,
-      additionalFees,
-      fetTax: fetAmount,
-      discount,
-      discountNote,
-      subtotal,
-      total,
-      depositAmount: total * scoped.operator.depositPercent,
-    },
-  });
 
   await prisma.quote.update({
     where: { id: quote.id },
     data: {
+      selectedOptionId: createdOptions[0].id,
       internalNotes: String(formData.get("internalNotes") ?? "") || null,
       clientNotes: String(formData.get("clientNotes") ?? "") || null,
       validUntil: validUntil ? new Date(validUntil) : quote.validUntil,
@@ -150,11 +114,19 @@ async function sendQuote(id: string) {
 
   const appUrl = await getAppUrl();
   const quoteLink = `${appUrl}/q/${quote.token}`;
+  const optionCount = await prisma.quoteOption.count({ where: { quoteId: quote.id } });
+  // A single total is only meaningful for a single-option quote — with
+  // multiple options the client picks one on the page itself, so naming
+  // just the first one's price here would be misleading.
+  const pricingLine =
+    optionCount > 1
+      ? `${optionCount} pricing options to choose from.`
+      : `Total: ${formatCurrency(option.total)}.`;
 
   await sendEmail({
     to: quote.tripRequest.requestorEmail,
     subject: `Your Charter Quote — ${quote.quoteNumber}`,
-    html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">${quoteLink}</a></p><p>Total: ${formatCurrency(option.total)}. Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
+    html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">${quoteLink}</a></p><p>${pricingLine} Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
     replyTo: operator.replyToEmail ?? undefined,
     from: operator.fromEmail,
     fromName: operator.name,
@@ -234,6 +206,11 @@ export default async function QuotePage({
   if (!scoped) notFound();
   const { quote, option, operator } = scoped;
 
+  const allOptions = await prisma.quoteOption.findMany({
+    where: { quoteId: quote.id },
+    orderBy: { createdAt: "asc" },
+  });
+
   const aircraftList = await prisma.aircraft.findMany({
     where: { operatorId: operator.id, status: "active" },
     orderBy: { tailNumber: "asc" },
@@ -308,9 +285,11 @@ export default async function QuotePage({
     depTimeTBD?: boolean;
     arrTime?: string | null;
   };
-  const storedLegs = (option.itinerary as StoredLeg[]) ?? [];
+  const optionsStoredLegs = allOptions.map((o) => (o.itinerary as StoredLeg[]) ?? []);
   const icaosToResolve = [
-    ...storedLegs.flatMap((l) => [l.depAirport, l.arrAirport].filter(Boolean) as string[]),
+    ...optionsStoredLegs.flatMap((legs) =>
+      legs.flatMap((l) => [l.depAirport, l.arrAirport].filter(Boolean) as string[])
+    ),
     ...aircraftList.map((a) => a.homeBase),
   ];
   const resolvedAirports = await getAirportsByIcao(icaosToResolve);
@@ -320,17 +299,35 @@ export default async function QuotePage({
     resolvedAirports.flatMap((a) => (a.iata ? [[a.icao, a], [a.iata, a]] : [[a.icao, a]]))
   );
 
-  const savedLegs = storedLegs.map((l) => ({
-    billAs: (l.billAs === "repositioning" ? "repositioning" : "revenue") as
-      | "revenue"
-      | "repositioning",
-    dep: l.depAirport ? airportsByIcao[l.depAirport] ?? { icao: l.depAirport } : null,
-    arr: l.arrAirport ? airportsByIcao[l.arrAirport] ?? { icao: l.arrAirport } : null,
-    date: l.date ?? (l.depDt ? l.depDt.slice(0, 10) : ""),
-    flightHours: l.flightHours ?? 0,
-    depTime: l.depTime ?? "",
-    depTimeTBD: l.depTimeTBD ?? !l.depTime,
-    arrTime: l.arrTime ?? "",
+  const toSavedLegs = (storedLegs: StoredLeg[]) =>
+    storedLegs.map((l) => ({
+      billAs: (l.billAs === "repositioning" ? "repositioning" : "revenue") as
+        | "revenue"
+        | "repositioning",
+      dep: l.depAirport ? airportsByIcao[l.depAirport] ?? { icao: l.depAirport } : null,
+      arr: l.arrAirport ? airportsByIcao[l.arrAirport] ?? { icao: l.arrAirport } : null,
+      date: l.date ?? (l.depDt ? l.depDt.slice(0, 10) : ""),
+      flightHours: l.flightHours ?? 0,
+      depTime: l.depTime ?? "",
+      depTimeTBD: l.depTimeTBD ?? !l.depTime,
+      arrTime: l.arrTime ?? "",
+    }));
+
+  const initialOptions = allOptions.map((o) => ({
+    label: o.label,
+    aircraftId: o.aircraftId,
+    requestedLegs: [],
+    legs: toSavedLegs((o.itinerary as StoredLeg[]) ?? []),
+    hourlyRate: o.hourlyRate,
+    repoRate: o.repoRate,
+    returnsToHomeBase: o.returnsToHomeBase,
+    extraNightsAway: Math.max(0, o.overnightNights - autoNightsAwayOf(o.itinerary)),
+    landingFees: o.landingFees,
+    handlingFees: o.handlingFees,
+    additionalFees: (o.additionalFees as { label: string; amount: number }[]) ?? [],
+    fetTax: o.fetTax > 0,
+    discount: o.discount,
+    discountNote: o.discountNote ?? "",
   }));
 
   const updateQuoteWithId = updateQuote.bind(null, quote.id);
@@ -600,29 +597,10 @@ export default async function QuotePage({
           aircraftList={aircraftList}
           airportsByIcao={airportsByIcao}
           existingBookings={existingBookings}
-          initialValues={{
-            aircraftId: option.aircraftId,
-            requestedLegs: [],
-            legs: savedLegs,
-            hourlyRate: option.hourlyRate,
-            repoRate: option.repoRate,
-            returnsToHomeBase: option.returnsToHomeBase,
-            // Only the combined total is stored (QuoteOption.overnightNights)
-            // — split it back into auto (from the reloaded legs' own dates)
-            // vs. manually-added extra so a manual addition doesn't
-            // silently disappear (and get lost for real on the next save)
-            // when reopening an existing quote.
-            extraNightsAway: Math.max(0, option.overnightNights - autoNightsAwayOf(option.itinerary)),
-            landingFees: option.landingFees,
-            handlingFees: option.handlingFees,
-            additionalFees: (option.additionalFees as { label: string; amount: number }[]) ?? [],
-            fetTax: option.fetTax > 0,
-            discount: option.discount,
-            discountNote: option.discountNote ?? "",
-            internalNotes: quote.internalNotes ?? "",
-            clientNotes: quote.clientNotes ?? "",
-            validUntil: quote.validUntil.toISOString().slice(0, 10),
-          }}
+          initialOptions={initialOptions}
+          internalNotes={quote.internalNotes ?? ""}
+          clientNotes={quote.clientNotes ?? ""}
+          validUntil={quote.validUntil.toISOString().slice(0, 10)}
           priceSuggestionPromise={Promise.resolve(null)}
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}

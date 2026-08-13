@@ -20,8 +20,32 @@ async function getQuoteByToken(token: string) {
       operator: true,
       tripRequest: true,
       selectedOption: { include: { aircraft: true, brokeredAircraft: true } },
+      options: {
+        include: { aircraft: true, brokeredAircraft: true },
+        orderBy: { createdAt: "asc" },
+      },
     },
   });
+}
+
+// "Options" — a quote sent with more than one priced itinerary lets the
+// client pick before requesting to book. Only meaningful while the quote is
+// still "sent": once they've requested to book (or beyond), the choice is
+// locked in and the rest of the flow proceeds against whichever option was
+// selected, exactly as a single-option quote always has.
+async function selectOption(token: string, optionId: string) {
+  "use server";
+
+  const quote = await getQuoteByToken(token);
+  if (!quote || quote.status !== "sent") return;
+  if (!quote.options.some((o) => o.id === optionId)) return;
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { selectedOptionId: optionId },
+  });
+
+  redirect(`/q/${token}`);
 }
 
 // Step 1 of 2: a non-binding "I'd like to book this" click — no terms shown,
@@ -193,6 +217,18 @@ async function requestChanges(token: string, formData: FormData) {
   redirect(`/q/${token}?requested=1`);
 }
 
+function aircraftLabelFor(o: {
+  aircraft: { make: string; model: string; tailNumber: string } | null;
+  brokeredAircraft: { make: string | null; model: string | null } | null;
+}) {
+  return o.aircraft
+    ? `${o.aircraft.make} ${o.aircraft.model} (${o.aircraft.tailNumber})`
+    : o.brokeredAircraft
+      ? `${o.brokeredAircraft.make ?? ""} ${o.brokeredAircraft.model ?? ""}`.trim() ||
+        "Aircraft to be confirmed"
+      : "Aircraft to be confirmed";
+}
+
 export function Row({
   label,
   value,
@@ -268,12 +304,13 @@ export default async function ClientQuotePage({
   const declineQuoteWithToken = declineQuote.bind(null, token);
   const requestChangesWithToken = requestChanges.bind(null, token);
 
-  const aircraftLabel = option.aircraft
-    ? `${option.aircraft.make} ${option.aircraft.model} (${option.aircraft.tailNumber})`
-    : option.brokeredAircraft
-      ? `${option.brokeredAircraft.make ?? ""} ${option.brokeredAircraft.model ?? ""}`.trim() ||
-        "Aircraft to be confirmed"
-      : "Aircraft to be confirmed";
+  const aircraftLabel = aircraftLabelFor(option);
+
+  // Only relevant before the client has committed to anything — once
+  // they've requested to book, the pick is locked in and the rest of the
+  // flow (operator review, signature, Stripe) proceeds against whatever
+  // was selected, same as a single-option quote always has.
+  const showOptionPicker = quote.status === "sent" && !isExpired && quote.options.length > 1;
 
   // Shared by both decision-pending states ("sent", before requesting, and
   // "approved", before signing) — the client can back out or ask for
@@ -332,6 +369,50 @@ export default async function ClientQuotePage({
                     : quote.status}
             </span>
           </div>
+
+          {showOptionPicker && (
+            <section className="mt-6">
+              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Choose an option
+              </h2>
+              <div className="mt-2 flex flex-col gap-2">
+                {quote.options.map((o) => {
+                  const isSelected = o.id === option.id;
+                  const optLegs = revenueLegsOf(o.itinerary);
+                  const optRoute = optLegs.length
+                    ? `${optLegs[0].depAirport} → ${optLegs[optLegs.length - 1].arrAirport}`
+                    : "Route TBD";
+                  return (
+                    <form key={o.id} action={selectOption.bind(null, token, o.id)}>
+                      <button
+                        type="submit"
+                        disabled={isSelected}
+                        className={`w-full rounded-md border p-3 text-left text-sm transition-colors ${
+                          isSelected
+                            ? "border-accent bg-accent/10"
+                            : "border-border hover:border-accent/60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <p className="font-medium">{o.label}</p>
+                            <p className="text-muted-foreground">{optRoute}</p>
+                            <p className="text-xs text-muted-foreground">{aircraftLabelFor(o)}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold">{formatCurrency(o.total)}</p>
+                            {isSelected && (
+                              <p className="text-xs text-accent">Selected — viewing below</p>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    </form>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           <section className="mt-6">
             <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">

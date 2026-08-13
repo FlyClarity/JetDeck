@@ -53,7 +53,11 @@ export type SavedLegInput = {
   arrTime?: string | null;
 };
 
-export type QuoteBuilderInitialValues = {
+// One "Options" tab's worth of data — a single priced itinerary variation.
+// A quote always has at least one; "label" only matters once there's more
+// than one to tell apart.
+export type QuoteOptionValues = {
+  label?: string;
   aircraftId: string | null;
   // For a brand-new quote: only the customer-requested legs are known, and
   // repositioning legs get derived (home base + aircraft cruise speed).
@@ -71,9 +75,6 @@ export type QuoteBuilderInitialValues = {
   fetTax: boolean;
   discount: number;
   discountNote: string;
-  internalNotes: string;
-  clientNotes: string;
-  validUntil: string;
 };
 
 type LegAirport = {
@@ -243,9 +244,14 @@ function buildInitialLegs(
   return rows;
 }
 
-export function QuoteBuilderForm({
-  routeSummaryText,
-  requestorLine,
+// One option's worth of aircraft/itinerary/pricing fields — everything that
+// varies between "Options" on the same quote. Owns its own state entirely
+// (no lifting to the parent) so switching tabs never loses in-progress
+// edits: the outer QuoteBuilderForm keeps every option's QuoteOptionFields
+// instance mounted at once and only toggles which one is visible via CSS —
+// hidden form fields still submit normally either way.
+function QuoteOptionFields({
+  namePrefix,
   aircraftList,
   airportsByIcao,
   existingBookings,
@@ -254,30 +260,19 @@ export function QuoteBuilderForm({
   depositPercent,
   defaultOvernightFee,
   defaultBlockTimeBufferHours,
-  isAccepted,
-  action,
-  submitLabel,
+  locked,
 }: {
-  routeSummaryText: string;
-  requestorLine: string;
+  namePrefix: string;
   aircraftList: Aircraft[];
   airportsByIcao: Record<string, AirportOption>;
-  // Other operator bookings already accepted or awaiting confirmation — fed
-  // into a live, purely client-side overlap check (see
-  // findConflictingBooking) so a double-booking surfaces the moment the
-  // operator picks the aircraft/dates, not just when the client accepts.
   existingBookings: ConflictCandidate[];
-  initialValues: QuoteBuilderInitialValues;
-  priceSuggestionPromise: Promise<PriceSuggestion>;
+  initialValues: QuoteOptionValues;
+  priceSuggestionPromise?: Promise<PriceSuggestion>;
   depositPercent: number;
   defaultOvernightFee: number;
   defaultBlockTimeBufferHours: number;
-  isAccepted?: boolean;
-  action: (formData: FormData) => Promise<void>;
-  submitLabel: string;
+  locked: boolean;
 }) {
-  const [unlocked, setUnlocked] = useState(!isAccepted);
-  const locked = Boolean(isAccepted) && !unlocked;
   const [aircraftId, setAircraftId] = useState(initialValues.aircraftId ?? "");
   const [hourlyRate, setHourlyRate] = useState(String(initialValues.hourlyRate || ""));
   const [repoRate, setRepoRate] = useState(String(initialValues.repoRate || ""));
@@ -680,64 +675,28 @@ export function QuoteBuilderForm({
   const depositAmount = totals.total * depositPercent;
 
   return (
-    <form action={action} className="flex gap-8">
-      <input type="hidden" name="aircraftId" value={aircraftId} />
-      <input type="hidden" name="additionalFeesJson" value={JSON.stringify(additionalFees)} />
-      <input type="hidden" name="fetTax" value={fetTax ? "on" : ""} />
-      <input type="hidden" name="returnsToHomeBase" value={returnsToHomeBase ? "on" : ""} />
-      <input type="hidden" name="overnightNights" value={totalNightsAway} />
-      <input type="hidden" name="flightHours" value={flightHours} />
-      <input type="hidden" name="repoHours" value={repoHours} />
-      <input type="hidden" name="legsJson" value={legsJson} />
+    <div className="flex gap-8">
+      <input type="hidden" name={`${namePrefix}aircraftId`} value={aircraftId} />
+      <input type="hidden" name={`${namePrefix}additionalFeesJson`} value={JSON.stringify(additionalFees)} />
+      <input type="hidden" name={`${namePrefix}fetTax`} value={fetTax ? "on" : ""} />
+      <input type="hidden" name={`${namePrefix}returnsToHomeBase`} value={returnsToHomeBase ? "on" : ""} />
+      <input type="hidden" name={`${namePrefix}overnightNights`} value={totalNightsAway} />
+      <input type="hidden" name={`${namePrefix}flightHours`} value={flightHours} />
+      <input type="hidden" name={`${namePrefix}repoHours`} value={repoHours} />
+      <input type="hidden" name={`${namePrefix}legsJson`} value={legsJson} />
 
       <div className="flex flex-1 flex-col gap-6">
-        {isAccepted && (
-          <div className="rounded-md border border-amber-400/50 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
-            {locked ? (
-              <>
-                <p className="font-medium">
-                  The client has already taken action on this quote (requested to book, been
-                  approved, or accepted).
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "The client has already taken action on this quote. Are you sure you want to change the pricing?"
-                      )
-                    ) {
-                      setUnlocked(true);
-                    }
-                  }}
-                  className="mt-1 text-sm underline underline-offset-4 hover:text-foreground"
-                >
-                  Unlock to edit pricing
-                </button>
-              </>
-            ) : (
-              <p className="font-medium">
-                Pricing unlocked — the client has already taken action on this quote, so
-                double-check any changes before saving.
-              </p>
-            )}
-          </div>
+        <fieldset disabled={locked} className="contents">
+        {priceSuggestionPromise && (
+          <Suspense fallback={<PriceSuggestionSkeleton />}>
+            <PriceSuggestionCard promise={priceSuggestionPromise} />
+          </Suspense>
         )}
 
-        <fieldset disabled={locked} className="contents">
-        <div>
-          <p className="font-medium">{routeSummaryText}</p>
-          <p className="text-sm text-muted-foreground">{requestorLine}</p>
-        </div>
-
-        <Suspense fallback={<PriceSuggestionSkeleton />}>
-          <PriceSuggestionCard promise={priceSuggestionPromise} />
-        </Suspense>
-
         <div className="flex flex-col gap-2">
-          <Label htmlFor="aircraftId-select">Aircraft</Label>
+          <Label htmlFor={`${namePrefix}aircraftId-select`}>Aircraft</Label>
           <Select value={aircraftId} onValueChange={handleAircraftChange}>
-            <SelectTrigger id="aircraftId-select">
+            <SelectTrigger id={`${namePrefix}aircraftId-select`}>
               <SelectValue placeholder="Select aircraft" />
             </SelectTrigger>
             <SelectContent>
@@ -776,10 +735,10 @@ export function QuoteBuilderForm({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="hourlyRate">Hourly rate ($)</Label>
+            <Label htmlFor={`${namePrefix}hourlyRate`}>Hourly rate ($)</Label>
             <Input
-              id="hourlyRate"
-              name="hourlyRate"
+              id={`${namePrefix}hourlyRate`}
+              name={`${namePrefix}hourlyRate`}
               type="number"
               min={0}
               step="0.01"
@@ -789,10 +748,10 @@ export function QuoteBuilderForm({
             />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="repoRate">Repositioning rate ($)</Label>
+            <Label htmlFor={`${namePrefix}repoRate`}>Repositioning rate ($)</Label>
             <Input
-              id="repoRate"
-              name="repoRate"
+              id={`${namePrefix}repoRate`}
+              name={`${namePrefix}repoRate`}
               type="number"
               min={0}
               step="0.01"
@@ -1008,13 +967,13 @@ export function QuoteBuilderForm({
         <div className="flex flex-col gap-2 rounded-md border border-border p-3">
           <div className="flex items-center gap-2">
             <input
-              id="returnsToHomeBaseCheckbox"
+              id={`${namePrefix}returnsToHomeBaseCheckbox`}
               type="checkbox"
               className="size-4 rounded border-input"
               checked={returnsToHomeBase}
               onChange={(e) => toggleReturnsToHomeBase(e.target.checked)}
             />
-            <Label htmlFor="returnsToHomeBaseCheckbox">
+            <Label htmlFor={`${namePrefix}returnsToHomeBaseCheckbox`}>
               Aircraft returns to base between each leg (no overnight stays)
             </Label>
           </div>
@@ -1031,9 +990,9 @@ export function QuoteBuilderForm({
                   dates
                 </p>
               )}
-              <Label htmlFor="extraNightsAwayInput">Additional nights away</Label>
+              <Label htmlFor={`${namePrefix}extraNightsAwayInput`}>Additional nights away</Label>
               <Input
-                id="extraNightsAwayInput"
+                id={`${namePrefix}extraNightsAwayInput`}
                 type="number"
                 min={0}
                 step="1"
@@ -1051,10 +1010,10 @@ export function QuoteBuilderForm({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="landingFees">Landing fees ($)</Label>
+            <Label htmlFor={`${namePrefix}landingFees`}>Landing fees ($)</Label>
             <Input
-              id="landingFees"
-              name="landingFees"
+              id={`${namePrefix}landingFees`}
+              name={`${namePrefix}landingFees`}
               type="number"
               min={0}
               step="0.01"
@@ -1063,10 +1022,10 @@ export function QuoteBuilderForm({
             />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="handlingFees">Handling fees ($)</Label>
+            <Label htmlFor={`${namePrefix}handlingFees`}>Handling fees ($)</Label>
             <Input
-              id="handlingFees"
-              name="handlingFees"
+              id={`${namePrefix}handlingFees`}
+              name={`${namePrefix}handlingFees`}
               type="number"
               min={0}
               step="0.01"
@@ -1116,20 +1075,20 @@ export function QuoteBuilderForm({
 
         <div className="flex items-center gap-2">
           <input
-            id="fetTaxCheckbox"
+            id={`${namePrefix}fetTaxCheckbox`}
             type="checkbox"
             className="size-4 rounded border-input"
             checked={fetTax}
             onChange={(e) => setFetTax(e.target.checked)}
           />
-          <Label htmlFor="fetTaxCheckbox">FET tax (7.5%, US domestic)</Label>
+          <Label htmlFor={`${namePrefix}fetTaxCheckbox`}>FET tax (7.5%, US domestic)</Label>
         </div>
 
         <div className="flex flex-col gap-2">
-          <Label htmlFor="discount">Discount ($)</Label>
+          <Label htmlFor={`${namePrefix}discount`}>Discount ($)</Label>
           <Input
-            id="discount"
-            name="discount"
+            id={`${namePrefix}discount`}
+            name={`${namePrefix}discount`}
             type="number"
             min={0}
             step="0.01"
@@ -1143,10 +1102,10 @@ export function QuoteBuilderForm({
           )}
           {needsDiscountNote && (
             <div className="flex flex-col gap-2">
-              <Label htmlFor="discountNote">Reason for discount (required, &gt;10%)</Label>
+              <Label htmlFor={`${namePrefix}discountNote`}>Reason for discount (required, &gt;10%)</Label>
               <Input
-                id="discountNote"
-                name="discountNote"
+                id={`${namePrefix}discountNote`}
+                name={`${namePrefix}discountNote`}
                 value={discountNote}
                 onChange={(e) => setDiscountNote(e.target.value)}
                 required
@@ -1154,46 +1113,9 @@ export function QuoteBuilderForm({
             </div>
           )}
           {!needsDiscountNote && (
-            <input type="hidden" name="discountNote" value={discountNote} />
+            <input type="hidden" name={`${namePrefix}discountNote`} value={discountNote} />
           )}
         </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="internalNotes">Internal notes</Label>
-          <Textarea
-            id="internalNotes"
-            name="internalNotes"
-            rows={3}
-            defaultValue={initialValues.internalNotes}
-            placeholder="Not visible to the client"
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="clientNotes">Notes for client</Label>
-          <Textarea
-            id="clientNotes"
-            name="clientNotes"
-            rows={3}
-            defaultValue={initialValues.clientNotes}
-            placeholder="Shown on the client's quote page — e.g. catering, ground transport, special instructions"
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="validUntil">Quote valid until</Label>
-          <Input
-            id="validUntil"
-            name="validUntil"
-            type="date"
-            defaultValue={initialValues.validUntil}
-            required
-          />
-        </div>
-
-        <Button type="submit" size="lg" className="self-start" disabled={!aircraftId}>
-          {submitLabel}
-        </Button>
         </fieldset>
       </div>
 
@@ -1243,6 +1165,259 @@ export function QuoteBuilderForm({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function optionLabel(index: number) {
+  return `Option ${String.fromCharCode(65 + index)}`;
+}
+
+export function QuoteBuilderForm({
+  routeSummaryText,
+  requestorLine,
+  aircraftList,
+  airportsByIcao,
+  existingBookings,
+  initialOptions,
+  priceSuggestionPromise,
+  depositPercent,
+  defaultOvernightFee,
+  defaultBlockTimeBufferHours,
+  isAccepted,
+  internalNotes,
+  clientNotes,
+  validUntil,
+  action,
+  submitLabel,
+}: {
+  routeSummaryText: string;
+  requestorLine: string;
+  aircraftList: Aircraft[];
+  airportsByIcao: Record<string, AirportOption>;
+  // Other operator bookings already accepted or awaiting confirmation — fed
+  // into a live, purely client-side overlap check (see
+  // findConflictingBooking) so a double-booking surfaces the moment the
+  // operator picks the aircraft/dates, not just when the client accepts.
+  existingBookings: ConflictCandidate[];
+  // One or more priced itinerary variations ("Options") — most quotes have
+  // exactly one.
+  initialOptions: QuoteOptionValues[];
+  // Only ever shown alongside the first option — the AI suggestion is tied
+  // to the underlying trip request, not to any one option's pricing.
+  priceSuggestionPromise: Promise<PriceSuggestion>;
+  depositPercent: number;
+  defaultOvernightFee: number;
+  defaultBlockTimeBufferHours: number;
+  isAccepted?: boolean;
+  internalNotes: string;
+  clientNotes: string;
+  validUntil: string;
+  action: (formData: FormData) => Promise<void>;
+  submitLabel: string;
+}) {
+  const [unlocked, setUnlocked] = useState(!isAccepted);
+  const locked = Boolean(isAccepted) && !unlocked;
+
+  const [options, setOptions] = useState(() =>
+    initialOptions.map((iv, i) => ({
+      key: rowId(),
+      label: iv.label || optionLabel(i),
+      initialValues: iv,
+    }))
+  );
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  // What a brand-new option starts from: the same customer-requested legs
+  // every option is ultimately answering, normalized out of either shape
+  // QuoteOptionValues can arrive in (a fresh quote's requestedLegs, or an
+  // existing quote's already-saved legs) so "Add Option" always seeds a
+  // real itinerary instead of a blank one.
+  const baseRequestedLegs = useMemo((): QuoteLegInput[] => {
+    const first = initialOptions[0];
+    if (first?.legs && first.legs.length > 0) {
+      return first.legs
+        .filter((l) => l.billAs === "revenue")
+        .map((l) => ({
+          dep: l.dep,
+          arr: l.arr,
+          date: l.date,
+          flightHours: l.flightHours,
+          depTime: l.depTime,
+          depTimeTBD: l.depTimeTBD,
+          arrTime: l.arrTime,
+        }));
+    }
+    return first?.requestedLegs ?? [];
+  }, [initialOptions]);
+
+  function addOption() {
+    setOptions((prev) => [
+      ...prev,
+      {
+        key: rowId(),
+        label: optionLabel(prev.length),
+        initialValues: {
+          aircraftId: null,
+          requestedLegs: baseRequestedLegs,
+          hourlyRate: 0,
+          repoRate: 0,
+          returnsToHomeBase: false,
+          extraNightsAway: 0,
+          landingFees: 0,
+          handlingFees: 0,
+          additionalFees: [],
+          fetTax: true,
+          discount: 0,
+          discountNote: "",
+        },
+      },
+    ]);
+    setActiveIndex(options.length);
+  }
+
+  function removeOption(index: number) {
+    if (options.length <= 1) return;
+    setOptions((prev) => prev.filter((_, i) => i !== index));
+    setActiveIndex((prev) => (prev >= index ? Math.max(0, prev - 1) : prev));
+  }
+
+  function renameOption(index: number, label: string) {
+    setOptions((prev) => prev.map((o, i) => (i === index ? { ...o, label } : o)));
+  }
+
+  return (
+    <form action={action} className="flex flex-col gap-6">
+      {isAccepted && (
+        <div className="rounded-md border border-amber-400/50 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
+          {locked ? (
+            <>
+              <p className="font-medium">
+                The client has already taken action on this quote (requested to book, been
+                approved, or accepted).
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "The client has already taken action on this quote. Are you sure you want to change the pricing?"
+                    )
+                  ) {
+                    setUnlocked(true);
+                  }
+                }}
+                className="mt-1 text-sm underline underline-offset-4 hover:text-foreground"
+              >
+                Unlock to edit pricing
+              </button>
+            </>
+          ) : (
+            <p className="font-medium">
+              Pricing unlocked — the client has already taken action on this quote, so
+              double-check any changes before saving.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div>
+        <p className="font-medium">{routeSummaryText}</p>
+        <p className="text-sm text-muted-foreground">{requestorLine}</p>
+      </div>
+
+      <input type="hidden" name="optionCount" value={options.length} />
+
+      {options.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1 border-b border-border">
+          {options.map((opt, i) => (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => setActiveIndex(i)}
+              className={cn(
+                "rounded-t-md px-3 py-1.5 text-sm font-medium transition-colors",
+                i === activeIndex
+                  ? "border-b-2 border-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {options.map((opt, i) => (
+        <div key={opt.key} className={i === activeIndex ? "flex flex-col gap-4" : "hidden"}>
+          {options.length > 1 && (
+            <div className="flex items-center justify-between gap-3">
+              <Input
+                value={opt.label}
+                onChange={(e) => renameOption(i, e.target.value)}
+                className="h-8 w-48 text-sm font-medium"
+              />
+              <input type="hidden" name={`option_${i}_label`} value={opt.label} />
+              <button
+                type="button"
+                onClick={() => removeOption(i)}
+                className="text-xs text-muted-foreground underline underline-offset-4 hover:text-destructive"
+              >
+                Remove option
+              </button>
+            </div>
+          )}
+          <QuoteOptionFields
+            namePrefix={`option_${i}_`}
+            aircraftList={aircraftList}
+            airportsByIcao={airportsByIcao}
+            existingBookings={existingBookings}
+            initialValues={opt.initialValues}
+            priceSuggestionPromise={i === 0 ? priceSuggestionPromise : undefined}
+            depositPercent={depositPercent}
+            defaultOvernightFee={defaultOvernightFee}
+            defaultBlockTimeBufferHours={defaultBlockTimeBufferHours}
+            locked={locked}
+          />
+        </div>
+      ))}
+
+      <fieldset disabled={locked} className="contents">
+        <Button type="button" variant="outline" size="sm" className="self-start" onClick={addOption}>
+          + Add Option
+        </Button>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="internalNotes">Internal notes</Label>
+          <Textarea
+            id="internalNotes"
+            name="internalNotes"
+            rows={3}
+            defaultValue={internalNotes}
+            placeholder="Not visible to the client"
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="clientNotes">Notes for client</Label>
+          <Textarea
+            id="clientNotes"
+            name="clientNotes"
+            rows={3}
+            defaultValue={clientNotes}
+            placeholder="Shown on the client's quote page — e.g. catering, ground transport, special instructions"
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="validUntil">Quote valid until</Label>
+          <Input id="validUntil" name="validUntil" type="date" defaultValue={validUntil} required />
+        </div>
+
+        <Button type="submit" size="lg" className="self-start">
+          {submitLabel}
+        </Button>
+      </fieldset>
     </form>
   );
 }

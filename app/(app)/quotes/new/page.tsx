@@ -7,7 +7,7 @@ import { generateQuoteNumber } from "@/lib/quote-server";
 import { suggestPrice } from "@/lib/ai/suggest-price";
 import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 import { routeSummary } from "@/lib/queue";
-import { calculateQuoteTotals } from "@/lib/quote";
+import { parseOptionFromFormData, parseOptionCount } from "@/lib/quote-option-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { normalizeTimeString } from "@/lib/time";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
@@ -117,65 +117,23 @@ async function createQuote(tripRequestId: string, formData: FormData) {
   });
   if (!tripRequest) return;
 
-  const aircraftId = String(formData.get("aircraftId") ?? "");
-  const aircraft = await prisma.aircraft.findFirst({
-    where: { id: aircraftId, operatorId: operator.id },
-  });
-  if (!aircraft) return;
-
-  const flightHours = Number(formData.get("flightHours") ?? 0);
-  const hourlyRate = Number(formData.get("hourlyRate") ?? 0);
-  const repoHours = Number(formData.get("repoHours") ?? 0);
-  const repoRate = Number(formData.get("repoRate") ?? 0);
-  // The client already computes the right number of nights for whichever
-  // mode the "returns to base between legs" toggle is in (0 when it's on,
-  // since gaps become repositioning legs instead of overnight stays) — no
-  // need to re-derive or override it here.
-  const returnsToHomeBase = formData.get("returnsToHomeBase") === "on";
-  const overnightNights = Number(formData.get("overnightNights") ?? 0);
-  const overnightFee = overnightNights * operator.defaultOvernightFee;
-  const landingFees = Number(formData.get("landingFees") ?? 0);
-  const handlingFees = Number(formData.get("handlingFees") ?? 0);
-  const fetTax = formData.get("fetTax") === "on";
-  const discount = Number(formData.get("discount") ?? 0);
-  const discountNote = String(formData.get("discountNote") ?? "") || null;
-
-  let additionalFees: { label: string; amount: number }[] = [];
-  try {
-    additionalFees = JSON.parse(String(formData.get("additionalFeesJson") ?? "[]"));
-  } catch {
-    additionalFees = [];
-  }
-
-  const { subtotal, total, fetAmount } = calculateQuoteTotals({
-    flightHours,
-    hourlyRate,
-    repoHours,
-    repoRate,
-    overnightFee,
-    landingFees,
-    handlingFees,
-    additionalFees,
-    fetTax,
-    discount,
-  });
-
-  let legsJson: unknown[] = [];
-  try {
-    legsJson = JSON.parse(String(formData.get("legsJson") ?? "[]"));
-  } catch {
-    legsJson = [];
-  }
-  const itinerary = (legsJson as Record<string, unknown>[]).map((leg) => ({
-    billAs: String(leg.billAs ?? "revenue"),
-    depAirport: leg.depAirport ? String(leg.depAirport) : null,
-    arrAirport: leg.arrAirport ? String(leg.arrAirport) : null,
-    date: leg.date ? String(leg.date) : null,
-    flightHours: Number(leg.flightHours) || 0,
-    depTime: leg.depTime ? String(leg.depTime) : null,
-    depTimeTBD: Boolean(leg.depTimeTBD),
-    arrTime: leg.arrTime ? String(leg.arrTime) : null,
-  }));
+  const optionCount = parseOptionCount(formData);
+  const parsedOptions = Array.from({ length: optionCount }, (_, i) =>
+    parseOptionFromFormData(formData, `option_${i}_`, operator.defaultOvernightFee)
+  );
+  // Every option needs a real aircraft on this operator's fleet — silently
+  // refusing to create anything on a bad submission matches the prior
+  // single-option behavior rather than partially creating a quote with a
+  // missing aircraft on one of its options.
+  const aircraftIds = parsedOptions.map((o) => o.aircraftId).filter((id): id is string => Boolean(id));
+  const aircraftById = new Map(
+    (
+      await prisma.aircraft.findMany({
+        where: { id: { in: aircraftIds }, operatorId: operator.id },
+      })
+    ).map((a) => [a.id, a])
+  );
+  if (parsedOptions.some((o) => !o.aircraftId || !aircraftById.has(o.aircraftId))) return;
 
   const quoteNumber = await generateQuoteNumber(operator.id);
   const validUntil = String(formData.get("validUntil") ?? defaultValidUntil());
@@ -193,33 +151,38 @@ async function createQuote(tripRequestId: string, formData: FormData) {
     },
   });
 
-  const option = await prisma.quoteOption.create({
-    data: {
-      quoteId: quote.id,
-      aircraftId: aircraft.id,
-      itinerary,
-      flightHours,
-      hourlyRate,
-      repoHours,
-      repoRate,
-      returnsToHomeBase,
-      overnightNights,
-      overnightFee,
-      landingFees,
-      handlingFees,
-      additionalFees,
-      fetTax: fetAmount,
-      discount,
-      discountNote,
-      subtotal,
-      total,
-      depositAmount: total * operator.depositPercent,
-    },
-  });
+  const createdOptions = await Promise.all(
+    parsedOptions.map((o) =>
+      prisma.quoteOption.create({
+        data: {
+          quoteId: quote.id,
+          label: o.label ?? "Option A",
+          aircraftId: o.aircraftId,
+          itinerary: o.itinerary,
+          flightHours: o.flightHours,
+          hourlyRate: o.hourlyRate,
+          repoHours: o.repoHours,
+          repoRate: o.repoRate,
+          returnsToHomeBase: o.returnsToHomeBase,
+          overnightNights: o.overnightNights,
+          overnightFee: o.overnightFee,
+          landingFees: o.landingFees,
+          handlingFees: o.handlingFees,
+          additionalFees: o.additionalFees,
+          fetTax: o.fetTax,
+          discount: o.discount,
+          discountNote: o.discountNote,
+          subtotal: o.subtotal,
+          total: o.total,
+          depositAmount: o.total * operator.depositPercent,
+        },
+      })
+    )
+  );
 
   await prisma.quote.update({
     where: { id: quote.id },
-    data: { selectedOptionId: option.id },
+    data: { selectedOptionId: createdOptions[0].id },
   });
 
   await prisma.tripRequest.update({
@@ -396,27 +359,29 @@ export default async function NewQuotePage({
           aircraftList={aircraftList}
           airportsByIcao={airportsByIcao}
           existingBookings={existingBookings}
-          initialValues={{
-            aircraftId: defaultAircraft?.id ?? null,
-            requestedLegs,
-            hourlyRate: defaultAircraft?.hourlyRate ?? 0,
-            repoRate: defaultAircraft?.repoRate ?? defaultAircraft?.hourlyRate ?? 0,
-            // Default is "stays overnight" now — the aircraft always
-            // repositions home at the very end of the trip regardless (see
-            // buildInitialLegs), this toggle is only about what happens
-            // *between* legs.
-            returnsToHomeBase: false,
-            extraNightsAway: 0,
-            landingFees: 0,
-            handlingFees: 0,
-            additionalFees: [],
-            fetTax: true,
-            discount: 0,
-            discountNote: "",
-            internalNotes: "",
-            clientNotes: "",
-            validUntil: defaultValidUntil(),
-          }}
+          initialOptions={[
+            {
+              aircraftId: defaultAircraft?.id ?? null,
+              requestedLegs,
+              hourlyRate: defaultAircraft?.hourlyRate ?? 0,
+              repoRate: defaultAircraft?.repoRate ?? defaultAircraft?.hourlyRate ?? 0,
+              // Default is "stays overnight" now — the aircraft always
+              // repositions home at the very end of the trip regardless (see
+              // buildInitialLegs), this toggle is only about what happens
+              // *between* legs.
+              returnsToHomeBase: false,
+              extraNightsAway: 0,
+              landingFees: 0,
+              handlingFees: 0,
+              additionalFees: [],
+              fetTax: true,
+              discount: 0,
+              discountNote: "",
+            },
+          ]}
+          internalNotes=""
+          clientNotes=""
+          validUntil={defaultValidUntil()}
           priceSuggestionPromise={priceSuggestionPromise}
           depositPercent={operator.depositPercent}
           defaultOvernightFee={operator.defaultOvernightFee}
