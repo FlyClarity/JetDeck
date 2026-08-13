@@ -713,10 +713,52 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   the confirmation email, Stripe's test card
   (`4000 0025 0000 3155`, any future expiry/CVC/ZIP) authorizes
   successfully.
-  Still not done: whether `cardHoldStatus` actually flips to
-  `authorized` after checkout completes hasn't been confirmed yet —
-  depends on the user adding `checkout.session.completed` to the
-  subscribed webhook events above. Worth a follow-up check.
+
+- **Immediate-checkout redirect + deferred confirmation email + terms
+  display bug — shipped** (raised directly, right after confirming the
+  card hold worked end-to-end): three related fixes to the booking
+  flow's final steps.
+  1. Signing ("I Accept — Book This Charter") now redirects the
+     browser straight into Stripe Checkout in the same session instead
+     of only ever emailing a link — an emailed link is an easy thing
+     to ignore right after the client already committed to signing.
+     `finalizeBooking` (`lib/booking-server.ts`) returns
+     `{ cardHoldUrl }`; `acceptQuote` (`app/q/[token]/page.tsx`)
+     redirects there directly, falling back to the quote page only
+     when there's no deposit due or Stripe isn't configured.
+  2. The client's confirmation email no longer sends at signature time
+     when a deposit is due — it used to promise a card hold link that
+     might never get opened. Split into a new, reusable
+     `sendBookingConfirmationEmail` (`lib/booking-server.ts`): sent
+     immediately only when there's nothing to wait for (no deposit, or
+     Stripe unconfigured); otherwise deferred to fire from the new
+     `checkout.session.completed` webhook handler once the client
+     actually finishes authorizing their hold — looked up via
+     `session.metadata.quoteId` directly rather than
+     `stripePaymentIntentId`, sidestepping a possible ordering race
+     against the `payment_intent.*` events. The email itself never
+     mentions a Stripe link anymore either way — by the time it sends,
+     the hold is already authorized (or was never going through
+     Stripe to begin with). Guarded by a new
+     `Quote.confirmationEmailSentAt` against double-sending, since
+     Stripe redelivers webhooks on retry.
+  3. Fixed a real bug: the client quote page was showing the full
+     Charter Terms section right after "Request to Book" — status
+     `pending_confirmation`, nothing signed yet. Terms should only
+     ever appear at the actual signature step (already handled inline
+     by `TermsAcceptGate` during `approved`) and afterward as a record
+     on `accepted` quotes.
+  Still open: `checkout.session.completed` needs to be added to the
+  webhook's subscribed events in the Stripe dashboard (the original
+  three `payment_intent.*` events were already there) for both the
+  `cardHoldStatus` correction and the new deferred-email trigger to
+  actually fire — flagged to the user, not yet confirmed done. Also
+  not built: if a client abandons the Stripe Checkout tab without
+  completing it, there's no client-facing self-service way back in
+  (the copy on `/q/[token]` tells them to contact the operator, who
+  can already use the existing "Resend card hold link" button) — a
+  client-side "resume checkout" button would close this gap but wasn't
+  asked for yet.
 
 - **Buy a domain + finish Postmark setup** (raised after Step 13):
   inbound email (Step 7) is built but not actually live — `jetdeck.app`
