@@ -28,11 +28,11 @@ async function getScopedQuote(id: string) {
 
   const quote = await prisma.quote.findFirst({
     where: { id, operatorId: operator.id },
-    include: { tripRequest: true },
+    include: { tripRequest: true, selectedOption: true },
   });
-  if (!quote) return null;
+  if (!quote || !quote.selectedOption) return null;
 
-  return { quote, operator };
+  return { quote, option: quote.selectedOption, operator };
 }
 
 async function updateQuote(id: string, formData: FormData) {
@@ -40,7 +40,7 @@ async function updateQuote(id: string, formData: FormData) {
 
   const scoped = await getScopedQuote(id);
   if (!scoped) return;
-  const { quote } = scoped;
+  const { quote, option } = scoped;
 
   const aircraftId = String(formData.get("aircraftId") ?? "");
   const flightHours = Number(formData.get("flightHours") ?? 0);
@@ -99,8 +99,8 @@ async function updateQuote(id: string, formData: FormData) {
 
   const validUntil = String(formData.get("validUntil") ?? "");
 
-  await prisma.quote.update({
-    where: { id: quote.id },
+  await prisma.quoteOption.update({
+    where: { id: option.id },
     data: {
       aircraftId: aircraftId || null,
       itinerary,
@@ -120,6 +120,12 @@ async function updateQuote(id: string, formData: FormData) {
       subtotal,
       total,
       depositAmount: total * scoped.operator.depositPercent,
+    },
+  });
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: {
       internalNotes: String(formData.get("internalNotes") ?? "") || null,
       clientNotes: String(formData.get("clientNotes") ?? "") || null,
       validUntil: validUntil ? new Date(validUntil) : quote.validUntil,
@@ -134,7 +140,7 @@ async function sendQuote(id: string) {
 
   const scoped = await getScopedQuote(id);
   if (!scoped) return;
-  const { quote, operator } = scoped;
+  const { quote, option, operator } = scoped;
   if (quote.status !== "draft" || !quote.tripRequest) return;
 
   await prisma.quote.update({
@@ -148,7 +154,7 @@ async function sendQuote(id: string) {
   await sendEmail({
     to: quote.tripRequest.requestorEmail,
     subject: `Your Charter Quote — ${quote.quoteNumber}`,
-    html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">${quoteLink}</a></p><p>Total: ${formatCurrency(quote.total)}. Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
+    html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">${quoteLink}</a></p><p>Total: ${formatCurrency(option.total)}. Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
     replyTo: operator.replyToEmail ?? undefined,
     from: operator.fromEmail,
     fromName: operator.name,
@@ -226,7 +232,7 @@ export default async function QuotePage({
   const { id } = await params;
   const scoped = await getScopedQuote(id);
   if (!scoped) notFound();
-  const { quote, operator } = scoped;
+  const { quote, option, operator } = scoped;
 
   const aircraftList = await prisma.aircraft.findMany({
     where: { operatorId: operator.id, status: "active" },
@@ -253,18 +259,32 @@ export default async function QuotePage({
   // Fed into the Quote Builder for a live "is this aircraft already booked
   // over these dates?" check as the operator adjusts aircraft/legs — see
   // findConflictingBooking in lib/itinerary.ts.
-  const existingBookings = await prisma.quote.findMany({
+  const existingBookingsRaw = await prisma.quote.findMany({
     where: {
       operatorId: operator.id,
       status: { in: ["accepted", "approved", "pending_confirmation"] },
       id: { not: quote.id },
     },
-    select: { id: true, quoteNumber: true, aircraftId: true, itinerary: true },
+    select: {
+      id: true,
+      quoteNumber: true,
+      selectedOption: { select: { aircraftId: true, itinerary: true } },
+    },
   });
+  const existingBookings = existingBookingsRaw
+    .filter((q): q is typeof q & { selectedOption: NonNullable<(typeof q)["selectedOption"]> } =>
+      Boolean(q.selectedOption)
+    )
+    .map((q) => ({
+      id: q.id,
+      quoteNumber: q.quoteNumber,
+      aircraftId: q.selectedOption.aircraftId,
+      itinerary: q.selectedOption.itinerary,
+    }));
 
   const routeSummaryText = quote.tripRequest
     ? routeSummary(quote.tripRequest.legs, quote.tripRequest.tripType)
-    : routeSummary(revenueLegsOf(quote.itinerary), "multi_leg");
+    : routeSummary(revenueLegsOf(option.itinerary), "multi_leg");
   const requestorLine = quote.tripRequest
     ? [
         quote.tripRequest.requestorName,
@@ -288,7 +308,7 @@ export default async function QuotePage({
     depTimeTBD?: boolean;
     arrTime?: string | null;
   };
-  const storedLegs = (quote.itinerary as StoredLeg[]) ?? [];
+  const storedLegs = (option.itinerary as StoredLeg[]) ?? [];
   const icaosToResolve = [
     ...storedLegs.flatMap((l) => [l.depAirport, l.arrAirport].filter(Boolean) as string[]),
     ...aircraftList.map((a) => a.homeBase),
@@ -350,10 +370,10 @@ export default async function QuotePage({
             action={sendQuoteWithId}
             requestorName={quote.tripRequest?.requestorName ?? "the client"}
             requestorEmail={quote.tripRequest?.requestorEmail ?? ""}
-            routeLines={revenueLegsOf(quote.itinerary).map(
+            routeLines={revenueLegsOf(option.itinerary).map(
               (leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}`
             )}
-            total={formatCurrency(quote.total)}
+            total={formatCurrency(option.total)}
             validUntil={quote.validUntil.toLocaleDateString("en-US", {
               month: "long",
               day: "numeric",
@@ -469,7 +489,7 @@ export default async function QuotePage({
                 Card hold: {quote.cardHoldStatus}
               </p>
             )}
-            {quote.depositAmount && quote.depositAmount > 0 && quote.cardHoldStatus !== "captured" && (
+            {option.depositAmount && option.depositAmount > 0 && quote.cardHoldStatus !== "captured" && (
               <form action={resendCardHoldWithId} className="mt-2">
                 <Button type="submit" variant="outline" size="sm">
                   Resend card hold link
@@ -581,24 +601,24 @@ export default async function QuotePage({
           airportsByIcao={airportsByIcao}
           existingBookings={existingBookings}
           initialValues={{
-            aircraftId: quote.aircraftId,
+            aircraftId: option.aircraftId,
             requestedLegs: [],
             legs: savedLegs,
-            hourlyRate: quote.hourlyRate,
-            repoRate: quote.repoRate,
-            returnsToHomeBase: quote.returnsToHomeBase,
-            // Only the combined total is stored (Quote.overnightNights) —
-            // split it back into auto (from the reloaded legs' own dates)
+            hourlyRate: option.hourlyRate,
+            repoRate: option.repoRate,
+            returnsToHomeBase: option.returnsToHomeBase,
+            // Only the combined total is stored (QuoteOption.overnightNights)
+            // — split it back into auto (from the reloaded legs' own dates)
             // vs. manually-added extra so a manual addition doesn't
             // silently disappear (and get lost for real on the next save)
             // when reopening an existing quote.
-            extraNightsAway: Math.max(0, quote.overnightNights - autoNightsAwayOf(quote.itinerary)),
-            landingFees: quote.landingFees,
-            handlingFees: quote.handlingFees,
-            additionalFees: (quote.additionalFees as { label: string; amount: number }[]) ?? [],
-            fetTax: quote.fetTax > 0,
-            discount: quote.discount,
-            discountNote: quote.discountNote ?? "",
+            extraNightsAway: Math.max(0, option.overnightNights - autoNightsAwayOf(option.itinerary)),
+            landingFees: option.landingFees,
+            handlingFees: option.handlingFees,
+            additionalFees: (option.additionalFees as { label: string; amount: number }[]) ?? [],
+            fetTax: option.fetTax > 0,
+            discount: option.discount,
+            discountNote: option.discountNote ?? "",
             internalNotes: quote.internalNotes ?? "",
             clientNotes: quote.clientNotes ?? "",
             validUntil: quote.validUntil.toISOString().slice(0, 10),

@@ -101,7 +101,7 @@ export default async function DashboardPage() {
 
   const quotes = await prisma.quote.findMany({
     where: { operatorId: operator.id },
-    include: { tripRequest: true },
+    include: { tripRequest: true, selectedOption: true },
     orderBy: { createdAt: "desc" },
     take: RECENT_LIMIT,
   });

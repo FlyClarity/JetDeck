@@ -35,13 +35,25 @@ export async function findBookingConflict(quote: {
 
   const others = await prisma.quote.findMany({
     where: {
-      aircraftId: quote.aircraftId,
+      selectedOption: { aircraftId: quote.aircraftId },
       status: { in: ["accepted", "approved", "pending_confirmation"] },
       ...(quote.id ? { id: { not: quote.id } } : {}),
     },
+    include: { selectedOption: true },
   });
 
-  const conflict = findConflictingBooking(quote.aircraftId, quote.itinerary, others, quote.id);
+  const candidates = others
+    .filter((o): o is typeof o & { selectedOption: NonNullable<(typeof o)["selectedOption"]> } =>
+      Boolean(o.selectedOption)
+    )
+    .map((o) => ({
+      id: o.id,
+      quoteNumber: o.quoteNumber,
+      aircraftId: o.selectedOption.aircraftId,
+      itinerary: o.selectedOption.itinerary,
+    }));
+
+  const conflict = findConflictingBooking(quote.aircraftId, quote.itinerary, candidates, quote.id);
   if (!conflict) return null;
   const label =
     conflict.startDate === conflict.endDate
@@ -59,8 +71,10 @@ export async function findBookingConflict(quote: {
 export async function finalizeBooking(quoteId: string) {
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
-    include: { operator: true, tripRequest: true },
+    include: { operator: true, tripRequest: true, selectedOption: true },
   });
+  if (!quote.selectedOption) throw new Error(`Quote ${quoteId} has no selectedOption`);
+  const option = quote.selectedOption;
 
   const tripNumber = await generateTripNumber(quote.operatorId);
   await prisma.trip.create({
@@ -76,22 +90,22 @@ export async function finalizeBooking(quoteId: string) {
   // itinerary leg lands, whether that's the trip's actual destination or
   // (when "returns to home base" is on) the trailing repositioning leg back
   // home. Only own-fleet aircraft have a currentBase to update.
-  const allLegs = (quote.itinerary as { arrAirport?: string | null }[]) ?? [];
+  const allLegs = (option.itinerary as { arrAirport?: string | null }[]) ?? [];
   const lastArrAirport = allLegs[allLegs.length - 1]?.arrAirport;
-  if (quote.aircraftId && lastArrAirport) {
+  if (option.aircraftId && lastArrAirport) {
     await prisma.aircraft.update({
-      where: { id: quote.aircraftId },
+      where: { id: option.aircraftId },
       data: { currentBase: lastArrAirport },
     });
   }
 
   const appUrl = await getAppUrl();
   let cardHoldUrl: string | null = null;
-  if (quote.depositAmount && quote.depositAmount > 0) {
+  if (option.depositAmount && option.depositAmount > 0) {
     const session = await createCardHoldCheckoutSession({
       quoteId: quote.id,
       quoteNumber: quote.quoteNumber,
-      depositAmount: quote.depositAmount,
+      depositAmount: option.depositAmount,
       appUrl,
       token: quote.token,
     });
@@ -111,12 +125,12 @@ export async function finalizeBooking(quoteId: string) {
 
   const requestorEmail = quote.tripRequest?.requestorEmail;
   const requestorName = quote.tripRequest?.requestorName ?? "there";
-  const revenueLegs = revenueLegsOf(quote.itinerary);
+  const revenueLegs = revenueLegsOf(option.itinerary);
   const routingHtml = revenueLegs
     .map((leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}, ${legTimeLabel(leg)}`)
     .join("<br/>");
 
-  const { route, date } = routeAndDateText(quote.itinerary);
+  const { route, date } = routeAndDateText(option.itinerary);
 
   if (requestorEmail) {
     await sendEmail({
@@ -127,8 +141,8 @@ export async function finalizeBooking(quoteId: string) {
         <p>Thank you for booking with ${quote.operator.name}. Your charter agreement is confirmed.</p>
         <p><strong>Reference:</strong> ${quote.quoteNumber}</p>
         <p><strong>Routing:</strong><br/>${routingHtml}</p>
-        <p><strong>Total:</strong> ${formatCurrency(quote.total)}${
-          quote.depositAmount ? `<br/><strong>Deposit due:</strong> ${formatCurrency(quote.depositAmount)}` : ""
+        <p><strong>Total:</strong> ${formatCurrency(option.total)}${
+          option.depositAmount ? `<br/><strong>Deposit due:</strong> ${formatCurrency(option.depositAmount)}` : ""
         }</p>
         ${quote.operator.wireInstructions ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
         ${
@@ -153,7 +167,7 @@ export async function finalizeBooking(quoteId: string) {
     await sendEmail({
       to: quote.operator.notifyEmail,
       subject: `Quote ${quote.quoteNumber} confirmed!`,
-      html: `<p>${requestorName} is confirmed on quote ${quote.quoteNumber} (${formatCurrency(quote.total)}).</p>`,
+      html: `<p>${requestorName} is confirmed on quote ${quote.quoteNumber} (${formatCurrency(option.total)}).</p>`,
       replyTo: requestorEmail,
       from: quote.operator.fromEmail,
       fromName: quote.operator.name,
@@ -169,16 +183,16 @@ export async function finalizeBooking(quoteId: string) {
 export async function resendCardHoldLink(operatorId: string, quoteId: string) {
   const quote = await prisma.quote.findFirst({
     where: { id: quoteId, operatorId },
-    include: { operator: true, tripRequest: true },
+    include: { operator: true, tripRequest: true, selectedOption: true },
   });
   if (!quote || quote.status !== "accepted") return false;
-  if (!quote.depositAmount || quote.depositAmount <= 0) return false;
+  if (!quote.selectedOption?.depositAmount || quote.selectedOption.depositAmount <= 0) return false;
 
   const appUrl = await getAppUrl();
   const session = await createCardHoldCheckoutSession({
     quoteId: quote.id,
     quoteNumber: quote.quoteNumber,
-    depositAmount: quote.depositAmount,
+    depositAmount: quote.selectedOption.depositAmount,
     appUrl,
     token: quote.token,
   });

@@ -87,7 +87,7 @@ model Aircraft {
   photos    String[] @default([])
   amenities String[] @default([])
 
-  quotes Quote[]
+  quoteOptions QuoteOption[]
 }
 
 // Reference data for flight-time/distance calculations. Empty until a real
@@ -160,44 +160,19 @@ model Quote {
   tripRequest   TripRequest? @relation(fields: [tripRequestId], references: [id])
   contactId     String?
   contact       Contact?     @relation(fields: [contactId], references: [id])
-  aircraftId    String?
-  aircraft      Aircraft?    @relation(fields: [aircraftId], references: [id])
 
-  // Own fleet vs brokered
-  fleetSource String @default("own_fleet")
-  // "own_fleet" -- aircraft from operator's own managed fleet
-  // "brokered"  -- third-party aircraft sourced for this trip
-  brokeredAircraftId String?
-  brokeredAircraft   BrokeredAircraft? @relation(fields: [brokeredAircraftId], references: [id])
-
-  // Itinerary
-  itinerary Json // [{ depAirport, arrAirport, depDt, arrDt, flightHours }]
-
-  // Pricing
-  flightHours    Float
-  hourlyRate     Float
-  repoHours      Float   @default(0)
-  repoRate       Float   @default(0)
-  returnsToHomeBase Boolean @default(true) // if false, overnightFee applies instead of a return repositioning leg
-  overnightNights   Int     @default(0)
-  overnightFee      Float   @default(0) // computed: overnightNights * operator.defaultOvernightFee at time of quote
-  landingFees    Float   @default(0)
-  handlingFees   Float   @default(0)
-  additionalFees Json    @default("[]") // [{ label, amount }]
-  fetTax         Float   @default(0)
-  discount       Float   @default(0)
-  discountNote   String?
-  subtotal       Float
-  total          Float
-  depositAmount  Float? // calculated from total * operator.depositPercent
-
-  // Brokered trip cost tracking (only populated when fleetSource = "brokered")
-  wholesaleCost Float? // what operator pays the third-party operator
-  brokerMargin  Float? // total - wholesaleCost (calculated, stored for reporting)
-
-  // AI pricing recommendation
-  aiPriceSuggestion Float?
-  aiPriceReasoning  String?
+  // "Options" — one quote can hold multiple priced itinerary variations
+  // (e.g. same trip from a different departure airport, or a different
+  // aircraft) that the client chooses between. Every quote has at least
+  // one QuoteOption; selectedOptionId points at whichever one is "active"
+  // for booking purposes — the sole option for a legacy single-option
+  // quote, or whichever one the client picked once there's more than one.
+  // Everything downstream that used to read pricing/itinerary/aircraft
+  // straight off Quote (booking, Stripe, conflict-checking, the client
+  // page) now reads it off quote.selectedOption instead.
+  options          QuoteOption[] @relation("QuoteOptions")
+  selectedOptionId String?
+  selectedOption   QuoteOption?  @relation("SelectedOption", fields: [selectedOptionId], references: [id])
 
   internalNotes String? // operator-only, never shown to the client
   clientNotes   String? // shown on the client-facing quote page (/q/[token])
@@ -263,6 +238,67 @@ model Quote {
   trip Trip?
 }
 
+// A single priced itinerary variation on a Quote. Most quotes have exactly
+// one (created alongside the Quote itself); "Options" lets an operator add
+// more (e.g. same trip from a more efficient departure airport, or a
+// different aircraft) so the client can compare and pick. Quote.
+// selectedOptionId points at whichever one is currently "active" — see the
+// comment on Quote.options.
+model QuoteOption {
+  id      String @id @default(cuid())
+  quoteId String
+  quote   Quote  @relation("QuoteOptions", fields: [quoteId], references: [id], onDelete: Cascade)
+
+  // Shown to the client when a quote has more than one option (e.g.
+  // "Option A"); irrelevant/hidden for the common single-option case.
+  label     String @default("Option A")
+  sortOrder Int    @default(0)
+
+  aircraftId String?
+  aircraft   Aircraft? @relation(fields: [aircraftId], references: [id])
+
+  // Own fleet vs brokered
+  fleetSource String @default("own_fleet")
+  // "own_fleet" -- aircraft from operator's own managed fleet
+  // "brokered"  -- third-party aircraft sourced for this trip
+  brokeredAircraftId String?
+  brokeredAircraft   BrokeredAircraft? @relation(fields: [brokeredAircraftId], references: [id])
+
+  // Itinerary
+  itinerary Json // [{ depAirport, arrAirport, depDt, arrDt, flightHours }]
+
+  // Pricing
+  flightHours       Float
+  hourlyRate        Float
+  repoHours         Float   @default(0)
+  repoRate          Float   @default(0)
+  returnsToHomeBase Boolean @default(true) // if false, overnightFee applies instead of a return repositioning leg
+  overnightNights   Int     @default(0)
+  overnightFee      Float   @default(0) // computed: overnightNights * operator.defaultOvernightFee at time of quote
+  landingFees       Float   @default(0)
+  handlingFees      Float   @default(0)
+  additionalFees    Json    @default("[]") // [{ label, amount }]
+  fetTax            Float   @default(0)
+  discount          Float   @default(0)
+  discountNote      String?
+  subtotal          Float
+  total             Float
+  depositAmount     Float? // calculated from total * operator.depositPercent
+
+  // Brokered trip cost tracking (only populated when fleetSource = "brokered")
+  wholesaleCost Float? // what operator pays the third-party operator
+  brokerMargin  Float? // total - wholesaleCost (calculated, stored for reporting)
+
+  // AI pricing recommendation
+  aiPriceSuggestion Float?
+  aiPriceReasoning  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  selectedForQuote Quote[] @relation("SelectedOption")
+}
+
 model Trip {
   id         String   @id @default(cuid())
   operatorId String
@@ -313,7 +349,7 @@ model BrokeredAircraft {
 
   createdAt DateTime @default(now())
 
-  quotes Quote[]
+  quoteOptions QuoteOption[]
 }
 
 model InboundEmail {

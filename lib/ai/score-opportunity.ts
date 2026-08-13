@@ -115,15 +115,15 @@ export async function scoreOpportunity(
     where: {
       operatorId: tripRequest.operatorId,
       status: { notIn: ["closed", "invoiced"] },
-      quote: { aircraftId: { in: reachable.map((a) => a.id) } },
+      quote: { selectedOption: { aircraftId: { in: reachable.map((a) => a.id) } } },
     },
-    include: { quote: true },
+    include: { quote: { include: { selectedOption: true } } },
   });
 
   function isAircraftBusy(aircraftId: string) {
     return activeTrips.some((trip) => {
-      if (trip.quote.aircraftId !== aircraftId) return false;
-      const itinerary = (trip.quote.itinerary as ItineraryLeg[] | null) ?? [];
+      if (trip.quote.selectedOption?.aircraftId !== aircraftId) return false;
+      const itinerary = (trip.quote.selectedOption.itinerary as ItineraryLeg[] | null) ?? [];
       return itinerary.some((leg) => leg.depDt?.slice(0, 10) === firstLeg.date);
     });
   }
@@ -248,10 +248,11 @@ async function buildHistoryNote(tripRequest: TripRequest): Promise<string | null
       contact: { email: { endsWith: `@${domain}` } },
     },
     orderBy: { createdAt: "desc" },
+    include: { selectedOption: true },
   });
 
-  if (recentQuote) {
-    return `Quoted this broker before — most recent quote ${recentQuote.quoteNumber} (${recentQuote.status}) at $${recentQuote.total.toLocaleString()}`;
+  if (recentQuote?.selectedOption) {
+    return `Quoted this broker before — most recent quote ${recentQuote.quoteNumber} (${recentQuote.status}) at $${recentQuote.selectedOption.total.toLocaleString()}`;
   }
 
   return `${priorRequestCount} prior request${priorRequestCount === 1 ? "" : "s"} from this domain`;

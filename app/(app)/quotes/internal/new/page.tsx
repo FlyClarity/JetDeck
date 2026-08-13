@@ -64,6 +64,18 @@ async function createInternalTrip(
     data: {
       operatorId: operator.id,
       quoteNumber,
+      validUntil,
+      internalNotes: note,
+      tripPurpose: purpose,
+      status: "accepted",
+      acceptedAt: new Date(),
+      createdBy: userId,
+    },
+  });
+
+  const option = await prisma.quoteOption.create({
+    data: {
+      quoteId: quote.id,
       aircraftId,
       fleetSource: "own_fleet",
       itinerary,
@@ -72,13 +84,12 @@ async function createInternalTrip(
       subtotal: 0,
       total: 0,
       depositAmount: 0,
-      validUntil,
-      internalNotes: note,
-      tripPurpose: purpose,
-      status: "accepted",
-      acceptedAt: new Date(),
-      createdBy: userId,
     },
+  });
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { selectedOptionId: option.id },
   });
 
   const tripNumber = await generateTripNumber(operator.id);

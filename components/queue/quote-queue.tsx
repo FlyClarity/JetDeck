@@ -46,7 +46,9 @@ function FullRouting({ legs }: { legs: RawLeg[] }) {
   );
 }
 
-type QuoteWithTripRequest = Prisma.QuoteGetPayload<{ include: { tripRequest: true } }>;
+type QuoteWithTripRequest = Prisma.QuoteGetPayload<{
+  include: { tripRequest: true; selectedOption: true };
+}>;
 
 // pending_confirmation quotes (a conflict found at accept time) don't get
 // their own tab here — the operator's already emailed when one comes in, so
@@ -372,9 +374,9 @@ export function QuoteQueue({
                     <p className="text-sm text-muted-foreground">
                       {q.tripRequest
                         ? routeSummary(q.tripRequest.legs, q.tripRequest.tripType)
-                        : routeSummary(revenueLegsOf(q.itinerary), "multi_leg")}
+                        : routeSummary(revenueLegsOf(q.selectedOption?.itinerary ?? []), "multi_leg")}
                       {" · "}
-                      {formatCurrency(q.total)}
+                      {formatCurrency(q.selectedOption?.total ?? 0)}
                     </p>
                     <span className="text-xs font-medium text-accent">
                       {QUOTE_ACTION_LABEL[q.status] ?? "View →"}
@@ -548,10 +550,10 @@ export function QuoteQueue({
             <p className="font-medium">
               {selectedQuote.tripRequest
                 ? routeSummary(selectedQuote.tripRequest.legs, selectedQuote.tripRequest.tripType)
-                : routeSummary(revenueLegsOf(selectedQuote.itinerary), "multi_leg")}
+                : routeSummary(revenueLegsOf(selectedQuote.selectedOption?.itinerary ?? []), "multi_leg")}
             </p>
-            <FullRouting legs={revenueLegsOf(selectedQuote.itinerary)} />
-            <p className="mt-2 text-muted-foreground">{formatCurrency(selectedQuote.total)}</p>
+            <FullRouting legs={revenueLegsOf(selectedQuote.selectedOption?.itinerary ?? [])} />
+            <p className="mt-2 text-muted-foreground">{formatCurrency(selectedQuote.selectedOption?.total ?? 0)}</p>
           </div>
 
           <div className="flex flex-wrap gap-2">

@@ -16,7 +16,11 @@ import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
 async function getQuoteByToken(token: string) {
   return prisma.quote.findUnique({
     where: { token },
-    include: { operator: true, tripRequest: true, aircraft: true, brokeredAircraft: true },
+    include: {
+      operator: true,
+      tripRequest: true,
+      selectedOption: { include: { aircraft: true, brokeredAircraft: true } },
+    },
   });
 }
 
@@ -30,10 +34,14 @@ async function requestToBook(token: string) {
   "use server";
 
   const quote = await getQuoteByToken(token);
-  if (!quote || quote.status !== "sent") return;
+  if (!quote || quote.status !== "sent" || !quote.selectedOption) return;
   if (quote.validUntil < new Date()) return;
 
-  const conflictWarning = await findBookingConflict(quote);
+  const conflictWarning = await findBookingConflict({
+    id: quote.id,
+    aircraftId: quote.selectedOption.aircraftId,
+    itinerary: quote.selectedOption.itinerary,
+  });
 
   await prisma.quote.update({
     where: { id: quote.id },
@@ -46,7 +54,7 @@ async function requestToBook(token: string) {
     await sendEmail({
       to: quote.operator.notifyEmail,
       subject: `New booking request — Quote ${quote.quoteNumber}`,
-      html: `<p>${requestorName} requested to book quote ${quote.quoteNumber} (${formatCurrency(quote.total)}).</p>${
+      html: `<p>${requestorName} requested to book quote ${quote.quoteNumber} (${formatCurrency(quote.selectedOption.total)}).</p>${
         conflictWarning
           ? `<p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p>`
           : ""
@@ -70,7 +78,7 @@ async function acceptQuote(token: string, formData: FormData) {
   "use server";
 
   const quote = await getQuoteByToken(token);
-  if (!quote || quote.status !== "approved") return;
+  if (!quote || quote.status !== "approved" || !quote.selectedOption) return;
   if (quote.validUntil < new Date()) return;
 
   const acceptedByName = String(formData.get("acceptedByName") ?? "").trim() || null;
@@ -84,7 +92,11 @@ async function acceptQuote(token: string, formData: FormData) {
     : null;
   const acceptedAt = new Date();
 
-  const conflictWarning = await findBookingConflict(quote);
+  const conflictWarning = await findBookingConflict({
+    id: quote.id,
+    aircraftId: quote.selectedOption.aircraftId,
+    itinerary: quote.selectedOption.itinerary,
+  });
 
   await prisma.quote.update({
     where: { id: quote.id },
@@ -120,7 +132,7 @@ async function acceptQuote(token: string, formData: FormData) {
       await sendEmail({
         to: quote.operator.notifyEmail,
         subject: `⚠️ Booking conflict — Quote ${quote.quoteNumber} needs your confirmation`,
-        html: `<p>${acceptedByName} (${requestorName}) signed quote ${quote.quoteNumber} (${formatCurrency(quote.total)}), but a new conflict was found since you approved it:</p><p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p><p>Review and confirm or decline from the <a href="${appUrl}/quotes/${quote.id}">quote detail page</a> — nothing has been finalized with the client yet.</p>`,
+        html: `<p>${acceptedByName} (${requestorName}) signed quote ${quote.quoteNumber} (${formatCurrency(quote.selectedOption.total)}), but a new conflict was found since you approved it:</p><p style="color:#b91c1c"><strong>⚠️ ${conflictWarning}</strong></p><p>Review and confirm or decline from the <a href="${appUrl}/quotes/${quote.id}">quote detail page</a> — nothing has been finalized with the client yet.</p>`,
         replyTo: requestorEmail,
         from: quote.operator.fromEmail,
         fromName: quote.operator.name,
@@ -208,11 +220,12 @@ export default async function ClientQuotePage({
   const { token } = await params;
   const { requested } = await searchParams;
   const quote = await getQuoteByToken(token);
-  if (!quote || quote.status === "draft") notFound();
+  if (!quote || quote.status === "draft" || !quote.selectedOption) notFound();
 
   const operator = quote.operator;
   const tripRequest = quote.tripRequest;
-  const legs = revenueLegsOf(quote.itinerary);
+  const option = quote.selectedOption;
+  const legs = revenueLegsOf(option.itinerary);
   const pax = tripRequest ? paxCount(tripRequest.legs) : null;
 
   // Client-facing page, no operator session — query Airport directly
@@ -238,7 +251,7 @@ export default async function ClientQuotePage({
   // quote detail page instead. Derived from total/fetTax rather than the
   // stored subtotal so it's always self-consistent with what's displayed
   // below, regardless of how subtotal was computed at save time.
-  const preTaxSubtotal = quote.total - quote.fetTax;
+  const preTaxSubtotal = option.total - option.fetTax;
   const segmentFees = allocateProportionally(
     legs.map((l) => l.flightHours ?? 0),
     preTaxSubtotal
@@ -255,10 +268,10 @@ export default async function ClientQuotePage({
   const declineQuoteWithToken = declineQuote.bind(null, token);
   const requestChangesWithToken = requestChanges.bind(null, token);
 
-  const aircraftLabel = quote.aircraft
-    ? `${quote.aircraft.make} ${quote.aircraft.model} (${quote.aircraft.tailNumber})`
-    : quote.brokeredAircraft
-      ? `${quote.brokeredAircraft.make ?? ""} ${quote.brokeredAircraft.model ?? ""}`.trim() ||
+  const aircraftLabel = option.aircraft
+    ? `${option.aircraft.make} ${option.aircraft.model} (${option.aircraft.tailNumber})`
+    : option.brokeredAircraft
+      ? `${option.brokeredAircraft.make ?? ""} ${option.brokeredAircraft.model ?? ""}`.trim() ||
         "Aircraft to be confirmed"
       : "Aircraft to be confirmed";
 
@@ -354,14 +367,14 @@ export default async function ClientQuotePage({
             </p>
           </section>
 
-          {quote.aircraft && (quote.aircraft.photos.length > 0 || quote.aircraft.amenities.length > 0) && (
+          {option.aircraft && (option.aircraft.photos.length > 0 || option.aircraft.amenities.length > 0) && (
             <section className="mt-6">
               <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Aircraft
               </h2>
-              {quote.aircraft.photos.length > 0 && (
+              {option.aircraft.photos.length > 0 && (
                 <div className="mt-2 flex gap-2 overflow-x-auto">
-                  {quote.aircraft.photos.map((url) => (
+                  {option.aircraft.photos.map((url) => (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       key={url}
@@ -372,9 +385,9 @@ export default async function ClientQuotePage({
                   ))}
                 </div>
               )}
-              {quote.aircraft.amenities.length > 0 && (
+              {option.aircraft.amenities.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {quote.aircraft.amenities.map((a) => (
+                  {option.aircraft.amenities.map((a) => (
                     <span
                       key={a}
                       className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground"
@@ -413,17 +426,17 @@ export default async function ClientQuotePage({
                 <span>Subtotal</span>
                 <span>{formatCurrency(preTaxSubtotal)}</span>
               </div>
-              {quote.fetTax > 0 && (
-                <Row label="Federal Excise Tax (7.5%)" value={formatCurrency(quote.fetTax)} emphasis="muted" />
+              {option.fetTax > 0 && (
+                <Row label="Federal Excise Tax (7.5%)" value={formatCurrency(option.fetTax)} emphasis="muted" />
               )}
               <div className="mt-2 flex justify-between border-t border-border pt-2 font-semibold">
                 <span>Total</span>
-                <span>{formatCurrency(quote.total)}</span>
+                <span>{formatCurrency(option.total)}</span>
               </div>
-              {quote.depositAmount !== null && (
+              {option.depositAmount !== null && (
                 <Row
                   label={`Deposit (${Math.round(operator.depositPercent * 100)}%)`}
-                  value={formatCurrency(quote.depositAmount ?? 0)}
+                  value={formatCurrency(option.depositAmount ?? 0)}
                   emphasis="muted"
                 />
               )}

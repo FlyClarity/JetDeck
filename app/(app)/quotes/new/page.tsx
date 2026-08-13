@@ -186,6 +186,16 @@ async function createQuote(tripRequestId: string, formData: FormData) {
       quoteNumber,
       tripRequestId: tripRequest.id,
       contactId: tripRequest.contactId,
+      internalNotes: String(formData.get("internalNotes") ?? "") || null,
+      clientNotes: String(formData.get("clientNotes") ?? "") || null,
+      validUntil: new Date(validUntil),
+      createdBy: userId,
+    },
+  });
+
+  const option = await prisma.quoteOption.create({
+    data: {
+      quoteId: quote.id,
       aircraftId: aircraft.id,
       itinerary,
       flightHours,
@@ -204,11 +214,12 @@ async function createQuote(tripRequestId: string, formData: FormData) {
       subtotal,
       total,
       depositAmount: total * operator.depositPercent,
-      internalNotes: String(formData.get("internalNotes") ?? "") || null,
-      clientNotes: String(formData.get("clientNotes") ?? "") || null,
-      validUntil: new Date(validUntil),
-      createdBy: userId,
     },
+  });
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { selectedOptionId: option.id },
   });
 
   await prisma.tripRequest.update({
@@ -264,13 +275,27 @@ export default async function NewQuotePage({
   // over these dates?" check as the operator picks an aircraft and edits
   // legs — no round-trip needed since the comparison itself is pure (see
   // findConflictingBooking).
-  const existingBookings = await prisma.quote.findMany({
+  const existingBookingsRaw = await prisma.quote.findMany({
     where: {
       operatorId: operator.id,
       status: { in: ["accepted", "approved", "pending_confirmation"] },
     },
-    select: { id: true, quoteNumber: true, aircraftId: true, itinerary: true },
+    select: {
+      id: true,
+      quoteNumber: true,
+      selectedOption: { select: { aircraftId: true, itinerary: true } },
+    },
   });
+  const existingBookings = existingBookingsRaw
+    .filter((q): q is typeof q & { selectedOption: NonNullable<(typeof q)["selectedOption"]> } =>
+      Boolean(q.selectedOption)
+    )
+    .map((q) => ({
+      id: q.id,
+      quoteNumber: q.quoteNumber,
+      aircraftId: q.selectedOption.aircraftId,
+      itinerary: q.selectedOption.itinerary,
+    }));
 
   const defaultAircraft =
     aircraftList.find((a) => a.category === tripRequest.aircraftPref) ?? aircraftList[0] ?? null;
