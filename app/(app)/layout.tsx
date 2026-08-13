@@ -88,6 +88,12 @@ export default async function AppLayout({
             </Link>
           )}
           <Link
+            href="/contacts"
+            className="text-sm text-muted-foreground hover:text-foreground"
+          >
+            Contacts
+          </Link>
+          <Link
             href="/inbox/review"
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
           >

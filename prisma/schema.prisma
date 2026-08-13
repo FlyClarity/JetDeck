@@ -54,6 +54,13 @@ model Contact {
   company    String?
   type       String // "direct" | "broker"
   notes      String?
+
+  // "standard" -- normal card-hold-on-acceptance flow
+  // "cash_on_account" -- trusted/invoiced client; skip the card hold
+  // requirement entirely at booking time (finalizeBooking treats it like
+  // no deposit is due)
+  paymentTerms String @default("standard")
+
   createdAt  DateTime @default(now())
 
   tripRequests TripRequest[]

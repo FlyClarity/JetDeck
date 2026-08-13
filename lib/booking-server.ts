@@ -79,10 +79,11 @@ export async function findBookingConflict(quote: {
 export async function sendBookingConfirmationEmail(quoteId: string) {
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
-    include: { operator: true, tripRequest: true, selectedOption: true },
+    include: { operator: true, tripRequest: true, selectedOption: true, contact: true },
   });
   if (quote.confirmationEmailSentAt || !quote.selectedOption) return;
   const option = quote.selectedOption;
+  const waivesCardHold = quote.contact?.paymentTerms === "cash_on_account";
 
   const requestorEmail = quote.tripRequest?.requestorEmail;
   const requestorName = quote.tripRequest?.requestorName ?? "there";
@@ -98,14 +99,17 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
   // Stripe's flow (this email only fires after checkout completes, or
   // never had one to begin with), distinct from "there's a deposit but
   // Stripe isn't configured," which still needs the old manual-follow-up
-  // copy.
+  // copy. A cash-on-account client (Contacts page) never gets a card hold
+  // at all, regardless of the quote's deposit amount — billed separately.
   const depositLine = !option.depositAmount
     ? ""
-    : quote.stripePaymentIntentId
-      ? `<br/><strong>Deposit:</strong> ${formatCurrency(option.depositAmount)} — card hold authorized`
-      : `<br/><strong>Deposit due:</strong> ${formatCurrency(option.depositAmount)}`;
+    : waivesCardHold
+      ? `<br/><strong>Deposit:</strong> ${formatCurrency(option.depositAmount)} — billed on account`
+      : quote.stripePaymentIntentId
+        ? `<br/><strong>Deposit:</strong> ${formatCurrency(option.depositAmount)} — card hold authorized`
+        : `<br/><strong>Deposit due:</strong> ${formatCurrency(option.depositAmount)}`;
   const followUpLine =
-    option.depositAmount && !quote.stripePaymentIntentId
+    option.depositAmount && !quote.stripePaymentIntentId && !waivesCardHold
       ? `<p>Our team will follow up shortly with a secure card authorization link for your deposit hold.</p>`
       : "";
 
@@ -170,10 +174,15 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
 export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: string | null }> {
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
-    include: { operator: true, tripRequest: true, selectedOption: true },
+    include: { operator: true, tripRequest: true, selectedOption: true, contact: true },
   });
   if (!quote.selectedOption) throw new Error(`Quote ${quoteId} has no selectedOption`);
   const option = quote.selectedOption;
+
+  // A trusted client marked cash-on-account (Contacts page) skips the card
+  // hold requirement entirely, same as if no deposit were due — they're
+  // invoiced/settled outside JetDeck instead.
+  const waivesCardHold = quote.contact?.paymentTerms === "cash_on_account";
 
   const tripNumber = await generateTripNumber(quote.operatorId);
   await prisma.trip.create({
@@ -181,7 +190,7 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
       operatorId: quote.operatorId,
       tripNumber,
       quoteId: quote.id,
-      status: "awaiting_payment",
+      status: waivesCardHold ? "confirmed" : "awaiting_payment",
     },
   });
 
@@ -200,7 +209,7 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
 
   const appUrl = await getAppUrl();
   let cardHoldUrl: string | null = null;
-  if (option.depositAmount && option.depositAmount > 0) {
+  if (!waivesCardHold && option.depositAmount && option.depositAmount > 0) {
     const session = await createCardHoldCheckoutSession({
       quoteId: quote.id,
       quoteNumber: quote.quoteNumber,
