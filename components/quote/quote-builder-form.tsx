@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useMemo, useState } from "react";
-import { ArrowRight, GripVertical, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowRight, ChevronUp, ChevronDown, ChevronRight } from "lucide-react";
 import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
 import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
@@ -550,41 +550,50 @@ export function QuoteBuilderForm({
     );
   }
 
-  // Native HTML5 drag-and-drop — the grip handle is the only draggable
-  // element (not the row), so dragging doesn't fight with selecting text
-  // in the row's own inputs. Drop target listeners live on the row itself,
-  // so dropping anywhere on a row moves the dragged leg there. Like the
-  // move-buttons approach it replaced, this is a plain array-position
-  // move — doesn't try to re-derive homeSide/betweenLegs after the move
-  // (see below), since an operator dragging an auto-managed leg away from
-  // its original leading/trailing/bracketing position is already choosing
-  // to override it by hand.
-  const [draggedLegId, setDraggedLegId] = useState<string | null>(null);
-
-  function handleLegDrop(targetId: string) {
+  // Plain array-position swap — doesn't try to re-derive which endpoint of
+  // an auto repositioning leg is "home" (homeSide) or which gap a
+  // between-legs pair brackets (betweenLegs) after the move, since those
+  // are only ever read again by the aircraft-change resync effect and the
+  // "returns to base" toggle, not by rendering itself. Reordering an auto
+  // leg away from its original leading/trailing/bracketing position is an
+  // edge case an operator doing this at all is already choosing to
+  // override by hand.
+  function moveLeg(id: string, direction: -1 | 1) {
     setLegs((prev) => {
-      const from = prev.findIndex((l) => l.id === draggedLegId);
-      const to = prev.findIndex((l) => l.id === targetId);
-      if (from === -1 || to === -1 || from === to) return prev;
+      const index = prev.findIndex((l) => l.id === id);
+      const target = index + direction;
+      if (index === -1 || target < 0 || target >= prev.length) return prev;
       const next = [...prev];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
+      [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
-    setDraggedLegId(null);
   }
 
-  function legDragHandle(id: string) {
+  // Subtle chevrons rather than full arrow icons/a drag handle, per direct
+  // feedback on both earlier attempts — sits at the left edge of the leg
+  // card, out of the way of the actual fields.
+  function legMoveButtons(id: string, index: number) {
     return (
-      <span
-        draggable
-        onDragStart={() => setDraggedLegId(id)}
-        onDragEnd={() => setDraggedLegId(null)}
-        className="cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing"
-        aria-label="Drag to reorder leg"
-      >
-        <GripVertical className="size-4" />
-      </span>
+      <div className="flex flex-col">
+        <button
+          type="button"
+          onClick={() => moveLeg(id, -1)}
+          disabled={index === 0}
+          className="text-muted-foreground/60 hover:text-foreground disabled:opacity-20"
+          aria-label="Move leg up"
+        >
+          <ChevronUp className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => moveLeg(id, 1)}
+          disabled={index === legs.length - 1}
+          className="text-muted-foreground/60 hover:text-foreground disabled:opacity-20"
+          aria-label="Move leg down"
+        >
+          <ChevronDown className="size-3.5" />
+        </button>
+      </div>
     );
   }
 
@@ -802,14 +811,9 @@ export function QuoteBuilderForm({
               return (
                 <div
                   key={leg.id}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => handleLegDrop(leg.id)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm",
-                    draggedLegId === leg.id && "opacity-50"
-                  )}
+                  className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm"
                 >
-                  {legDragHandle(leg.id)}
+                  {legMoveButtons(leg.id, i)}
                   <button
                     type="button"
                     onClick={() => toggleCollapsed(leg.id)}
@@ -841,15 +845,10 @@ export function QuoteBuilderForm({
             return (
               <div
                 key={leg.id}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => handleLegDrop(leg.id)}
-                className={cn(
-                  "flex flex-wrap items-end gap-3 rounded-md border border-border p-2.5",
-                  draggedLegId === leg.id && "opacity-50"
-                )}
+                className="flex flex-wrap items-end gap-3 rounded-md border border-border p-2.5"
               >
                 <div className="flex h-9 items-center gap-2">
-                  {legDragHandle(leg.id)}
+                  {legMoveButtons(leg.id, i)}
                   {isRepositioning ? (
                     <button
                       type="button"

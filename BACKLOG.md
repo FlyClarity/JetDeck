@@ -2,19 +2,25 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
-- **Reorder legs in the Quote Builder — shipped** (raised directly). First
-  pass used Move Up/Down buttons on every leg row; replaced same-day after
-  direct feedback ("I dont like the up and down arrow ui... I would rather
-  have the hamburger/hash style to move leg around with the mouse") with a
-  drag handle (`GripVertical` icon) using native HTML5 drag-and-drop —
-  `draggable` lives only on the handle (not the whole row), so dragging
-  doesn't fight with selecting text in the row's own inputs; drop-target
-  listeners live on the row so dropping anywhere on it moves the dragged
-  leg there; the dragged row dims (`opacity-50`) while in flight. Same
-  underlying array-position move as the buttons version, and the same
-  deliberate non-goal: doesn't try to re-derive `homeSide`/`betweenLegs`
+- **Reorder legs in the Quote Builder — shipped, iterated twice on UI
+  in one day** (raised directly). Three passes, each on direct feedback:
+  1. Move Up/Down buttons (`ArrowUp`/`ArrowDown`) on every leg row.
+  2. Replaced with a drag handle (`GripVertical`) using native HTML5
+     drag-and-drop, after "I dont like the up and down arrow ui... I
+     would rather have the hamburger/hash style to move leg around with
+     the mouse."
+  3. Replaced again with Move Up/Down buttons after all, after "that
+     does work as well i want to roll that back but i want the arrows
+     to be more subtle not arros just '^' and down on the left side of
+     the leg card" — back to buttons, but `ChevronUp`/`ChevronDown`
+     (smaller, lighter — `text-muted-foreground/60`, `disabled:opacity-20`)
+     instead of the original full arrow icons, sitting at the card's left
+     edge out of the way of the actual fields.
+  Underlying logic (`moveLeg` — plain array-position swap) is unchanged
+  across all three; only the UI/interaction model moved. Same deliberate
+  non-goal throughout: doesn't try to re-derive `homeSide`/`betweenLegs`
   after a move (those only matter to the aircraft-resync effect and the
-  "returns to base" toggle, not rendering) — an operator dragging an
+  "returns to base" toggle, not rendering) — an operator reordering an
   auto-managed leg away from its original leading/trailing/bracketing
   position is already choosing to override it by hand.
 
