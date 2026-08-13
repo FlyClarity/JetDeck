@@ -8,6 +8,7 @@ import { calculateQuoteTotals, formatCurrency, QUOTE_MESSAGE_BADGES, TRIP_PURPOS
 import {
   confirmPendingBookingForOperator,
   declinePendingBookingForOperator,
+  resendCardHoldLink,
 } from "@/lib/booking-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { revenueLegsOf, legDate, autoNightsAwayOf } from "@/lib/itinerary";
@@ -207,6 +208,16 @@ async function declinePendingBooking(id: string, formData: FormData) {
   redirect(`/quotes/${id}`);
 }
 
+async function resendCardHold(id: string) {
+  "use server";
+
+  const scoped = await getScopedQuote(id);
+  if (!scoped) return;
+  await resendCardHoldLink(scoped.operator.id, id);
+
+  redirect(`/quotes/${id}`);
+}
+
 export default async function QuotePage({
   params,
 }: {
@@ -307,6 +318,7 @@ export default async function QuotePage({
   const cancelBookingWithId = cancelBooking.bind(null, quote.id);
   const confirmPendingBookingWithId = confirmPendingBooking.bind(null, quote.id);
   const declinePendingBookingWithId = declinePendingBooking.bind(null, quote.id);
+  const resendCardHoldWithId = resendCardHold.bind(null, quote.id);
   const clientLink = `${await getAppUrl()}/q/${quote.token}`;
 
   return (
@@ -456,6 +468,13 @@ export default async function QuotePage({
               <p className="mt-1 text-xs text-muted-foreground capitalize">
                 Card hold: {quote.cardHoldStatus}
               </p>
+            )}
+            {quote.depositAmount && quote.depositAmount > 0 && quote.cardHoldStatus !== "captured" && (
+              <form action={resendCardHoldWithId} className="mt-2">
+                <Button type="submit" variant="outline" size="sm">
+                  Resend card hold link
+                </Button>
+              </form>
             )}
           </div>
 

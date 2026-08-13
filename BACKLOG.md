@@ -585,12 +585,13 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   passed"). For a single-aircraft-type fleet this note fires on nearly
   every request, which may get noisy — worth revisiting if it turns
   out to be more clutter than signal in practice.
-- **Operator logo upload** (raised alongside the client quote page's
-  missing logo): `Operator.logoUrl` and the Settings field only accept
-  a pasted URL to an already-hosted image. There's no file upload —
-  worth adding via Vercel Blob (same tool already flagged for aircraft
-  photos above) once there's appetite to batch image-upload work
-  together.
+- ~~**Operator logo upload**~~ — not actually a gap: `Operator.logoUrl`
+  is already synced automatically from Clerk's own hosted Organization
+  Profile UI (`app/api/webhooks/clerk/route.ts` reads `has_image`/
+  `image_url` off the `organization.updated` webhook payload and writes
+  `logoUrl`). An operator changes their logo in Clerk's org settings, not
+  in JetDeck — no custom upload UI needed here. (Previously logged as an
+  open item in error; corrected after review.)
 - **Double-booking now actually blocks instead of just warning after the
   fact** (raised directly — two clients booking the same aircraft/dates):
   previously `acceptQuote` always accepted immediately and only *flagged*
@@ -630,6 +631,20 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   worth hardening later by storing a terms snapshot on the Quote at
   send time, matching how `Operator.termsVersion` already snapshots a
   hash on Settings save.
+- **Resend card hold link — shipped** (raised directly): Stripe Checkout
+  Sessions expire 24h after creation, and the client's confirmation email
+  only ever contains the one link generated at booking time
+  (`finalizeBooking`). If a client doesn't click through in time, that
+  link goes dead with no way back in short of the operator manually
+  sorting it out over email/phone. New `resendCardHoldLink(operatorId,
+  quoteId)` in `lib/booking-server.ts` regenerates a fresh Checkout
+  Session for the same deposit amount, updates `stripePaymentIntentId`/
+  `cardHoldStatus: "pending"`, and re-emails the client the new link.
+  Wired up as a "Resend card hold link" button on the quote detail page
+  (`app/(app)/quotes/[id]/page.tsx`), shown for `accepted` quotes with a
+  deposit that hasn't already been captured (`cardHoldStatus !==
+  "captured"` — no point resending once the hold already went through).
+
 - **Stripe card hold (Step 17) + Trip creation (Step 18) — shipped**:
   `acceptQuote` (`app/q/[token]/page.tsx`) now does both on acceptance,
   in order: creates a `Trip` record (`lib/trip-server.ts`'s
@@ -931,3 +946,25 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   saves — but flagging both since it changes how "draft" status
   should be interpreted (a true autosave means there's no unsaved
   state to lose in the first place).
+
+- **Operator/broker onboarding game plan** (raised directly — JetDeck
+  is a multi-tenant SaaS, not a single-operator app; domain is
+  jetdeck.us): today only one tenant, "Clarity Aviation, LLC," has
+  working inbound (Postmark) and outbound (Resend) email — set up
+  manually. Every new operator or broker who signs up will need their
+  own inbound trip-request address and outbound sending domain
+  configured before they can use JetDeck for real. Not scoped or
+  built yet — this is a planning flag, not a build item. Open
+  questions to work out before designing it: does each operator get a
+  subdomain under jetdeck.us (e.g. `requests@clarityaviation.jetdeck.us`,
+  simplest, fully self-service, no DNS work on the operator's end) or
+  their own domain (more "native" feel in their inbox, but requires
+  the operator to add DNS records — SPF/DKIM for Resend, MX/inbound
+  routing for Postmark — either themselves or with JetDeck support
+  walking them through it)? Does onboarding happen through a
+  self-service flow in Settings (operator pastes/verifies their own
+  domain) or is it always support-assisted for now given how few
+  operators there are today? Whatever's decided needs to slot into
+  the existing Clerk organization signup flow (`organization.created`
+  webhook) so a new org lands in a clear "email not yet configured"
+  state rather than silently failing to receive trip requests.

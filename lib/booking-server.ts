@@ -161,6 +161,49 @@ export async function finalizeBooking(quoteId: string) {
   }
 }
 
+// The Stripe Checkout Session created in finalizeBooking expires after 24h
+// (Stripe's default) — if the client doesn't click through in time, the
+// original link in their confirmation email goes dead with no way back in.
+// This regenerates a fresh session for the same deposit and re-sends it,
+// rather than requiring the operator to re-run the whole booking pipeline.
+export async function resendCardHoldLink(operatorId: string, quoteId: string) {
+  const quote = await prisma.quote.findFirst({
+    where: { id: quoteId, operatorId },
+    include: { operator: true, tripRequest: true },
+  });
+  if (!quote || quote.status !== "accepted") return false;
+  if (!quote.depositAmount || quote.depositAmount <= 0) return false;
+
+  const appUrl = await getAppUrl();
+  const session = await createCardHoldCheckoutSession({
+    quoteId: quote.id,
+    quoteNumber: quote.quoteNumber,
+    depositAmount: quote.depositAmount,
+    appUrl,
+    token: quote.token,
+  });
+  if (!session) return false;
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { stripePaymentIntentId: session.paymentIntentId, cardHoldStatus: "pending" },
+  });
+
+  const requestorEmail = quote.tripRequest?.requestorEmail;
+  if (requestorEmail) {
+    await sendEmail({
+      to: requestorEmail,
+      subject: `New card hold link — ${quote.quoteNumber}`,
+      html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>Your previous card authorization link expired. Please use this new link to authorize your deposit hold — no charge is made, this only places a hold: <a href="${session.url}">${session.url}</a></p><p>— ${quote.operator.name}</p>`,
+      replyTo: quote.operator.replyToEmail ?? undefined,
+      from: quote.operator.fromEmail,
+      fromName: quote.operator.name,
+    });
+  }
+
+  return true;
+}
+
 // Shared by both places a pending_confirmation request gets resolved: the
 // quote detail page and the Needs Review inbox. Each does its own
 // operator-scoped lookup rather than trusting a quote object handed in,
