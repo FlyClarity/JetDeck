@@ -828,22 +828,40 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   scoring's positioning logic is still qualitative text, not tied to
   this new hours math yet.
 
-- **Multiple itinerary variations per quote** (raised after Step 13.5):
-  the user asked about presenting two options on the same quote — e.g.
-  the same trip priced from a more efficient departure airport vs. the
-  requested one, so the client can pick. Not scoped or built yet, just
-  flagging the design fork for when we get to it: (a) a `Quote` gets a
-  `variants`/`options` array so one quote record holds N priced
-  itineraries, client page shows a picker, or (b) each variation is
-  its own sibling `Quote` row (new `quoteGroupId` or similar linking
-  them) sent together. (b) fits the current schema with much less
-  disruption — `Quote` is already a flat, self-contained pricing
-  record — but (a) is the more natural authoring experience in the
-  Quote Builder (duplicate a draft, tweak the airport, compare
-  side-by-side before sending). Worth scoping properly before Step 14
-  if the user wants to prioritize it, since it touches the client quote
-  page (Step 15, not built yet) too — better to design it in from the
-  start than retrofit.
+- **"Options" — multiple priced itinerary variations per quote** (raised
+  after Step 13.5, made an explicit pre-ops priority directly: "one
+  quote can have 3 different options"). Decided direction: one `Quote`
+  (single client-facing token/thread) gets N child `QuoteOption` rows —
+  functionally "a variants array on one quote," implemented relationally
+  rather than as a raw JSON blob so conflict-checking, Stripe, and every
+  existing query stay type-safe and indexable. `Quote.selectedOptionId`
+  points at whichever option is "active" for booking purposes.
+  **Phase 1 — shipped**: schema migration (`QuoteOption` model,
+  `Quote.selectedOptionId`) plus every read/write call site
+  (`lib/booking-server.ts` conflict-checking/`finalizeBooking`/
+  `resendCardHoldLink`, the Quote Builder create/edit server actions,
+  the internal-trip shortcut, `/q/[token]`, the Quoting Queue, the
+  dashboard, `score-opportunity.ts`'s aircraft-busy check) redirected to
+  read/write through `quote.selectedOption`. Purely structural and
+  backward-compatible — the migration backfills exactly one
+  `QuoteOption` per existing quote with its current values, so nothing
+  already sent/accepted/paid changes behavior; every quote still behaves
+  as single-option until Phase 2/3 ship. A mapping pass before writing
+  the migration found two housekeeping items worth noting: `Quote.
+  aiPriceSuggestion`/`aiPriceReasoning` appear unused anywhere in the
+  codebase (the real AI price suggestion lives on `TripRequest`) —
+  carried over into `QuoteOption` as-is rather than dropped, in case
+  they're meant for later; and `wholesaleCost`/`brokerMargin` similarly
+  have no UI reads/writes yet (no brokered-cost entry form exists) —
+  also carried over unchanged.
+  **Phase 2 — not started**: Quote Builder authoring UI to add/duplicate/
+  remove options (tabs or cards, each with its own itinerary/pricing) so
+  an operator can price 2-3 variants on one quote.
+  **Phase 3 — not started**: client-facing comparison/picker on
+  `/q/[token]` when a quote has more than one option — the client's
+  choice sets `selectedOptionId`, which then drives Request to Book,
+  operator approval, Stripe, and `finalizeBooking` exactly as today for
+  whichever option they picked.
 
 - **AI profitability / margin analysis on quotes** (raised after Step
   13.5): the user wants the AI layer to surface how profitable a trip
