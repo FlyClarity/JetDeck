@@ -854,14 +854,59 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   they're meant for later; and `wholesaleCost`/`brokerMargin` similarly
   have no UI reads/writes yet (no brokered-cost entry form exists) —
   also carried over unchanged.
-  **Phase 2 — not started**: Quote Builder authoring UI to add/duplicate/
-  remove options (tabs or cards, each with its own itinerary/pricing) so
-  an operator can price 2-3 variants on one quote.
-  **Phase 3 — not started**: client-facing comparison/picker on
-  `/q/[token]` when a quote has more than one option — the client's
-  choice sets `selectedOptionId`, which then drives Request to Book,
-  operator approval, Stripe, and `finalizeBooking` exactly as today for
-  whichever option they picked.
+  **Phase 2+3 — shipped together** (built as one unit — Phase 2 alone
+  would have let an operator send a 2-option quote with no way for the
+  client to ever see or pick the second one). Confirmed via
+  `AskUserQuestion` before building: options are fully independent (own
+  aircraft/itinerary/pricing each, not just alternate pricing on one
+  aircraft), authored via tabs, and picking one silently retires the
+  others rather than formally "declining" each with its own record.
+  - **Quote Builder** (`components/quote/quote-builder-form.tsx`): the
+    pre-Options single-option state/logic is untouched — extracted
+    as-is into an inner `QuoteOptionFields` component that still owns
+    its own aircraft/legs/pricing state via local `useState`, exactly
+    as before. The outer `QuoteBuilderForm` renders one
+    `QuoteOptionFields` instance per option inside a single shared
+    `<form>`, all mounted simultaneously; switching tabs only toggles
+    CSS visibility (`hidden` class), never unmounts, so in-progress
+    edits on any tab survive tab-switching without lifting state up
+    into the parent. Each instance's fields are namespaced
+    (`option_0_*`, `option_1_*`, ...) so one submission carries every
+    option — HTML forms include `display:none` descendants in
+    submission, so hidden tabs' fields still post normally. "+ Add
+    Option" seeds a new option from the trip's original requested legs
+    with no aircraft/pricing pre-filled; "Remove option" drops any but
+    the last one; tab labels are editable inline.
+  - **New `lib/quote-option-server.ts`**: `parseOptionFromFormData`/
+    `parseOptionCount`, shared by `createQuote` (`quotes/new`) and
+    `updateQuote` (`quotes/[id]`) to parse N options out of one
+    submission (previously each page inlined this parsing for a single
+    implicit option). `updateQuote` deletes and recreates the whole
+    option set on every save rather than diffing which tab is "the
+    same" option as before — safe because nothing references
+    `QuoteOption.id` by foreign key except `Quote.selectedOptionId`
+    (Trip and the Stripe hold reference `Quote` directly), so a fresh
+    set of IDs every save has no downstream consequence.
+  - **Client-facing** (`app/q/[token]/page.tsx`): a new "Choose an
+    option" picker renders above the itinerary/pricing detail whenever
+    a `sent` quote has more than one option — cards show each option's
+    label, route, aircraft, and total; selecting one calls a new
+    `selectOption` server action that updates
+    `Quote.selectedOptionId`. Only shown while still `sent` (before the
+    client has committed to anything) — once they click "Request to
+    Book," the pick is locked in and everything downstream (operator
+    review, signature, Stripe, `finalizeBooking`) proceeds against
+    whichever option they chose, identically to how a single-option
+    quote always has.
+  - **Known minor gaps, not blocking**: the draft-quote "review before
+    sending" preview (`SendQuoteGate`) still only previews the first
+    option's route/total, not all of them, before the operator clicks
+    Send — the actual send still includes every option correctly, this
+    is just the preview pane. The "Send Quote" email drops the
+    misleading single total for multi-option quotes ("N pricing
+    options to choose from" instead) but doesn't otherwise summarize
+    them. Both cosmetic, worth a follow-up pass if it comes up in
+    practice.
 
 - **AI profitability / margin analysis on quotes** (raised after Step
   13.5): the user wants the AI layer to surface how profitable a trip
