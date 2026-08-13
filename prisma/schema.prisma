@@ -22,6 +22,20 @@ model Operator {
   depositPercent   Float    @default(0.25) // 25% card hold default
   inboundEmail     String? // e.g. requests-clarity@inbound.jetdeck.app
 
+  // Stripe Connect — each operator has their own connected Express
+  // account (Stripe-hosted onboarding), so client card holds route
+  // directly to the operator's own account rather than JetDeck's
+  // platform account. stripeChargesEnabled mirrors Stripe's own
+  // account.charges_enabled flag (updated via the account.updated
+  // webhook) — onboarding can be started (stripeAccountId set) without
+  // being complete, so this is what actually gates whether a checkout
+  // session can be created for this operator.
+  stripeAccountId      String?
+  stripeChargesEnabled Boolean @default(false)
+  // % surcharge added to the deposit when a client pays by credit card
+  // instead of wire — offsets card processing costs. 0 disables it.
+  ccProcessingFeePercent Float @default(3.0)
+
   // Quote Builder pricing defaults — editable per operator
   defaultBlockTimeBufferHours Float @default(0.2) // added per leg on top of raw distance/cruise-speed time (climb/descent/taxi)
   defaultOvernightFee         Float @default(1500) // $/night when the aircraft doesn't return to home base after the trip

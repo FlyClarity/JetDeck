@@ -57,5 +57,18 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Connect: fired whenever a connected account's status changes, including
+  // when Express onboarding finishes. charges_enabled is what actually
+  // gates whether we route a card hold to this operator's own account
+  // (see Operator.stripeChargesEnabled) — Operator.stripeAccountId alone
+  // only means onboarding was started, not completed.
+  if (event.type === "account.updated") {
+    const account = event.data.object as Stripe.Account;
+    await prisma.operator.updateMany({
+      where: { stripeAccountId: account.id },
+      data: { stripeChargesEnabled: account.charges_enabled ?? false },
+    });
+  }
+
   return new Response("OK", { status: 200 });
 }

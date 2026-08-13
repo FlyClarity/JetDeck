@@ -33,12 +33,19 @@ const stripe = buildClient();
 // checkout.session.completed handler (see app/api/webhooks/stripe/route.ts)
 // upgrades the stored id to the real PaymentIntent id once checkout
 // completes, so later payment_intent.* events match correctly.
+// Passing a connectedAccountId routes the hold to that operator's own
+// Stripe Connect account (a "destination charge" — the PaymentIntent is
+// still created on the platform account, funds transfer to the connected
+// account) rather than JetDeck's own balance. Omitted/null falls back to a
+// plain platform-account charge — used for an operator who hasn't finished
+// Stripe Connect onboarding yet (see stripeChargesEnabled on Operator).
 export async function createCardHoldCheckoutSession(params: {
   quoteId: string;
   quoteNumber: string;
   depositAmount: number;
   appUrl: string;
   token: string;
+  connectedAccountId?: string | null;
 }): Promise<{ url: string; paymentIntentId: string } | null> {
   if (!stripe) {
     console.warn("STRIPE_SECRET_KEY not set — skipping card hold checkout session");
@@ -50,6 +57,12 @@ export async function createCardHoldCheckoutSession(params: {
     payment_intent_data: {
       capture_method: "manual",
       metadata: { quoteId: params.quoteId },
+      ...(params.connectedAccountId
+        ? {
+            on_behalf_of: params.connectedAccountId,
+            transfer_data: { destination: params.connectedAccountId },
+          }
+        : {}),
     },
     line_items: [
       {
@@ -86,4 +99,63 @@ export function verifyStripeWebhook(body: string, signature: string): Stripe.Eve
     console.error("Stripe webhook signature verification failed", err);
     return null;
   }
+}
+
+// Creates the operator's connected Express account the first time they
+// start onboarding — a lightweight shell Stripe fills in via the hosted
+// onboarding flow (createConnectAccountLink). Safe to call once per
+// operator; the resulting id is stored on Operator.stripeAccountId so
+// later calls just reuse it and jump straight to a fresh Account Link.
+export async function createConnectedAccount(operator: {
+  name: string;
+  email?: string | null;
+}): Promise<string | null> {
+  if (!stripe) {
+    console.warn("STRIPE_SECRET_KEY not set — cannot create Stripe Connect account");
+    return null;
+  }
+  const account = await stripe.accounts.create({
+    type: "express",
+    business_type: "company",
+    business_profile: { name: operator.name },
+    email: operator.email ?? undefined,
+    capabilities: {
+      card_payments: { requested: true },
+      transfers: { requested: true },
+    },
+  });
+  return account.id;
+}
+
+// Stripe's hosted onboarding flow — the operator fills in business/bank
+// details on Stripe's own pages, never JetDeck's. Account Links are
+// single-use and expire quickly, so this is generated fresh on every
+// "Connect Stripe" / "Finish onboarding" click rather than stored.
+// refreshUrl is where Stripe sends the operator back if the link itself
+// expired before they used it (should just re-trigger this same flow);
+// returnUrl is where they land after finishing (or leaving) onboarding —
+// completion itself is confirmed separately via the account.updated
+// webhook, not by reaching this URL.
+export async function createConnectOnboardingLink(
+  accountId: string,
+  refreshUrl: string,
+  returnUrl: string
+): Promise<string | null> {
+  if (!stripe) return null;
+  const accountLink = await stripe.accountLinks.create({
+    account: accountId,
+    refresh_url: refreshUrl,
+    return_url: returnUrl,
+    type: "account_onboarding",
+  });
+  return accountLink.url;
+}
+
+// A one-time link into the operator's own Stripe Express Dashboard (their
+// payout history, balance, bank account) — Stripe-hosted, not something
+// JetDeck builds a view for.
+export async function createConnectDashboardLoginLink(accountId: string): Promise<string | null> {
+  if (!stripe) return null;
+  const loginLink = await stripe.accounts.createLoginLink(accountId);
+  return loginLink.url;
 }

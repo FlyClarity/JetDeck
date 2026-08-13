@@ -216,6 +216,11 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
       depositAmount: option.depositAmount,
       appUrl,
       token: quote.token,
+      // Falls back to a plain platform-account charge when the operator
+      // hasn't finished Stripe Connect onboarding yet — additive, not a
+      // hard gate, so an operator who hasn't connected Stripe still gets a
+      // working (if not yet properly routed) card hold rather than nothing.
+      connectedAccountId: quote.operator.stripeChargesEnabled ? quote.operator.stripeAccountId : null,
     });
     if (session) {
       cardHoldUrl = session.url;
@@ -258,6 +263,7 @@ export async function resendCardHoldLink(operatorId: string, quoteId: string) {
     depositAmount: quote.selectedOption.depositAmount,
     appUrl,
     token: quote.token,
+    connectedAccountId: quote.operator.stripeChargesEnabled ? quote.operator.stripeAccountId : null,
   });
   if (!session) return false;
 

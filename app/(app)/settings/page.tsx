@@ -3,10 +3,58 @@ import { createHash } from "node:crypto";
 import { getCurrentOperator } from "@/lib/operator";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getAppUrl } from "@/lib/url";
+import {
+  createConnectedAccount,
+  createConnectOnboardingLink,
+  createConnectDashboardLoginLink,
+} from "@/lib/stripe";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+
+async function startStripeOnboarding() {
+  "use server";
+
+  const { clerkOrgId } = await getTenantContext();
+  if (!clerkOrgId) return;
+
+  const operator = await prisma.operator.findUnique({ where: { clerkOrgId } });
+  if (!operator) return;
+
+  let accountId = operator.stripeAccountId;
+  if (!accountId) {
+    accountId = await createConnectedAccount({ name: operator.name, email: operator.notifyEmail });
+    if (!accountId) return;
+    await prisma.operator.update({ where: { id: operator.id }, data: { stripeAccountId: accountId } });
+  }
+
+  const appUrl = await getAppUrl();
+  const onboardingUrl = await createConnectOnboardingLink(
+    accountId,
+    `${appUrl}/settings?stripe_refresh=1`,
+    `${appUrl}/settings?stripe_return=1`
+  );
+  if (!onboardingUrl) return;
+
+  redirect(onboardingUrl);
+}
+
+async function openStripeDashboard() {
+  "use server";
+
+  const { clerkOrgId } = await getTenantContext();
+  if (!clerkOrgId) return;
+
+  const operator = await prisma.operator.findUnique({ where: { clerkOrgId } });
+  if (!operator?.stripeAccountId) return;
+
+  const loginUrl = await createConnectDashboardLoginLink(operator.stripeAccountId);
+  if (!loginUrl) return;
+
+  redirect(loginUrl);
+}
 
 async function updateSettings(formData: FormData) {
   "use server";
@@ -27,6 +75,8 @@ async function updateSettings(formData: FormData) {
     : null;
   const defaultBlockTimeBufferHours = Number(formData.get("defaultBlockTimeBufferHours") ?? 0.2);
   const defaultOvernightFee = Number(formData.get("defaultOvernightFee") ?? 1500);
+  const ccProcessingFeePercentInput = Number(formData.get("ccProcessingFeePercent") ?? 3);
+  const ccProcessingFeePercent = Math.min(Math.max(ccProcessingFeePercentInput, 0), 100);
 
   await prisma.operator.update({
     where: { clerkOrgId },
@@ -41,6 +91,7 @@ async function updateSettings(formData: FormData) {
       depositPercent,
       defaultBlockTimeBufferHours,
       defaultOvernightFee,
+      ccProcessingFeePercent,
     },
   });
 
@@ -84,6 +135,49 @@ export default async function SettingsPage({
         </div>
       </div>
 
+      <div className="mt-6 flex flex-col gap-3 rounded-md border border-border p-4">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Payments
+        </h2>
+        {operator.stripeChargesEnabled ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm">
+              <span className="font-medium text-accent">✓ Stripe connected</span> — client card
+              hold deposits go directly to your own Stripe account.
+            </p>
+            <form action={openStripeDashboard}>
+              <Button type="submit" variant="outline" size="sm">
+                Open Stripe Dashboard
+              </Button>
+            </form>
+          </div>
+        ) : operator.stripeAccountId ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Stripe onboarding started but not finished — until it&apos;s complete, card hold
+              deposits fall back to JetDeck&apos;s account instead of yours.
+            </p>
+            <form action={startStripeOnboarding}>
+              <Button type="submit" size="sm">
+                Finish Stripe Onboarding
+              </Button>
+            </form>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Connect your own Stripe account so client card hold deposits go directly to you,
+              not JetDeck.
+            </p>
+            <form action={startStripeOnboarding}>
+              <Button type="submit" size="sm">
+                Connect Stripe
+              </Button>
+            </form>
+          </div>
+        )}
+      </div>
+
       <form action={updateSettings} className="mt-6 flex flex-col gap-6">
         <div className="flex flex-col gap-2">
           <Label htmlFor="wireInstructions">Wire instructions</Label>
@@ -118,6 +212,22 @@ export default async function SettingsPage({
             step={1}
             defaultValue={Math.round(operator.depositPercent * 100)}
           />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="ccProcessingFeePercent">Credit card processing fee (%)</Label>
+          <Input
+            id="ccProcessingFeePercent"
+            name="ccProcessingFeePercent"
+            type="number"
+            min={0}
+            max={100}
+            step="0.1"
+            defaultValue={operator.ccProcessingFeePercent}
+          />
+          <p className="text-sm text-muted-foreground">
+            Added to the deposit when a client chooses to pay by credit card instead of wire.
+          </p>
         </div>
 
         <div className="flex flex-col gap-2">
