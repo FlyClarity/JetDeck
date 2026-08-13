@@ -667,18 +667,56 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   capture flow, unused for now since Phase 1 never captures). Status is
   shown on both the operator's quote detail page and the client's
   accepted-quote page.
-  Not tested live — no `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` in
-  this sandbox (same limitation as Postmark/live-DB testing elsewhere in
-  this project). Before trusting this unsupervised: create a Stripe
-  test-mode key, accept a quote with a deposit amount set, confirm the
-  Checkout Session opens and authorizes a test card
-  (`4000 0025 0000 3155` is Stripe's manual-capture-friendly test card),
-  and confirm the webhook flips `cardHoldStatus` to `authorized`.
-  Also not done: the checkout link is only ever sent once, at accept
-  time — if the client doesn't complete it before the Checkout Session
-  expires (24h default), there's no way from JetDeck to regenerate and
-  resend it. Worth a "Resend card hold link" action on the operator's
-  quote detail page once this comes up in practice.
+  **Live-tested and confirmed working** (this couldn't be tested from
+  the sandbox — no `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` there,
+  same limitation as Postmark/live-DB testing elsewhere in this
+  project — so this only got exercised once the user set it up for
+  real on the deployed app). Getting there took three separate fixes,
+  worth recording since the failure mode looked identical each time
+  ("our team will follow up" instead of a real link) but the causes
+  were all different:
+  1. **Webhook URL hit a redirect.** The user's `jetdeck.us` apex
+     domain 308-redirects to `www.jetdeck.us`, and the webhook was
+     registered against the apex — Stripe doesn't follow redirects for
+     webhook delivery, so every event delivery silently failed. Fixed
+     by pointing the webhook at `https://www.jetdeck.us/api/webhooks/stripe`
+     instead.
+  2. **Env var wasn't scoped to what's actually being tested against.**
+     Vercel logs showed every request to `jetdeck.us` running under
+     `"environment":"preview"` — the domain is pinned directly to this
+     git branch rather than the project's Production branch, so it
+     serves Preview builds. `STRIPE_SECRET_KEY` had only been checked
+     for Production. Fixed by also checking Preview (with the "Git
+     Branch" restriction field left blank, since Vercel won't let a
+     branch-restricted variable also target Production in the same
+     entry).
+  3. **The real bug**: `createCardHoldCheckoutSession` (`lib/stripe.ts`)
+     required `session.payment_intent` to be present before returning
+     a link, on the assumption Checkout Sessions in `mode: "payment"`
+     populate it eagerly. Confirmed via a live session pulled from the
+     Stripe dashboard that current API versions don't — it comes back
+     `null` until the customer actually reaches checkout, even on an
+     otherwise fully successful session creation. This silently
+     discarded a perfectly good checkout URL every single time. Fixed
+     by only requiring `session.url`, falling back to the Checkout
+     Session id (always present immediately) as the tracked
+     `stripePaymentIntentId` when the real PaymentIntent id isn't known
+     yet. New `checkout.session.completed` handler in
+     `app/api/webhooks/stripe/route.ts` upgrades the stored id to the
+     real PaymentIntent id once checkout completes, so the existing
+     `payment_intent.*` handlers keep matching correctly from there.
+     Requires `checkout.session.completed` added to the webhook's
+     subscribed events in the Stripe dashboard (the original three
+     `payment_intent.*` events were already subscribed) — flagged to
+     the user, not yet confirmed done.
+  Confirmed working end-to-end after all three: real checkout link in
+  the confirmation email, Stripe's test card
+  (`4000 0025 0000 3155`, any future expiry/CVC/ZIP) authorizes
+  successfully.
+  Still not done: whether `cardHoldStatus` actually flips to
+  `authorized` after checkout completes hasn't been confirmed yet —
+  depends on the user adding `checkout.session.completed` to the
+  subscribed webhook events above. Worth a follow-up check.
 
 - **Buy a domain + finish Postmark setup** (raised after Step 13):
   inbound email (Step 7) is built but not actually live — `jetdeck.app`
