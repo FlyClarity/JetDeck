@@ -1111,3 +1111,73 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   the existing Clerk organization signup flow (`organization.created`
   webhook) so a new org lands in a clear "email not yet configured"
   state rather than silently failing to receive trip requests.
+
+- **Cash-on-account payment terms — shipped** (raised directly,
+  alongside the CRM-timing question below): new `Contact.paymentTerms`
+  field (`"standard"` | `"cash_on_account"`), toggled from a new,
+  deliberately minimal `/contacts` page (list + one button per row —
+  no add/edit/delete, no activity history, nothing CRM-shaped beyond
+  what this one field needed). `finalizeBooking`/
+  `sendBookingConfirmationEmail` (`lib/booking-server.ts`) check the
+  quote's linked contact and skip the Stripe card hold entirely for a
+  cash-on-account client, same as if no deposit were due — their
+  `Trip` starts as `"confirmed"` instead of `"awaiting_payment"` since
+  there's no hold to wait on, and the confirmation email says "billed
+  on account" instead of either the authorized-hold or
+  manual-follow-up copy.
+
+- **CRM module — not started, explicitly deferred** (raised directly:
+  "is this the appropriate time to begin building the CRM part of
+  JetDeck?"). Answered no for now — the cash-on-account need above
+  only required one field on the existing `Contact` model, not a new
+  module. A real CRM phase would be substantially bigger: contact
+  activity/interaction history (every quote/trip/email tied to a
+  client, not just the current one-way `Contact → TripRequest/Quote`
+  links), a proper contacts list with full CRUD (today's `/contacts`
+  page is deliberately bare — view + one toggle, no add/edit/delete),
+  client-specific rate cards or pricing tiers, tags/segments for
+  targeted outreach, maybe a lightweight deal/pipeline view distinct
+  from the Quoting Queue's operational focus. Worth its own scoping
+  pass (data model options, what "activity" even means across the
+  existing tables) whenever there's appetite for it — flagging now so
+  it's on the list, not building it yet.
+
+- **Stripe Connect migration — not started, next up**. Raised
+  directly, right after confirming the single-account Stripe
+  integration works end-to-end: the current setup (one global
+  `STRIPE_SECRET_KEY`) only works because there's exactly one operator
+  (Clarity Aviation) and their Stripe account happens to be that key.
+  The moment a second operator signs up, their clients' card holds
+  would land in Clarity's Stripe account, not theirs — this is broken
+  today for real multi-tenant use, not just unbuilt. Decided direction
+  (user confirmed): **Stripe Connect**, Express accounts specifically
+  — Stripe-hosted onboarding (operator links their own bank account
+  through a Stripe-hosted flow, minimal custom UI needed), each
+  operator's checkout sessions route funds directly to their own
+  connected account via destination charges
+  (`on_behalf_of`/`transfer_data.destination`), which also gets us
+  real per-operator branding on the Checkout page for free once
+  connected — the user explicitly wants to wait for this rather than
+  build a JetDeck-branded interim state. Not yet scoped in detail:
+  new `Operator.stripeAccountId`, an onboarding entry point in
+  Settings (Stripe Account Links for Express onboarding + a
+  return/refresh URL), updating `createCardHoldCheckoutSession` to
+  route through the connected account, and a graceful "not connected
+  yet" fallback (same degrade-to-manual-follow-up pattern already used
+  for a missing `STRIPE_SECRET_KEY`) for operators who haven't
+  completed onboarding.
+
+- **Wire vs. credit card payment method choice — not started, blocked
+  on Stripe Connect above**. Raised directly alongside Connect: after
+  signing, the client should be able to choose how they pay their
+  deposit — wire transfer (skips Stripe entirely, confirmation email
+  sends immediately with the existing wire-instructions content — the
+  user is fine with that being the full "invoice," no PDF generation
+  needed, they use QuickBooks separately for that) or credit card
+  (adds a processing fee — percentage configurable per operator in
+  Settings, user mentioned "3% or whatever is set" as the ballpark —
+  on top of the deposit amount, shown transparently before the client
+  commits, then proceeds through the same immediate-redirect Checkout
+  flow already built). Deliberately sequenced after Connect rather
+  than built against the current single-account setup, to avoid
+  building the payment-method logic twice.
