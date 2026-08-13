@@ -1,8 +1,21 @@
 import Stripe from "stripe";
 
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY)
-  : null;
+// Constructed defensively, not just gated on presence — same reasoning as
+// lib/email.ts and lib/ai/anthropic-client.ts. A malformed STRIPE_SECRET_KEY
+// throwing inside the SDK's own construction would, for module-scope code,
+// happen at import time — taking down every route that imports this during
+// Next.js's build-time page-data collection.
+function buildClient(): Stripe | null {
+  if (!process.env.STRIPE_SECRET_KEY) return null;
+  try {
+    return new Stripe(process.env.STRIPE_SECRET_KEY);
+  } catch (err) {
+    console.error("Failed to construct Stripe client — check STRIPE_SECRET_KEY", err);
+    return null;
+  }
+}
+
+const stripe = buildClient();
 
 // Card hold = a Checkout Session whose resulting PaymentIntent uses manual
 // capture. Stripe authorizes the card for the deposit amount but takes no
