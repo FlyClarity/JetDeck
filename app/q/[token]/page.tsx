@@ -163,7 +163,15 @@ async function acceptQuote(token: string, formData: FormData) {
       });
     }
   } else {
-    await finalizeBooking(quote.id);
+    const { cardHoldUrl } = await finalizeBooking(quote.id);
+    // Redirect straight into Stripe Checkout in the same browser session
+    // rather than emailing a link — an emailed link is easy to ignore, and
+    // the client just finished signing anyway, so there's no reason to make
+    // them go find it in their inbox. redirect() throws, so the fallback
+    // below only runs when there's no checkout to send them to.
+    if (cardHoldUrl) {
+      redirect(cardHoldUrl);
+    }
   }
 
   redirect(`/q/${token}`);
@@ -524,7 +532,7 @@ export default async function ClientQuotePage({
             </div>
           </section>
 
-          {operator.termsText && !pendingDecision && (
+          {operator.termsText && !pendingDecision && quote.status !== "pending_confirmation" && (
             <section className="mt-6">
               <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Charter Terms
@@ -548,17 +556,13 @@ export default async function ClientQuotePage({
             <div className="mt-6 rounded-md border border-accent/40 bg-accent/10 p-4 text-sm">
               <p className="font-medium">You&apos;re confirmed!</p>
               <p className="mt-1 text-muted-foreground">
-                Accepted {quote.acceptedAt?.toLocaleString()}. A confirmation email with your
-                charter agreement and wire instructions is on its way.
+                Accepted {quote.acceptedAt?.toLocaleString()}.{" "}
+                {quote.cardHoldStatus === "pending"
+                  ? "Please complete checkout to authorize your deposit card hold — your confirmation email with the charter agreement and wire instructions will follow once that's done. If you closed the checkout page before finishing, contact us and we'll send a new link."
+                  : quote.cardHoldStatus === "authorized"
+                    ? "Your deposit card hold is authorized. A confirmation email with your charter agreement and wire instructions is on its way."
+                    : "A confirmation email with your charter agreement and wire instructions is on its way."}
               </p>
-              {quote.cardHoldStatus === "pending" && (
-                <p className="mt-1 text-muted-foreground">
-                  Check your email for a secure link to authorize your deposit card hold.
-                </p>
-              )}
-              {quote.cardHoldStatus === "authorized" && (
-                <p className="mt-1 text-muted-foreground">Your deposit card hold is authorized.</p>
-              )}
             </div>
           ) : quote.status === "pending_confirmation" ? (
             <div className="mt-6 rounded-md border border-accent/40 bg-accent/10 p-4 text-sm">

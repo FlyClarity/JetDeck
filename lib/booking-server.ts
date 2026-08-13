@@ -62,13 +62,112 @@ export async function findBookingConflict(quote: {
   return `Also booked on this aircraft ${label} via quote ${conflict.booking.quoteNumber}.`;
 }
 
+// Sends the client's "you're confirmed" email (routing, wire instructions,
+// terms) plus the operator's notification. Split out of finalizeBooking so
+// it can fire from two different places: immediately, when there's no card
+// hold to wait for (no deposit, or Stripe not configured), or later from
+// the checkout.session.completed webhook once the client actually
+// authorizes their hold — see app/api/webhooks/stripe/route.ts. The email
+// itself never includes a Stripe link either way: by the time it sends, the
+// hold is either already authorized or was never going to happen through
+// Stripe at all.
+//
+// Guarded by confirmationEmailSentAt against double-sending — Stripe
+// webhooks redeliver on retry, and re-sending a full "you're confirmed"
+// email (with wire instructions) to a client a second time would be a bad
+// look, not just a minor annoyance.
+export async function sendBookingConfirmationEmail(quoteId: string) {
+  const quote = await prisma.quote.findUniqueOrThrow({
+    where: { id: quoteId },
+    include: { operator: true, tripRequest: true, selectedOption: true },
+  });
+  if (quote.confirmationEmailSentAt || !quote.selectedOption) return;
+  const option = quote.selectedOption;
+
+  const requestorEmail = quote.tripRequest?.requestorEmail;
+  const requestorName = quote.tripRequest?.requestorName ?? "there";
+  const revenueLegs = revenueLegsOf(option.itinerary);
+  const routingHtml = revenueLegs
+    .map((leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}, ${legTimeLabel(leg)}`)
+    .join("<br/>");
+
+  const { route, date } = routeAndDateText(option.itinerary);
+
+  // stripePaymentIntentId is only ever set once a real Checkout Session was
+  // created — its presence means a card hold genuinely went through
+  // Stripe's flow (this email only fires after checkout completes, or
+  // never had one to begin with), distinct from "there's a deposit but
+  // Stripe isn't configured," which still needs the old manual-follow-up
+  // copy.
+  const depositLine = !option.depositAmount
+    ? ""
+    : quote.stripePaymentIntentId
+      ? `<br/><strong>Deposit:</strong> ${formatCurrency(option.depositAmount)} — card hold authorized`
+      : `<br/><strong>Deposit due:</strong> ${formatCurrency(option.depositAmount)}`;
+  const followUpLine =
+    option.depositAmount && !quote.stripePaymentIntentId
+      ? `<p>Our team will follow up shortly with a secure card authorization link for your deposit hold.</p>`
+      : "";
+
+  if (requestorEmail) {
+    await sendEmail({
+      to: requestorEmail,
+      subject: `Your Charter Agreement — ${route} on ${date}`,
+      html: `
+        <p>Hi ${requestorName},</p>
+        <p>Thank you for booking with ${quote.operator.name}. Your charter agreement is confirmed.</p>
+        <p><strong>Reference:</strong> ${quote.quoteNumber}</p>
+        <p><strong>Routing:</strong><br/>${routingHtml}</p>
+        <p><strong>Total:</strong> ${formatCurrency(option.total)}${depositLine}</p>
+        ${quote.operator.wireInstructions ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
+        ${followUpLine}
+        ${
+          quote.operator.termsText
+            ? `<p><strong>Charter terms you agreed to:</strong></p><p style="white-space:pre-wrap">${quote.operator.termsText}</p>`
+            : ""
+        }
+        <p>— ${quote.operator.name}</p>
+      `,
+      replyTo: quote.operator.replyToEmail ?? undefined,
+      from: quote.operator.fromEmail,
+      fromName: quote.operator.name,
+    });
+  }
+
+  if (quote.operator.notifyEmail) {
+    await sendEmail({
+      to: quote.operator.notifyEmail,
+      subject: `Quote ${quote.quoteNumber} confirmed!`,
+      html: `<p>${requestorName} is confirmed on quote ${quote.quoteNumber} (${formatCurrency(option.total)}).</p>`,
+      replyTo: requestorEmail,
+      from: quote.operator.fromEmail,
+      fromName: quote.operator.name,
+    });
+  }
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { confirmationEmailSentAt: new Date() },
+  });
+}
+
 // Runs the full "this booking is definitely happening" pipeline: Trip
-// record, aircraft positioning update, Stripe card hold, and the client's
-// real confirmation email (wire instructions + card hold link). Only ever
-// called once the client has actually signed (the "I Accept — Book This
-// Charter" step, which only appears after the operator has approved their
-// Request to Book) — see acceptQuote in app/q/[token]/page.tsx.
-export async function finalizeBooking(quoteId: string) {
+// record, aircraft positioning update, and (when a deposit is due) a Stripe
+// card hold Checkout Session. Only ever called once the client has actually
+// signed (the "I Accept — Book This Charter" step, which only appears
+// after the operator has approved their Request to Book) — see acceptQuote
+// in app/q/[token]/page.tsx, which redirects the browser straight into the
+// returned cardHoldUrl in the same session rather than emailing it — an
+// emailed link is an easy thing to ignore, and signing without immediately
+// authorizing the hold left too many bookings stuck half-done.
+//
+// The confirmation email is deliberately NOT sent here when a checkout
+// session was created — it waits for the client to actually complete
+// checkout (checkout.session.completed webhook) so it always reflects a
+// real authorized hold rather than promising one that might never happen
+// if they abandon the Stripe tab. Only sent immediately here when there's
+// nothing to wait for (no deposit due, or Stripe isn't configured).
+export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: string | null }> {
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
     include: { operator: true, tripRequest: true, selectedOption: true },
@@ -123,56 +222,11 @@ export async function finalizeBooking(quoteId: string) {
     data: { status: "accepted" },
   });
 
-  const requestorEmail = quote.tripRequest?.requestorEmail;
-  const requestorName = quote.tripRequest?.requestorName ?? "there";
-  const revenueLegs = revenueLegsOf(option.itinerary);
-  const routingHtml = revenueLegs
-    .map((leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}, ${legTimeLabel(leg)}`)
-    .join("<br/>");
-
-  const { route, date } = routeAndDateText(option.itinerary);
-
-  if (requestorEmail) {
-    await sendEmail({
-      to: requestorEmail,
-      subject: `Your Charter Agreement — ${route} on ${date}`,
-      html: `
-        <p>Hi ${requestorName},</p>
-        <p>Thank you for booking with ${quote.operator.name}. Your charter agreement is confirmed.</p>
-        <p><strong>Reference:</strong> ${quote.quoteNumber}</p>
-        <p><strong>Routing:</strong><br/>${routingHtml}</p>
-        <p><strong>Total:</strong> ${formatCurrency(option.total)}${
-          option.depositAmount ? `<br/><strong>Deposit due:</strong> ${formatCurrency(option.depositAmount)}` : ""
-        }</p>
-        ${quote.operator.wireInstructions ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
-        ${
-          cardHoldUrl
-            ? `<p><strong>Card hold:</strong> please authorize your deposit hold now — no charge is made, this only places a hold: <a href="${cardHoldUrl}">${cardHoldUrl}</a></p>`
-            : `<p>Our team will follow up shortly with a secure card authorization link for your deposit hold.</p>`
-        }
-        ${
-          quote.operator.termsText
-            ? `<p><strong>Charter terms you agreed to:</strong></p><p style="white-space:pre-wrap">${quote.operator.termsText}</p>`
-            : ""
-        }
-        <p>— ${quote.operator.name}</p>
-      `,
-      replyTo: quote.operator.replyToEmail ?? undefined,
-      from: quote.operator.fromEmail,
-      fromName: quote.operator.name,
-    });
+  if (!cardHoldUrl) {
+    await sendBookingConfirmationEmail(quote.id);
   }
 
-  if (quote.operator.notifyEmail) {
-    await sendEmail({
-      to: quote.operator.notifyEmail,
-      subject: `Quote ${quote.quoteNumber} confirmed!`,
-      html: `<p>${requestorName} is confirmed on quote ${quote.quoteNumber} (${formatCurrency(option.total)}).</p>`,
-      replyTo: requestorEmail,
-      from: quote.operator.fromEmail,
-      fromName: quote.operator.name,
-    });
-  }
+  return { cardHoldUrl };
 }
 
 // The Stripe Checkout Session created in finalizeBooking expires after 24h

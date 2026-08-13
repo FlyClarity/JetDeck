@@ -231,6 +231,13 @@ model Quote {
   stripePaymentIntentId String?
   cardHoldStatus        String? // "pending" | "authorized" | "released" | "captured"
 
+  // Set once the client-facing "you're confirmed" email actually goes out —
+  // guards against double-sending, since when a deposit is due that email
+  // now fires from the checkout.session.completed webhook (see
+  // sendBookingConfirmationEmail in lib/booking-server.ts), and Stripe
+  // webhooks can redeliver the same event.
+  confirmationEmailSentAt DateTime?
+
   createdBy String // Clerk user ID
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
