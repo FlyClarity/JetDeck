@@ -17,6 +17,24 @@ export async function POST(req: NextRequest) {
   const event = verifyStripeWebhook(body, signature);
   if (!event) return new Response("Invalid signature", { status: 400 });
 
+  // The Checkout Session's PaymentIntent isn't reliably known at session-
+  // creation time (see lib/stripe.ts) — createCardHoldCheckoutSession stores
+  // the Checkout Session id as a placeholder for stripePaymentIntentId in
+  // that case. Once the customer completes checkout, this event carries the
+  // real PaymentIntent id — upgrade the stored value so subsequent
+  // payment_intent.* events below match correctly.
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
+    const paymentIntentId =
+      typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+    if (paymentIntentId) {
+      await prisma.quote.updateMany({
+        where: { stripePaymentIntentId: session.id },
+        data: { stripePaymentIntentId: paymentIntentId },
+      });
+    }
+  }
+
   const cardHoldStatus = STATUS_BY_EVENT[event.type];
   if (cardHoldStatus) {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;

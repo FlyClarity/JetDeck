@@ -20,9 +20,19 @@ const stripe = buildClient();
 // Card hold = a Checkout Session whose resulting PaymentIntent uses manual
 // capture. Stripe authorizes the card for the deposit amount but takes no
 // money — actual capture (or release) happens later, outside JetDeck in
-// Phase 1 (see Module 5 of the build brief). Checkout mode "payment" creates
-// the PaymentIntent eagerly, so its ID is available immediately rather than
-// only after the client completes checkout.
+// Phase 1 (see Module 5 of the build brief).
+//
+// session.payment_intent is NOT reliably populated at session-creation time
+// on current Stripe API versions (confirmed against a live test session —
+// it came back null despite the session itself being created successfully)
+// — the PaymentIntent only exists once the customer actually reaches
+// checkout. Gating on it being present here used to silently discard a
+// perfectly good checkout URL and fall back to "our team will follow up."
+// Falls back to the Checkout Session id (a real, stable identifier that
+// exists immediately) when the PaymentIntent isn't known yet; the webhook's
+// checkout.session.completed handler (see app/api/webhooks/stripe/route.ts)
+// upgrades the stored id to the real PaymentIntent id once checkout
+// completes, so later payment_intent.* events match correctly.
 export async function createCardHoldCheckoutSession(params: {
   quoteId: string;
   quoteNumber: string;
@@ -56,13 +66,13 @@ export async function createCardHoldCheckoutSession(params: {
     metadata: { quoteId: params.quoteId },
   });
 
-  if (!session.url || !session.payment_intent) return null;
+  if (!session.url) return null;
 
-  return {
-    url: session.url,
-    paymentIntentId:
-      typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent.id,
-  };
+  const paymentIntentId =
+    (typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id) ??
+    session.id;
+
+  return { url: session.url, paymentIntentId };
 }
 
 export function verifyStripeWebhook(body: string, signature: string): Stripe.Event | null {
