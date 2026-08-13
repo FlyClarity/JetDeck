@@ -68,7 +68,10 @@ export type EmailClassificationResult = {
 // and behavior from the two original prompts is preserved here — see the
 // commit that introduced this for the two-call version if this needs to
 // be split apart again.
-const TRIAGE_PROMPT = `You are a triage assistant for a private jet charter company reading inbound email.
+function buildTriagePrompt(todayIso: string) {
+  return `You are a triage assistant for a private jet charter company reading inbound email.
+
+Today's date is ${todayIso}.
 
 First, classify this email into exactly one of these categories:
 new_trip_request, quote_response_accepted, quote_response_questions,
@@ -130,6 +133,12 @@ that isn't a trip request. When extracting:
   code, e.g. IATA "ASE" -> ICAO "KASE", but this isn't universal — use
   the airport's real ICAO code, not a guessed prefix, if you know it
   differs).
+- Dates are frequently given without a year (e.g. "9/10", "Aug 17",
+  "Sept 10th"). When no year is stated, infer the year so the resulting
+  date is the next upcoming occurrence on or after today's date given
+  above: if that month/day has already passed this year, use next year,
+  not this year and never a past year. Only use an explicitly stated
+  year as-is.
 
 Return ONLY valid JSON, no markdown code fences, no other text, in
 exactly this shape and field order:
@@ -165,6 +174,7 @@ exactly this shape and field order:
     "rawNeedsSummary": string
   }
 }`;
+}
 
 function normalizeExtraction(raw: unknown): ExtractedTripData | null {
   if (!raw || typeof raw !== "object") return null;
@@ -207,6 +217,8 @@ export async function classifyAndExtractEmail(email: {
     };
   }
 
+  const todayIso = new Date().toISOString().slice(0, 10);
+
   let message;
   try {
     message = await anthropic.messages.create({
@@ -215,7 +227,7 @@ export async function classifyAndExtractEmail(email: {
       messages: [
         {
           role: "user",
-          content: `${TRIAGE_PROMPT}\n\nFrom: ${email.fromName ?? ""} <${email.fromEmail}>\nSubject: ${email.subject ?? ""}\n\n${email.bodyText}`,
+          content: `${buildTriagePrompt(todayIso)}\n\nFrom: ${email.fromName ?? ""} <${email.fromEmail}>\nSubject: ${email.subject ?? ""}\n\n${email.bodyText}`,
         },
       ],
     });

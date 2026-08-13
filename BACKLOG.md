@@ -2,6 +2,55 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
+- **Reorder legs in the Quote Builder — shipped** (raised directly). Added
+  Move Up/Down (`ArrowUp`/`ArrowDown`) buttons to every leg row, including
+  the collapsed repositioning-leg view — `moveLeg(id, direction)` in
+  `quote-builder-form.tsx` does a plain array-position swap. Deliberately
+  doesn't try to re-derive `homeSide`/`betweenLegs` after a move (those
+  only matter to the aircraft-resync effect and the "returns to base"
+  toggle, not rendering) — an operator reordering an auto-managed leg away
+  from its original leading/trailing/bracketing position is already
+  choosing to override it by hand.
+
+- **Overnight nights not updating when editing a leg's date — likely
+  root cause found and fixed** (raised directly: "adjusting the
+  departure dates... does not automatically update the overnights").
+  The live recompute itself was already reactive (verified by reading
+  through the render path — `autoNightsAway`'s `useMemo` recomputes
+  every render since its `revenueLegs` dependency is a fresh array each
+  time), so a plain "edit a date, see the total change" case should
+  already have worked. The real bug: the gap sum was computed over
+  **array order**, not **date order** — `nightsBetween(legs[i].date,
+  legs[i+1].date)` for consecutive array positions. Since
+  `nightsBetween` clamps a negative span to 0, any leg sitting out of
+  chronological order in the array (e.g. added via "Add leg" and not
+  yet dragged into place — see the reordering item above, which makes
+  this more likely to happen, not less) would silently contribute a 0
+  to that pair instead of the real gap, and moving its date around
+  would appear to do nothing. Fixed by sorting the revenue legs' dates
+  before summing gaps between consecutive *dates* instead of consecutive
+  *array positions* — order-independent now, so this can't recur once
+  reordering (or any other way legs might end up array-order-scrambled)
+  is in the picture.
+
+- **AI-extracted dates picking random years — fixed** (raised directly:
+  "the system keeps using random years, sometimes... 2024 or 2025").
+  Neither AI prompt that extracts trip dates from email text
+  (`EXTRACTION_PROMPT` in `lib/ai/parse-email.ts`, used by the manual
+  "Create Trip Request" review action; `TRIAGE_PROMPT` in
+  `lib/ai/classify-email.ts`, used by the live inbound pipeline) ever
+  told the model what today's date actually was — so a bare "8/17" with
+  no year had nothing to anchor a guess to, and the model's guess
+  varied. Both prompts are now built as functions taking `todayIso`
+  (`new Date().toISOString().slice(0, 10)`, computed fresh at call
+  time, not baked into the static prompt string) and include an
+  explicit instruction: infer the year so the resulting date is the
+  next upcoming occurrence on or after today — if that month/day has
+  already passed this year, use next year, never a past year — and only
+  use an explicitly stated year as-is. Matches exactly what was asked:
+  in August, a bare "1/3" should resolve to next January, not a past
+  or arbitrary one.
+
 - **Two-step booking flow — shipped** (raised directly: "I think we need
   to move the booking process to a two step process"). Previously a
   single client click ("I Accept — Book This Charter") was both the

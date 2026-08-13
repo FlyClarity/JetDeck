@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useMemo, useState } from "react";
-import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowRight, ArrowUp, ArrowDown, ChevronDown, ChevronRight } from "lucide-react";
 import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
 import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
@@ -550,6 +550,50 @@ export function QuoteBuilderForm({
     );
   }
 
+  // Plain array-position swap — doesn't try to re-derive which endpoint of
+  // an auto repositioning leg is "home" (homeSide) or which gap a
+  // between-legs pair brackets (betweenLegs) after the move, since those
+  // are only ever read again by the aircraft-change resync effect and the
+  // "returns to base" toggle, not by rendering itself. Reordering an auto
+  // leg away from its original leading/trailing/bracketing position is an
+  // edge case an operator doing this at all is already choosing to
+  // override by hand.
+  function moveLeg(id: string, direction: -1 | 1) {
+    setLegs((prev) => {
+      const index = prev.findIndex((l) => l.id === id);
+      const target = index + direction;
+      if (index === -1 || target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function legMoveButtons(id: string, index: number) {
+    return (
+      <div className="flex flex-col">
+        <button
+          type="button"
+          onClick={() => moveLeg(id, -1)}
+          disabled={index === 0}
+          className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+          aria-label="Move leg up"
+        >
+          <ArrowUp className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => moveLeg(id, 1)}
+          disabled={index === legs.length - 1}
+          className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+          aria-label="Move leg down"
+        >
+          <ArrowDown className="size-3.5" />
+        </button>
+      </div>
+    );
+  }
+
   function handleAircraftChange(id: string) {
     setAircraftId(id);
     const aircraft = aircraftList.find((a) => a.id === id);
@@ -571,10 +615,15 @@ export function QuoteBuilderForm({
   const flightHours = revenueLegs.reduce((sum, l) => sum + (Number(l.flightHours) || 0), 0);
   const repoHours = repoLegs.reduce((sum, l) => sum + (Number(l.flightHours) || 0), 0);
 
+  // Sum of gaps in date order, not array order — a leg added or edited out
+  // of chronological sequence (e.g. via "Add leg", or reordering) would
+  // otherwise silently compute a 0-or-negative gap for that pair instead of
+  // the real one, since nightsBetween clamps negative spans to 0.
   const autoNightsAway = useMemo(() => {
+    const dates = revenueLegs.map((l) => l.date).filter(Boolean).sort();
     let nights = 0;
-    for (let i = 0; i < revenueLegs.length - 1; i++) {
-      nights += nightsBetween(revenueLegs[i].date, revenueLegs[i + 1].date);
+    for (let i = 0; i < dates.length - 1; i++) {
+      nights += nightsBetween(dates[i], dates[i + 1]);
     }
     return nights;
   }, [revenueLegs]);
@@ -761,6 +810,7 @@ export function QuoteBuilderForm({
                   key={leg.id}
                   className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm"
                 >
+                  {legMoveButtons(leg.id, i)}
                   <button
                     type="button"
                     onClick={() => toggleCollapsed(leg.id)}
@@ -794,7 +844,8 @@ export function QuoteBuilderForm({
                 key={leg.id}
                 className="flex flex-wrap items-end gap-3 rounded-md border border-border p-2.5"
               >
-                <div className="flex h-9 items-center">
+                <div className="flex h-9 items-center gap-2">
+                  {legMoveButtons(leg.id, i)}
                   {isRepositioning ? (
                     <button
                       type="button"

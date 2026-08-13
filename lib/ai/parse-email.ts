@@ -31,10 +31,17 @@ export type ExtractedTripData = {
   rawNeedsSummary: string;
 };
 
-const EXTRACTION_PROMPT = `You are a flight operations assistant for a Part 135 charter operator.
+function buildExtractionPrompt(todayIso: string) {
+  return `You are a flight operations assistant for a Part 135 charter operator.
 Extract trip details from this inbound email and return ONLY valid JSON —
 no markdown code fences, no commentary before or after. If a field cannot
 be determined, use null.
+
+Today's date is ${todayIso}. Dates are frequently given without a year
+(e.g. "9/10", "Aug 17", "Sept 10th") — when no year is stated, infer the
+year so the resulting date is the next upcoming occurrence on or after
+today: if that month/day has already passed this year, use next year, not
+this year and never a past year. Only use an explicitly stated year as-is.
 
 Charter request emails are often terse shorthand, e.g. "9/10 1000L KSNA -
 KTEB" means a leg on Sept 10, departing 10:00 AM local, from KSNA to KTEB.
@@ -72,6 +79,7 @@ route only appears in the subject, still extract it into the legs.
   "urgency": "asap" | "normal" | "flexible" | null,
   "rawNeedsSummary": string
 }`;
+}
 
 export async function parseEmailToTripRequest(
   subject: string | null | undefined,
@@ -82,6 +90,8 @@ export async function parseEmailToTripRequest(
     return null;
   }
 
+  const todayIso = new Date().toISOString().slice(0, 10);
+
   let message;
   try {
     message = await anthropic.messages.create({
@@ -90,7 +100,7 @@ export async function parseEmailToTripRequest(
       messages: [
         {
           role: "user",
-          content: `${EXTRACTION_PROMPT}\n\nSubject: ${subject ?? ""}\n\n${bodyText}`,
+          content: `${buildExtractionPrompt(todayIso)}\n\nSubject: ${subject ?? ""}\n\n${bodyText}`,
         },
       ],
     });
