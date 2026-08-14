@@ -1181,3 +1181,17 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   flow already built). Deliberately sequenced after Connect rather
   than built against the current single-account setup, to avoid
   building the payment-method logic twice.
+
+- **Client notes moved from Quote to QuoteOption — shipped** (bug
+  raised directly): "Notes for client" was still quote-wide after
+  Options shipped — one shared field instead of being specific to
+  whichever priced itinerary variation it was written for (e.g.
+  catering notes for one aircraft option bleeding into a different
+  option on the same quote). `Quote.clientNotes` moved to
+  `QuoteOption.clientNotes`; the Quote Builder field moved from the
+  outer form into `QuoteOptionFields` (per-tab, namespaced like every
+  other option field); the client quote page now reads it off the
+  selected option. Migration backfills each existing quote's note onto
+  all of its options (no way to know which option it was "meant" for
+  once a quote already has more than one — preserves the content
+  rather than dropping it).
