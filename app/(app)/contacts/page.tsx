@@ -1,26 +1,6 @@
+import Link from "next/link";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
-import { Button } from "@/components/ui/button";
-
-async function togglePaymentTerms(id: string, formData: FormData) {
-  "use server";
-
-  const operator = await getCurrentOperator();
-  if (!operator) return;
-
-  const contact = await prisma.contact.findFirst({
-    where: { id, operatorId: operator.id },
-  });
-  if (!contact) return;
-
-  const nextTerms = String(formData.get("nextTerms") ?? "standard");
-  if (!["standard", "cash_on_account"].includes(nextTerms)) return;
-
-  await prisma.contact.update({
-    where: { id: contact.id },
-    data: { paymentTerms: nextTerms },
-  });
-}
 
 export default async function ContactsPage() {
   const operator = await getCurrentOperator();
@@ -36,8 +16,7 @@ export default async function ContactsPage() {
       <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
       <p className="mt-1 text-muted-foreground">
         Clients and brokers who&apos;ve requested a quote — created automatically as trip
-        requests come in. Mark a trusted client as cash-on-account to waive the card hold
-        requirement at booking time.
+        requests come in. Click into a contact to manage their information and payment terms.
       </p>
 
       {contacts.length === 0 ? (
@@ -54,17 +33,20 @@ export default async function ContactsPage() {
                 <th className="py-2 pr-4 font-medium">Email</th>
                 <th className="py-2 pr-4 font-medium">Type</th>
                 <th className="py-2 pr-4 font-medium">Payment Terms</th>
-                <th className="py-2 pr-4" />
               </tr>
             </thead>
             <tbody>
               {contacts.map((c) => {
                 const isCashOnAccount = c.paymentTerms === "cash_on_account";
-                const toggleWithId = togglePaymentTerms.bind(null, c.id);
                 return (
                   <tr key={c.id} className="border-b border-border last:border-0">
-                    <td className="py-3 pr-4 font-medium">
-                      {c.firstName} {c.lastName}
+                    <td className="py-3 pr-4">
+                      <Link
+                        href={`/contacts/${c.id}`}
+                        className="font-medium hover:underline hover:underline-offset-4"
+                      >
+                        {c.firstName} {c.lastName}
+                      </Link>
                     </td>
                     <td className="py-3 pr-4 text-muted-foreground">{c.company ?? "—"}</td>
                     <td className="py-3 pr-4 text-muted-foreground">{c.email}</td>
@@ -77,18 +59,6 @@ export default async function ContactsPage() {
                       ) : (
                         <span className="text-xs text-muted-foreground">Standard</span>
                       )}
-                    </td>
-                    <td className="py-3 pr-4">
-                      <form action={toggleWithId}>
-                        <input
-                          type="hidden"
-                          name="nextTerms"
-                          value={isCashOnAccount ? "standard" : "cash_on_account"}
-                        />
-                        <Button type="submit" variant="outline" size="sm">
-                          {isCashOnAccount ? "Require card hold" : "Waive card hold"}
-                        </Button>
-                      </form>
                     </td>
                   </tr>
                 );
