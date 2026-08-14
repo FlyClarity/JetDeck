@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { CopyLinkButton } from "@/components/quote/copy-link-button";
 
 async function startStripeOnboarding() {
   "use server";
@@ -110,6 +111,11 @@ export default async function SettingsPage({
     return null;
   }
 
+  const appUrl = await getAppUrl();
+  const intakeUrl = `${appUrl}/intake/${operator.slug}`;
+  const iframeEmbed = `<iframe src="${intakeUrl}" style="width:100%;max-width:640px;height:900px;border:0;" title="Request a Charter — ${operator.name}"></iframe>`;
+  const linkEmbed = `<a href="${intakeUrl}" target="_blank" rel="noopener">Request a Quote</a>`;
+
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-10">
       <div className="flex items-center gap-3">
@@ -176,6 +182,49 @@ export default async function SettingsPage({
             </form>
           </div>
         )}
+      </div>
+
+      <div className="mt-6 flex flex-col gap-3 rounded-md border border-border p-4">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Website Widget
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Add a &quot;Request a Charter&quot; form to your own website — clients submit trip
+          requests directly into JetDeck instead of emailing you.
+        </p>
+
+        <div className="flex flex-col gap-2">
+          <Label>Direct link</Label>
+          <div className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+            <code className="flex-1 truncate text-sm">{intakeUrl}</code>
+            <CopyLinkButton link={intakeUrl} />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Simplest option — link a &quot;Request a Quote&quot; button on your site straight to
+            this URL.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label>Embed as a button or text link</Label>
+          <div className="flex items-start gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+            <code className="flex-1 text-sm break-all">{linkEmbed}</code>
+            <CopyLinkButton link={linkEmbed} className="shrink-0" />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label>Embed the form directly on the page (iframe)</Label>
+          <div className="flex items-start gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+            <code className="flex-1 text-sm break-all">{iframeEmbed}</code>
+            <CopyLinkButton link={iframeEmbed} className="shrink-0" />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Paste this into an HTML/embed block on your site (works on WordPress, Squarespace,
+            Wix, Webflow, or any platform that allows raw HTML). Adjust the width/height to fit
+            your page.
+          </p>
+        </div>
       </div>
 
       <form action={updateSettings} className="mt-6 flex flex-col gap-6">
