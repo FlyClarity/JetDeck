@@ -75,6 +75,10 @@ export type QuoteOptionValues = {
   fetTax: boolean;
   discount: number;
   discountNote: string;
+  // Shown on the client-facing quote page for this specific option — e.g.
+  // catering, ground transport. Distinct from the quote-wide, operator-only
+  // internalNotes field on QuoteBuilderForm itself.
+  clientNotes: string;
 };
 
 type LegAirport = {
@@ -1116,6 +1120,17 @@ function QuoteOptionFields({
             <input type="hidden" name={`${namePrefix}discountNote`} value={discountNote} />
           )}
         </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`${namePrefix}clientNotes`}>Notes for client</Label>
+          <Textarea
+            id={`${namePrefix}clientNotes`}
+            name={`${namePrefix}clientNotes`}
+            rows={3}
+            defaultValue={initialValues.clientNotes}
+            placeholder="Shown on the client's quote page for this option — e.g. catering, ground transport, special instructions"
+          />
+        </div>
         </fieldset>
       </div>
 
@@ -1186,7 +1201,6 @@ export function QuoteBuilderForm({
   defaultBlockTimeBufferHours,
   isAccepted,
   internalNotes,
-  clientNotes,
   validUntil,
   action,
   submitLabel,
@@ -1211,7 +1225,6 @@ export function QuoteBuilderForm({
   defaultBlockTimeBufferHours: number;
   isAccepted?: boolean;
   internalNotes: string;
-  clientNotes: string;
   validUntil: string;
   action: (formData: FormData) => Promise<void>;
   submitLabel: string;
@@ -1270,6 +1283,7 @@ export function QuoteBuilderForm({
           fetTax: true,
           discount: 0,
           discountNote: "",
+          clientNotes: "",
         },
       },
     ]);
@@ -1395,17 +1409,6 @@ export function QuoteBuilderForm({
             rows={3}
             defaultValue={internalNotes}
             placeholder="Not visible to the client"
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="clientNotes">Notes for client</Label>
-          <Textarea
-            id="clientNotes"
-            name="clientNotes"
-            rows={3}
-            defaultValue={clientNotes}
-            placeholder="Shown on the client's quote page — e.g. catering, ground transport, special instructions"
           />
         </div>
 

@@ -30,6 +30,7 @@ export function parseOptionFromFormData(
   const discount = Number(formData.get(`${prefix}discount`) ?? 0);
   const discountNote = String(formData.get(`${prefix}discountNote`) ?? "") || null;
   const label = String(formData.get(`${prefix}label`) ?? "") || null;
+  const clientNotes = String(formData.get(`${prefix}clientNotes`) ?? "") || null;
 
   let additionalFees: AdditionalFee[] = [];
   try {
@@ -70,6 +71,7 @@ export function parseOptionFromFormData(
 
   return {
     label,
+    clientNotes,
     aircraftId: aircraftId || null,
     itinerary,
     flightHours,

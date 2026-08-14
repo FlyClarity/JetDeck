@@ -195,8 +195,7 @@ model Quote {
   selectedOptionId String?
   selectedOption   QuoteOption?  @relation("SelectedOption", fields: [selectedOptionId], references: [id])
 
-  internalNotes String? // operator-only, never shown to the client
-  clientNotes   String? // shown on the client-facing quote page (/q/[token])
+  internalNotes String? // operator-only, never shown to the client — shared across all options, not option-specific
   validUntil    DateTime
 
   // Non-revenue trips created directly (bypassing the client quoting
@@ -320,6 +319,12 @@ model QuoteOption {
   // AI pricing recommendation
   aiPriceSuggestion Float?
   aiPriceReasoning  String?
+
+  // Shown on the client-facing quote page (/q/[token]) for this specific
+  // option — e.g. catering, ground transport, aircraft-specific notes.
+  // Distinct from Quote.internalNotes, which is operator-only and shared
+  // across all options on the quote.
+  clientNotes String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

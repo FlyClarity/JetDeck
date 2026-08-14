@@ -145,7 +145,6 @@ async function createQuote(tripRequestId: string, formData: FormData) {
       tripRequestId: tripRequest.id,
       contactId: tripRequest.contactId,
       internalNotes: String(formData.get("internalNotes") ?? "") || null,
-      clientNotes: String(formData.get("clientNotes") ?? "") || null,
       validUntil: new Date(validUntil),
       createdBy: userId,
     },
@@ -172,6 +171,7 @@ async function createQuote(tripRequestId: string, formData: FormData) {
           fetTax: o.fetTax,
           discount: o.discount,
           discountNote: o.discountNote,
+          clientNotes: o.clientNotes,
           subtotal: o.subtotal,
           total: o.total,
           depositAmount: o.total * operator.depositPercent,
@@ -377,10 +377,10 @@ export default async function NewQuotePage({
               fetTax: true,
               discount: 0,
               discountNote: "",
+              clientNotes: "",
             },
           ]}
           internalNotes=""
-          clientNotes=""
           validUntil={defaultValidUntil()}
           priceSuggestionPromise={priceSuggestionPromise}
           depositPercent={operator.depositPercent}

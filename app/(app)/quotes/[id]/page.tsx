@@ -76,6 +76,7 @@ async function updateQuote(id: string, formData: FormData) {
           fetTax: o.fetTax,
           discount: o.discount,
           discountNote: o.discountNote,
+          clientNotes: o.clientNotes,
           subtotal: o.subtotal,
           total: o.total,
           depositAmount: o.total * operator.depositPercent,
@@ -91,7 +92,6 @@ async function updateQuote(id: string, formData: FormData) {
     data: {
       selectedOptionId: createdOptions[0].id,
       internalNotes: String(formData.get("internalNotes") ?? "") || null,
-      clientNotes: String(formData.get("clientNotes") ?? "") || null,
       validUntil: validUntil ? new Date(validUntil) : quote.validUntil,
     },
   });
@@ -328,6 +328,7 @@ export default async function QuotePage({
     fetTax: o.fetTax > 0,
     discount: o.discount,
     discountNote: o.discountNote ?? "",
+    clientNotes: o.clientNotes ?? "",
   }));
 
   const updateQuoteWithId = updateQuote.bind(null, quote.id);
@@ -599,7 +600,6 @@ export default async function QuotePage({
           existingBookings={existingBookings}
           initialOptions={initialOptions}
           internalNotes={quote.internalNotes ?? ""}
-          clientNotes={quote.clientNotes ?? ""}
           validUntil={quote.validUntil.toISOString().slice(0, 10)}
           priceSuggestionPromise={Promise.resolve(null)}
           depositPercent={operator.depositPercent}
