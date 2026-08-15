@@ -2,8 +2,8 @@
 
 Ideas and requests noted for later — not part of the current Phase 1 build order.
 
-- **Reorder legs in the Quote Builder — shipped, iterated twice on UI
-  in one day** (raised directly). Three passes, each on direct feedback:
+- ~~**Reorder legs in the Quote Builder — shipped, iterated twice on UI
+  in one day**~~ (raised directly). Three passes, each on direct feedback:
   1. Move Up/Down buttons (`ArrowUp`/`ArrowDown`) on every leg row.
   2. Replaced with a drag handle (`GripVertical`) using native HTML5
      drag-and-drop, after "I dont like the up and down arrow ui... I
@@ -24,8 +24,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   auto-managed leg away from its original leading/trailing/bracketing
   position is already choosing to override it by hand.
 
-- **Overnight nights not updating when editing a leg's date — likely
-  root cause found and fixed** (raised directly: "adjusting the
+- ~~**Overnight nights not updating when editing a leg's date — likely
+  root cause found and fixed**~~ (raised directly: "adjusting the
   departure dates... does not automatically update the overnights").
   The live recompute itself was already reactive (verified by reading
   through the render path — `autoNightsAway`'s `useMemo` recomputes
@@ -45,7 +45,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   reordering (or any other way legs might end up array-order-scrambled)
   is in the picture.
 
-- **AI-extracted dates picking random years — fixed** (raised directly:
+- ~~**AI-extracted dates picking random years — fixed**~~ (raised directly:
   "the system keeps using random years, sometimes... 2024 or 2025").
   Neither AI prompt that extracts trip dates from email text
   (`EXTRACTION_PROMPT` in `lib/ai/parse-email.ts`, used by the manual
@@ -63,7 +63,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   in August, a bare "1/3" should resolve to next January, not a past
   or arbitrary one.
 
-- **Two-step booking flow — shipped** (raised directly: "I think we need
+- ~~**Two-step booking flow — shipped**~~ (raised directly: "I think we need
   to move the booking process to a two step process"). Previously a
   single client click ("I Accept — Book This Charter") was both the
   non-negotiable legal signature *and* the only trigger for an operator
@@ -118,7 +118,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   refuses to act on it), but worth a real "this booking was cancelled"
   branch next time this file is touched.
 
-- **Manually-added overnight nights dropped on save/reload — fixed**
+- ~~**Manually-added overnight nights dropped on save/reload — fixed**~~
   (raised directly). Only the combined `Quote.overnightNights` total was
   ever persisted, not the split between auto-computed (from leg date
   gaps) and manually-added "extra" nights — reopening a saved quote
@@ -132,7 +132,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   `extraNightsAway = max(0, overnightNights - autoNightsAwayOf(itinerary))`
   in `app/(app)/quotes/[id]/page.tsx`.
 
-- **Client-visible notes on quotes — shipped** (raised directly: "need a
+- ~~**Client-visible notes on quotes — shipped**~~ (raised directly: "need a
   way to add notes for the client to see on the quote"). New
   `Quote.clientNotes` field (migration
   `20260811160000_quote_client_notes`), distinct from the existing
@@ -142,8 +142,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   on `/q/[token]` (only when non-empty) between the itinerary and
   pricing sections.
 
-- **Dashboard was pulling unbounded data on every load and every poll —
-  fixed** (raised directly after hitting Neon's data-transfer/egress
+- ~~**Dashboard was pulling unbounded data on every load and every poll —
+  fixed**~~ (raised directly after hitting Neon's data-transfer/egress
   limit): `DashboardPage`'s two queries
   (`prisma.tripRequest.findMany`/`prisma.quote.findMany`, both scoped
   only by `operatorId`) had no `take` limit at all — every page load,
@@ -164,7 +164,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   operator's genuinely *active* (non-terminal) volume approaches it.
   Worth revisiting if that happens in practice.
 
-- **"Route unknown" on internal/owner trips — fixed**: the quote detail
+- ~~**"Route unknown" on internal/owner trips — fixed**~~: the quote detail
   page header, the dashboard queue list row, and the queue side pane all
   computed the route summary from `quote.tripRequest.legs`, which is
   `null` for internal trips (Log Internal Flight has no `TripRequest` at
@@ -175,7 +175,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   `routeSummary(revenueLegsOf(quote.itinerary), "multi_leg")` when
   there's no `tripRequest`.
 
-- **Original-request panel was missing the email subject — fixed**:
+- ~~**Original-request panel was missing the email subject — fixed**~~:
   routing is frequently stated in the subject line (e.g. "TEB-PBI
   9/15") rather than the body, and the operator needs to eyeball it
   against what the AI extracted — but `TripRequest` never stored the
@@ -186,8 +186,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   into a new `rawEmailSubject` prop, rendered as its own line above the
   body in both `/quotes/new` and `/quotes/[id]`.
 
-- **Airport city/state under ICAO on the client quote page — shipped
-  ("ITEM 1")**: user sent the OurAirports source CSV. Added
+- ~~**Airport city/state under ICAO on the client quote page — shipped
+  ("ITEM 1")**~~: user sent the OurAirports source CSV. Added
   `Airport.city`/`Airport.state` (migration
   `20260808100000_add_airport_city_state`) and backfilled them by
   matching each CSV row's `icao_code` (falling back to `ident` when
@@ -217,8 +217,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   never match a real `Airport.icao`), but flagging in case the same
   corruption shows up in a future data refresh from the same source.
 
-- **Log Internal Flight — Trip creation without the client quoting
-  pipeline** (raised directly, for owner flights/maintenance/
+- ~~**Log Internal Flight — Trip creation without the client quoting
+  pipeline**~~ (raised directly, for owner flights/maintenance/
   repositioning that shouldn't go through pricing or client
   acceptance): new `/quotes/internal/new` route
   (`components/quote/internal-trip-form.tsx` +
@@ -303,7 +303,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   "advisory nudge" UI needed. See the away-windows entry for the
   mechanics.
 
-- **Live double-booking warning in the Quote Builder** (raised directly:
+- ~~**Live double-booking warning in the Quote Builder**~~ (raised directly:
   "if there is a trip that is already booked/accepted, then that needs
   to be flagged on the quote page ... so we can either decide to pass,
   or adjust the quoting trip"). Previously `findBookingConflict` only
@@ -378,7 +378,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   positive. `findConflictingBooking` now checks every segment pair
   between the two itineraries instead of one whole-trip range each.
 
-- **Cancelled/declined quotes had no dashboard tab — fixed**: cancelling
+- ~~**Cancelled/declined quotes had no dashboard tab — fixed**~~: cancelling
   an accepted quote (or a client declining a sent one) moved it out of
   every visible Quoting Queue tab with no way to find it again
   afterward. Added a combined "Inactive" status covering both terminal
@@ -431,7 +431,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   `pending_confirmation` quotes alongside `needs_review` emails, so it
   stays the one number that means "something needs you."
 
-- **Arrival time now flags a day change — shipped**: a long or
+- ~~**Arrival time now flags a day change — shipped**~~: a long or
   eastbound-heavy leg can land the next calendar day, but the `Arrives`
   field is a plain time-of-day input with nothing to show that. Rather
   than adding a whole date component to the field, `lib/time.ts`'s
@@ -448,8 +448,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   against, so `arrDayOffset` resets to 0 in both cases rather than
   guessing.
 
-- **Outbound email gaps — internal notify missing on inbound trip
-  requests, inconsistent Reply-To — fixed**: two issues found doing an
+- ~~**Outbound email gaps — internal notify missing on inbound trip
+  requests, inconsistent Reply-To — fixed**~~: two issues found doing an
   audit of every `sendEmail` call site. (1) The intake form path sent
   the operator a "New trip request" notification, but the AI email
   pipeline — JetDeck's primary feature — created and scored the
@@ -468,8 +468,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   Not tested live — no `RESEND_API_KEY` in this sandbox, same
   limitation as everywhere else email-related in this project.
 
-- **Airport dataset gaps (KUAO, KOEB) — root cause found and fixed, but
-  worth a second look**: the original import (10,463 rows) silently
+- ~~**Airport dataset gaps (KUAO, KOEB) — root cause found and fixed, but
+  worth a second look**~~: the original import (10,463 rows) silently
   dropped a meaningful number of legitimate ICAO-coded airports —
   confirmed by diffing against the exact source CSV the user provided:
   KUAO and KOEB were both present in the source with normal data (a
@@ -534,8 +534,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   from this trip" computation is the same shape either way, just
   comparing against a confirmed Trip's schedule instead of the current
   live fleet position.
-- **HAVE:/NEED: pre-filter is a single hardcoded prefix, watch for other
-  non-request patterns in real feed traffic**: after connecting a real
+- ~~**HAVE:/NEED: pre-filter is a single hardcoded prefix, watch for other
+  non-request patterns in real feed traffic**~~: after connecting a real
   NBAA/broker blast feed, a huge chunk of the volume turned out to be
   "HAVE:" (empty-leg availability) listings — not trip requests at
   all, but structurally identical shorthand to a real "NEED:" request,
@@ -551,7 +551,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   with `classification: "availability_listing"` to make sure the
   filter isn't accidentally swallowing anything that was actually a
   real request.
-- **AI triage cost — needs a live test** (raised when asked how to cut
+- ~~**AI triage cost — needs a live test**~~ (raised when asked how to cut
   AI triage costs): investigated prompt caching first, but both the
   classification and extraction prompts were only ~450–550 tokens —
   below Claude Sonnet 5's 1024-token minimum cacheable prefix, so
@@ -592,8 +592,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   `logoUrl`). An operator changes their logo in Clerk's org settings, not
   in JetDeck — no custom upload UI needed here. (Previously logged as an
   open item in error; corrected after review.)
-- **Double-booking now actually blocks instead of just warning after the
-  fact** (raised directly — two clients booking the same aircraft/dates):
+- ~~**Double-booking now actually blocks instead of just warning after the
+  fact**~~ (raised directly — two clients booking the same aircraft/dates):
   previously `acceptQuote` always accepted immediately and only *flagged*
   a conflict for the operator to sort out manually after both were already
   "confirmed." Now: the legal acceptance (terms/IP/timestamp — the E-SIGN/
@@ -631,7 +631,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   worth hardening later by storing a terms snapshot on the Quote at
   send time, matching how `Operator.termsVersion` already snapshots a
   hash on Settings save.
-- **Resend card hold link — shipped** (raised directly): Stripe Checkout
+- ~~**Resend card hold link — shipped**~~ (raised directly): Stripe Checkout
   Sessions expire 24h after creation, and the client's confirmation email
   only ever contains the one link generated at booking time
   (`finalizeBooking`). If a client doesn't click through in time, that
@@ -645,7 +645,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   deposit that hasn't already been captured (`cardHoldStatus !==
   "captured"` — no point resending once the hold already went through).
 
-- **Stripe card hold (Step 17) + Trip creation (Step 18) — shipped**:
+- ~~**Stripe card hold (Step 17) + Trip creation (Step 18) — shipped**~~:
   `acceptQuote` (`app/q/[token]/page.tsx`) now does both on acceptance,
   in order: creates a `Trip` record (`lib/trip-server.ts`'s
   `generateTripNumber`, status `awaiting_payment`), updates
@@ -714,8 +714,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   (`4000 0025 0000 3155`, any future expiry/CVC/ZIP) authorizes
   successfully.
 
-- **Immediate-checkout redirect + deferred confirmation email + terms
-  display bug — shipped** (raised directly, right after confirming the
+- ~~**Immediate-checkout redirect + deferred confirmation email + terms
+  display bug — shipped**~~ (raised directly, right after confirming the
   card hold worked end-to-end): three related fixes to the booking
   flow's final steps.
   1. Signing ("I Accept — Book This Charter") now redirects the
@@ -760,7 +760,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   client-side "resume checkout" button would close this gap but wasn't
   asked for yet.
 
-- **Buy a domain + finish Postmark setup** (raised after Step 13):
+- ~~**Buy a domain + finish Postmark setup**~~ (raised after Step 13):
   inbound email (Step 7) is built but not actually live — `jetdeck.app`
   is hardcoded in the code (Clerk webhook's inbound address generation,
   outbound sender fallback) but isn't a domain anyone owns yet. Needed,
@@ -780,7 +780,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   NBAA Air Mail, since nothing can forward mail to an address that
   doesn't resolve anywhere yet.
 
-- **Aircraft photos + expanded amenities — shipped**: `Aircraft.hasWifi`
+- ~~**Aircraft photos + expanded amenities — shipped**~~: `Aircraft.hasWifi`
   (a single boolean) replaced with `photos String[]` and
   `amenities String[]` (migration
   `20260812120000_aircraft_photos_amenities`, backfilling `hasWifi: true`
@@ -865,7 +865,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   (Sales vs. Dispatch as distinct operator roles) — may eventually
   want role-based routing/defaults, not just a shared nav link.
 
-- **Automate flight/repositioning time calculation** (raised after
+- ~~**Automate flight/repositioning time calculation**~~ (raised after
   Step 13; shipped after Step 13.5 once the user provided the airport
   dataset). Quote Builder is now leg-based and self-computing:
   - `Airport` table seeded with 10,420 real airports (OurAirports
@@ -908,7 +908,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   scoring's positioning logic is still qualitative text, not tied to
   this new hours math yet.
 
-- **"Options" — multiple priced itinerary variations per quote** (raised
+- ~~**"Options" — multiple priced itinerary variations per quote**~~ (raised
   after Step 13.5, made an explicit pre-ops priority directly: "one
   quote can have 3 different options"). Decided direction: one `Quote`
   (single client-facing token/thread) gets N child `QuoteOption` rows —
@@ -1023,8 +1023,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   fields collapsed until touched) vs. the current dense edit form,
   or a distinct confirmation step between Create and Send.
 
-- **Quoting Queue: Draft/Sent/Accepted tabs now show real quotes**
-  (fixed): these tabs used to be hardcoded placeholders ("the quote
+- ~~**Quoting Queue: Draft/Sent/Accepted tabs now show real quotes**
+  (fixed)~~: these tabs used to be hardcoded placeholders ("the quote
   builder lands in a later step") even though the Quote Builder has
   existed since Step 13 — so a created draft had nowhere to appear
   except buried in All Requests under the parent trip request's
@@ -1112,7 +1112,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   webhook) so a new org lands in a clear "email not yet configured"
   state rather than silently failing to receive trip requests.
 
-- **Cash-on-account payment terms — shipped** (raised directly,
+- ~~**Cash-on-account payment terms — shipped**~~ (raised directly,
   alongside the CRM-timing question below): new `Contact.paymentTerms`
   field (`"standard"` | `"cash_on_account"`), toggled from a new,
   deliberately minimal `/contacts` page (list + one button per row —
@@ -1133,39 +1133,73 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   module. A real CRM phase would be substantially bigger: contact
   activity/interaction history (every quote/trip/email tied to a
   client, not just the current one-way `Contact → TripRequest/Quote`
-  links), a proper contacts list with full CRUD (today's `/contacts`
-  page is deliberately bare — view + one toggle, no add/edit/delete),
-  client-specific rate cards or pricing tiers, tags/segments for
-  targeted outreach, maybe a lightweight deal/pipeline view distinct
-  from the Quoting Queue's operational focus. Worth its own scoping
-  pass (data model options, what "activity" even means across the
-  existing tables) whenever there's appetite for it — flagging now so
-  it's on the list, not building it yet.
+  links), client-specific rate cards or pricing tiers, tags/segments
+  for targeted outreach, maybe a lightweight deal/pipeline view
+  distinct from the Quoting Queue's operational focus. Worth its own
+  scoping pass (data model options, what "activity" even means across
+  the existing tables) whenever there's appetite for it — flagging
+  now so it's on the list, not building it yet.
+  **Follow-up, since shipped**: the Contacts page itself was rebuilt
+  ("I do not like the contacts page the way that it is... I would
+  prefer to be able to click into the contacts and manage their
+  information and in there set payment terms") — `/contacts` is now a
+  plain list, each row linking to a real `/contacts/[id]` detail/edit
+  page (firstName/lastName/email/phone/company/type/paymentTerms/notes,
+  same edit-and-redirect pattern as `/fleet/[id]`). Still not a full
+  CRM — no activity history, rate cards, or tagging — but it's real
+  CRUD now, not the bare view-plus-toggle described above.
 
-- **Stripe Connect migration — not started, next up**. Raised
-  directly, right after confirming the single-account Stripe
-  integration works end-to-end: the current setup (one global
-  `STRIPE_SECRET_KEY`) only works because there's exactly one operator
-  (Clarity Aviation) and their Stripe account happens to be that key.
-  The moment a second operator signs up, their clients' card holds
-  would land in Clarity's Stripe account, not theirs — this is broken
-  today for real multi-tenant use, not just unbuilt. Decided direction
-  (user confirmed): **Stripe Connect**, Express accounts specifically
-  — Stripe-hosted onboarding (operator links their own bank account
+- ~~**Website Widget — lead-capture embed for operator websites**~~
+  (raised directly: "how to do I add the lead capture tool/flight
+  request onto my website at www.flyclarity.com... each operator will
+  need a tool on their website"). The `/intake/[operatorSlug]` form
+  page already existed but was never surfaced anywhere in the app —
+  confirmed it has no headers blocking iframing before recommending
+  it. Added a "Website Widget" section to Settings
+  (`app/(app)/settings/page.tsx`) showing the direct link
+  (`${appUrl}/intake/${operator.slug}`) plus copyable embed snippets
+  (a plain link and an iframe), each with a `CopyLinkButton`. Works
+  automatically for every operator via their own `slug` — no
+  per-operator configuration needed beyond what Settings already
+  shows.
+
+- ~~**Stripe Connect migration — shipped**~~. Raised directly, right
+  after confirming the single-account Stripe integration works
+  end-to-end: the current setup (one global `STRIPE_SECRET_KEY`) only
+  worked because there was exactly one operator (Clarity Aviation) and
+  their Stripe account happened to be that key. The moment a second
+  operator signed up, their clients' card holds would have landed in
+  Clarity's Stripe account, not theirs. Decided direction (user
+  confirmed): **Stripe Connect**, Express accounts specifically —
+  Stripe-hosted onboarding (operator links their own bank account
   through a Stripe-hosted flow, minimal custom UI needed), each
   operator's checkout sessions route funds directly to their own
   connected account via destination charges
-  (`on_behalf_of`/`transfer_data.destination`), which also gets us
+  (`on_behalf_of`/`transfer_data.destination`), which also gets
   real per-operator branding on the Checkout page for free once
-  connected — the user explicitly wants to wait for this rather than
-  build a JetDeck-branded interim state. Not yet scoped in detail:
-  new `Operator.stripeAccountId`, an onboarding entry point in
-  Settings (Stripe Account Links for Express onboarding + a
-  return/refresh URL), updating `createCardHoldCheckoutSession` to
-  route through the connected account, and a graceful "not connected
-  yet" fallback (same degrade-to-manual-follow-up pattern already used
-  for a missing `STRIPE_SECRET_KEY`) for operators who haven't
-  completed onboarding.
+  connected. Built: new `Operator.stripeAccountId`/
+  `stripeChargesEnabled`/`ccProcessingFeePercent` fields (migration
+  `20260813060000_stripe_connect`); `lib/stripe.ts` gained
+  `createConnectedAccount`/`createConnectOnboardingLink`/
+  `createConnectDashboardLoginLink`, and
+  `createCardHoldCheckoutSession` now takes an optional
+  `connectedAccountId` that adds `on_behalf_of`/
+  `transfer_data.destination` to the payment intent when present; a
+  new "Payments" section in Settings (Connect Stripe / Finish
+  Onboarding / Open Stripe Dashboard buttons, driven by
+  `operator.stripeChargesEnabled`/`stripeAccountId`); the Stripe
+  webhook gained an `account.updated` handler that syncs
+  `stripeChargesEnabled` from `account.charges_enabled`; and
+  `finalizeBooking` (`lib/booking-server.ts`) now passes the
+  operator's connected account through whenever charges are enabled,
+  falling back to the platform key otherwise (same
+  degrade-gracefully pattern used for a missing `STRIPE_SECRET_KEY`
+  elsewhere).
+  Still open: the user needs to add `account.updated` to the
+  webhook's subscribed events in the Stripe dashboard, and complete
+  Stripe Connect onboarding for Clarity Aviation itself (their
+  current Stripe account is now the platform key, not an individual
+  operator account) — flagged, not yet confirmed done.
 
 - **Wire vs. credit card payment method choice — not started, blocked
   on Stripe Connect above**. Raised directly alongside Connect: after
@@ -1182,7 +1216,7 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   than built against the current single-account setup, to avoid
   building the payment-method logic twice.
 
-- **Client notes moved from Quote to QuoteOption — shipped** (bug
+- ~~**Client notes moved from Quote to QuoteOption — shipped**~~ (bug
   raised directly): "Notes for client" was still quote-wide after
   Options shipped — one shared field instead of being specific to
   whichever priced itinerary variation it was written for (e.g.
@@ -1196,8 +1230,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   once a quote already has more than one — preserves the content
   rather than dropping it).
 
-- **Opportunity scoring rebuilt around an aircraft gap timeline —
-  shipped** (raised directly, with real examples: an aircraft sitting
+- ~~**Opportunity scoring rebuilt around an aircraft gap timeline —
+  shipped**~~ (raised directly, with real examples: an aircraft sitting
   at KMYL 8/20–23 waiting for its return leg, a week-long Florida trip,
   a one-way with nothing booked after). The old model
   (`lib/ai/score-opportunity.ts`) treated "has a trip during this
