@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import type { TripRequest } from "@/lib/generated/prisma/client";
+import type { Aircraft, TripRequest } from "@/lib/generated/prisma/client";
 import { greatCircleDistanceNm, estimateFlightHours } from "@/lib/geo";
 import { resolveAirportCodesToIcao } from "@/lib/airport-server";
 
@@ -12,7 +12,13 @@ export type OpportunityScoreResult = {
 };
 
 type Leg = { depAirport?: string; arrAirport?: string; date?: string };
-type ItineraryLeg = { depDt?: string };
+type ItineraryLeg = {
+  depAirport?: string | null;
+  arrAirport?: string | null;
+  date?: string | null;
+  depDt?: string | null;
+};
+type AircraftLeg = { depAirport: string; arrAirport: string; date: string };
 
 // Repositioning-time tiers, in estimated flight hours (no block-time buffer
 // added — this is a rough scoring heuristic, not a billing calculation).
@@ -21,6 +27,81 @@ type ItineraryLeg = { depDt?: string };
 // threshold, the trip auto-passes instead of scoring low (see below).
 const REPO_HIGH_HOURS = 0.75;
 const REPO_MEDIUM_HOURS = 2;
+
+// A window of free time in an aircraft's schedule — between two confirmed
+// commitments, before the first, or after the last. "Free" doesn't mean
+// "at home doing nothing": an aircraft sitting at an away airport for days
+// between two legs of the same trip (waiting for a return flight) is just
+// as much a gap as one sitting idle at home — the whole point is that a
+// gap is an opportunity to fill, not a reason to treat the aircraft as
+// unavailable. startAnchor is where the aircraft arrives from (the start
+// of the gap); endAnchor is where it needs to depart from next — either
+// the next confirmed leg's departure airport, or home base if nothing
+// else is booked. Null dates mean unbounded (open now / nothing booked
+// after).
+type Gap = {
+  startAnchor: string;
+  startDate: string | null;
+  endAnchor: string;
+  endDate: string | null;
+};
+
+function legDateIso(leg: { date?: string | null; depDt?: string | null }): string | null {
+  return leg.date ?? (leg.depDt ? leg.depDt.slice(0, 10) : null);
+}
+
+// Every confirmed leg (revenue or repositioning — both are real scheduled
+// commitments) across every active trip on this tail, sorted
+// chronologically, turned into the sequence of gaps between them.
+function buildGapsForAircraft(
+  legs: AircraftLeg[],
+  currentBase: string,
+  homeBase: string
+): Gap[] {
+  const sorted = [...legs].sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length === 0) {
+    return [{ startAnchor: currentBase, startDate: null, endAnchor: homeBase, endDate: null }];
+  }
+
+  const gaps: Gap[] = [
+    { startAnchor: currentBase, startDate: null, endAnchor: sorted[0].depAirport, endDate: sorted[0].date },
+  ];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    gaps.push({
+      startAnchor: sorted[i].arrAirport,
+      startDate: sorted[i].date,
+      endAnchor: sorted[i + 1].depAirport,
+      endDate: sorted[i + 1].date,
+    });
+  }
+  gaps.push({
+    startAnchor: sorted[sorted.length - 1].arrAirport,
+    startDate: sorted[sorted.length - 1].date,
+    endAnchor: homeBase,
+    endDate: null,
+  });
+  return gaps;
+}
+
+// The gap this request's own date range fits cleanly inside, if any. A
+// request that starts in one gap but would still be in the air past that
+// gap's end date doesn't fit anywhere — fulfilling it would mean bumping
+// whatever's already confirmed next, which this function (deliberately)
+// doesn't offer as an option.
+function findFittingGap(gaps: Gap[], requestStart: string, requestEnd: string): Gap | null {
+  return (
+    gaps.find(
+      (g) =>
+        (g.startDate === null || g.startDate <= requestStart) &&
+        (g.endDate === null || requestEnd <= g.endDate)
+    ) ?? null
+  );
+}
+
+function repoLabel(hours: number): string {
+  const minutes = Math.round(hours * 60);
+  return minutes < 60 ? `${minutes}min` : `${hours.toFixed(1)}hr`;
+}
 
 export async function scoreOpportunity(
   tripRequestId: string
@@ -36,8 +117,9 @@ export async function scoreOpportunity(
 
   const legs = (tripRequest.legs as Leg[] | null) ?? [];
   const firstLegRaw = legs[0];
+  const lastLegRaw = legs[legs.length - 1];
 
-  if (!firstLegRaw?.depAirport || !firstLegRaw?.date) {
+  if (!firstLegRaw?.depAirport || !firstLegRaw?.date || !lastLegRaw?.arrAirport || !lastLegRaw?.date) {
     return finalize(tripRequestId, {
       opportunityScore: "low",
       scoreReason: "Trip details incomplete — needs manual review",
@@ -50,20 +132,24 @@ export async function scoreOpportunity(
   // AI-extracted (and some manually entered) legs sometimes carry the
   // 3-letter IATA code (e.g. "SAN") instead of the 4-letter ICAO code
   // ("KSAN") this function and the rest of the app assume. Normalize once
-  // here so every lookup and comparison below just works — a strict-ICAO
-  // lookup used to silently fail on these, making range checks and
-  // repositioning distance both come back "unknown" and bypass the
-  // distance-based scoring below entirely.
+  // here so every lookup and comparison below just works.
   const codeMap = await resolveAirportCodesToIcao([
     firstLegRaw.depAirport,
     firstLegRaw.arrAirport,
+    lastLegRaw.depAirport,
+    lastLegRaw.arrAirport,
   ]);
+  const resolve = (code?: string) => (code ? (codeMap[code.toUpperCase()] ?? code) : code);
+
   const firstLeg: Leg = {
     ...firstLegRaw,
-    depAirport: codeMap[firstLegRaw.depAirport.toUpperCase()] ?? firstLegRaw.depAirport,
-    arrAirport: firstLegRaw.arrAirport
-      ? (codeMap[firstLegRaw.arrAirport.toUpperCase()] ?? firstLegRaw.arrAirport)
-      : firstLegRaw.arrAirport,
+    depAirport: resolve(firstLegRaw.depAirport),
+    arrAirport: resolve(firstLegRaw.arrAirport),
+  };
+  const lastLeg: Leg = {
+    ...lastLegRaw,
+    depAirport: resolve(lastLegRaw.depAirport),
+    arrAirport: resolve(lastLegRaw.arrAirport),
   };
 
   const historyNote = await buildHistoryNote(tripRequest);
@@ -87,7 +173,7 @@ export async function scoreOpportunity(
   // treated like one: a good routing/positioning fit on an off-preference
   // aircraft can still win the business rather than being passed on outright.
   const [depAirport, arrAirport] = await Promise.all([
-    prisma.airport.findUnique({ where: { icao: firstLeg.depAirport } }),
+    prisma.airport.findUnique({ where: { icao: firstLeg.depAirport! } }),
     firstLeg.arrAirport
       ? prisma.airport.findUnique({ where: { icao: firstLeg.arrAirport } })
       : Promise.resolve(null),
@@ -111,6 +197,11 @@ export async function scoreOpportunity(
     });
   }
 
+  // Every confirmed leg (revenue or repositioning) across every active trip
+  // on each reachable tail — the raw material for each aircraft's gap
+  // timeline below. Grouped by aircraft rather than checked one date at a
+  // time, so a multi-day trip's "sitting" period between two of its own
+  // legs is visible as free time, not lumped in as a blanket conflict.
   const activeTrips = await prisma.trip.findMany({
     where: {
       operatorId: tripRequest.operatorId,
@@ -120,20 +211,40 @@ export async function scoreOpportunity(
     include: { quote: { include: { selectedOption: true } } },
   });
 
-  function isAircraftBusy(aircraftId: string) {
-    return activeTrips.some((trip) => {
-      if (trip.quote.selectedOption?.aircraftId !== aircraftId) return false;
-      const itinerary = (trip.quote.selectedOption.itinerary as ItineraryLeg[] | null) ?? [];
-      return itinerary.some((leg) => leg.depDt?.slice(0, 10) === firstLeg.date);
-    });
+  const legsByAircraft = new Map<string, AircraftLeg[]>();
+  for (const trip of activeTrips) {
+    const aircraftId = trip.quote.selectedOption?.aircraftId;
+    if (!aircraftId) continue;
+    const itinerary = (trip.quote.selectedOption?.itinerary as ItineraryLeg[] | null) ?? [];
+    const legList = legsByAircraft.get(aircraftId) ?? [];
+    for (const leg of itinerary) {
+      const date = legDateIso(leg);
+      if (!leg.depAirport || !leg.arrAirport || !date) continue;
+      legList.push({ depAirport: leg.depAirport, arrAirport: leg.arrAirport, date });
+    }
+    legsByAircraft.set(aircraftId, legList);
   }
 
-  const available = reachable.filter((a) => !isAircraftBusy(a.id));
+  // For each reachable aircraft, find whichever gap in its schedule (if
+  // any) cleanly contains this request's whole date range. An aircraft
+  // with no fitting gap is excluded entirely — not "busy that day," but
+  // genuinely unavailable without bumping an existing commitment.
+  const fitted = reachable
+    .map((aircraft) => {
+      const gaps = buildGapsForAircraft(
+        legsByAircraft.get(aircraft.id) ?? [],
+        aircraft.currentBase ?? aircraft.homeBase,
+        aircraft.homeBase
+      );
+      const gap = findFittingGap(gaps, firstLeg.date!, lastLeg.date!);
+      return gap ? { aircraft, gap } : null;
+    })
+    .filter((x): x is { aircraft: Aircraft; gap: Gap } => x !== null);
 
-  if (available.length === 0) {
+  if (fitted.length === 0) {
     return finalize(tripRequestId, {
       opportunityScore: "pass",
-      scoreReason: `Conflicts with a confirmed trip on ${reachable[0].tailNumber}`,
+      scoreReason: "No aircraft has an open slot for these dates — would require rescheduling an existing booking",
       positioningNote: null,
       historyNote,
       recommendedAction: "pass",
@@ -143,86 +254,90 @@ export async function scoreOpportunity(
   // Category is a soft preference: prefer a match, but fall back to the
   // full available pool instead of passing when nothing matches exactly.
   const categoryMatches = tripRequest.aircraftPref
-    ? available.filter((a) => a.category === tripRequest.aircraftPref)
-    : available;
-  const pool = categoryMatches.length > 0 ? categoryMatches : available;
+    ? fitted.filter((f) => f.aircraft.category === tripRequest.aircraftPref)
+    : fitted;
+  const pool = categoryMatches.length > 0 ? categoryMatches : fitted;
   const offCategory = tripRequest.aircraftPref !== null && categoryMatches.length === 0;
 
-  // Rank by actual repositioning distance rather than a binary
-  // positioned-or-not.
-  const basesToResolve = [...new Set(pool.map((a) => a.currentBase ?? a.homeBase))];
-  const baseAirports = await prisma.airport.findMany({
-    where: { icao: { in: basesToResolve } },
-  });
-  const baseAirportByIcao = Object.fromEntries(baseAirports.map((a) => [a.icao, a]));
+  const anchorsToResolve = [...new Set(pool.flatMap((f) => [f.gap.startAnchor, f.gap.endAnchor]))];
+  const anchorAirports = await prisma.airport.findMany({ where: { icao: { in: anchorsToResolve } } });
+  const anchorByIcao = Object.fromEntries(anchorAirports.map((a) => [a.icao, a]));
+
+  function repoHoursBetween(fromIcao: string, toIcao: string, cruiseSpeedKts: number | null): number | null {
+    if (fromIcao === toIcao) return 0;
+    const from = anchorByIcao[fromIcao];
+    const to = anchorByIcao[toIcao];
+    if (!from || !to || !cruiseSpeedKts) return null;
+    const distanceNm = greatCircleDistanceNm(from.lat, from.lon, to.lat, to.lon);
+    return estimateFlightHours(distanceNm, cruiseSpeedKts, 0);
+  }
 
   const ranked = pool
-    .map((a) => {
-      const base = a.currentBase ?? a.homeBase;
-      if (base === firstLeg.depAirport) {
-        return { aircraft: a, repoHours: 0 as number | null, base };
-      }
-      const baseAirport = baseAirportByIcao[base];
-      if (!baseAirport || !depAirport || !a.cruiseSpeedKts) {
-        return { aircraft: a, repoHours: null, base };
-      }
-      const distanceNm = greatCircleDistanceNm(
-        baseAirport.lat,
-        baseAirport.lon,
-        depAirport.lat,
-        depAirport.lon
-      );
-      return { aircraft: a, repoHours: estimateFlightHours(distanceNm, a.cruiseSpeedKts, 0), base };
-    })
-    .sort((a, b) => (a.repoHours ?? Infinity) - (b.repoHours ?? Infinity));
+    .map(({ aircraft, gap }) => ({
+      aircraft,
+      gap,
+      pickupHours: repoHoursBetween(gap.startAnchor, firstLeg.depAirport!, aircraft.cruiseSpeedKts),
+      dropoffHours: repoHoursBetween(lastLeg.arrAirport!, gap.endAnchor, aircraft.cruiseSpeedKts),
+    }))
+    // Productive repositioning matters more than cheap pickup — an aircraft
+    // that ends up well-positioned for whatever's next outranks one that's
+    // merely convenient to grab, even if that one's pickup leg is shorter.
+    .sort((a, b) => {
+      const dropoffDiff = (a.dropoffHours ?? Infinity) - (b.dropoffHours ?? Infinity);
+      if (dropoffDiff !== 0) return dropoffDiff;
+      return (a.pickupHours ?? Infinity) - (b.pickupHours ?? Infinity);
+    });
 
   const chosen = ranked[0];
   const categoryNote = offCategory
     ? ` (${chosen.aircraft.tailNumber} is ${chosen.aircraft.category}, not the requested ${tripRequest.aircraftPref} — flagged as a good fit anyway rather than passed)`
     : "";
 
-  if (chosen.repoHours === 0) {
-    return finalize(tripRequestId, {
-      opportunityScore: "high",
-      scoreReason: `${chosen.aircraft.tailNumber} already in ${firstLeg.depAirport}${categoryNote}`,
-      positioningNote: `${chosen.aircraft.tailNumber} is currently based at ${firstLeg.depAirport} — no repositioning needed`,
-      historyNote,
-      recommendedAction: "quote_now",
-    });
-  }
+  const pickupPhrase =
+    chosen.pickupHours === null
+      ? "pickup distance unknown"
+      : chosen.pickupHours === 0
+        ? `already at ${firstLeg.depAirport}`
+        : `${repoLabel(chosen.pickupHours)} repositioning from ${chosen.gap.startAnchor} to pick up`;
+  const dropoffPhrase =
+    chosen.dropoffHours === null
+      ? "repositioning fit for what's next is unknown"
+      : chosen.dropoffHours === 0
+        ? chosen.gap.endDate
+          ? `lands exactly where it needs to be for its ${chosen.gap.endDate} departure`
+          : "lands right at home base"
+        : chosen.gap.endDate
+          ? `then ${repoLabel(chosen.dropoffHours)} short of where it needs to be for its ${chosen.gap.endDate} departure from ${chosen.gap.endAnchor}`
+          : `then ${repoLabel(chosen.dropoffHours)} from home base (${chosen.gap.endAnchor})`;
+  const positioningNote = `${chosen.aircraft.tailNumber}: ${pickupPhrase}, ${dropoffPhrase}`;
 
-  if (chosen.repoHours === null) {
-    // Can't compute a distance (missing airport or cruise-speed data) —
-    // fall back to the old qualitative behavior rather than guessing.
+  if (chosen.pickupHours === null) {
     return finalize(tripRequestId, {
       opportunityScore: "medium",
-      scoreReason: `${chosen.aircraft.tailNumber} available but requires repositioning from ${chosen.base}${categoryNote}`,
-      positioningNote: `Nearest available aircraft (${chosen.aircraft.tailNumber}) is based at ${chosen.base}, not ${firstLeg.depAirport} — repositioning distance unknown`,
+      scoreReason: `${chosen.aircraft.tailNumber} has an open slot for these dates but positioning distance is unknown${categoryNote}`,
+      positioningNote,
       historyNote,
       recommendedAction: "quote_now",
     });
   }
-
-  const repoMinutes = Math.round(chosen.repoHours * 60);
-  const repoLabel = repoMinutes < 60 ? `${repoMinutes}min` : `${chosen.repoHours.toFixed(1)}hr`;
 
   // Beyond the medium threshold, even the closest available aircraft is too
   // far out of position to be worth quoting — auto-pass instead of scoring
   // it low and leaving it in the queue.
-  if (chosen.repoHours > REPO_MEDIUM_HOURS) {
+  if (chosen.pickupHours > REPO_MEDIUM_HOURS) {
     return finalize(tripRequestId, {
       opportunityScore: "pass",
-      scoreReason: `Nearest aircraft (${chosen.aircraft.tailNumber}) requires a ${repoLabel} repositioning from ${chosen.base} — too far out of position${categoryNote}`,
-      positioningNote: `Nearest available aircraft (${chosen.aircraft.tailNumber}) is based at ${chosen.base}, ~${repoLabel} from ${firstLeg.depAirport}`,
+      scoreReason: `Nearest open aircraft (${chosen.aircraft.tailNumber}) requires a ${repoLabel(chosen.pickupHours)} repositioning to pick up — too far out of position${categoryNote}`,
+      positioningNote,
       historyNote,
       recommendedAction: "pass",
     });
   }
 
   return finalize(tripRequestId, {
-    opportunityScore: chosen.repoHours <= REPO_HIGH_HOURS ? "high" : "medium",
-    scoreReason: `${chosen.aircraft.tailNumber} requires a ${repoLabel} repositioning from ${chosen.base}${categoryNote}`,
-    positioningNote: `Nearest available aircraft (${chosen.aircraft.tailNumber}) is based at ${chosen.base}, ~${repoLabel} from ${firstLeg.depAirport}`,
+    opportunityScore: chosen.pickupHours <= REPO_HIGH_HOURS ? "high" : "medium",
+    scoreReason: `${positioningNote}${categoryNote}`,
+    positioningNote,
     historyNote,
     recommendedAction: "quote_now",
   });
