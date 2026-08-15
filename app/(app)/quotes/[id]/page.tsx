@@ -110,7 +110,7 @@ async function sendQuote(id: string) {
 
   await prisma.quote.update({
     where: { id: quote.id },
-    data: { status: "sent", sentAt: new Date() },
+    data: { status: "sent", sentAt: new Date(), termsTextSnapshot: operator.termsText },
   });
 
   const appUrl = await getAppUrl();

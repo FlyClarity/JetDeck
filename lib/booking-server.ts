@@ -93,6 +93,10 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
     .join("<br/>");
 
   const { route, date } = routeAndDateText(option.itinerary);
+  // What the client actually read and signed at send/accept time, not
+  // whatever the operator's Settings page currently holds — same reasoning
+  // as acceptedTermsHash in app/q/[token]/page.tsx.
+  const termsTextAtSend = quote.termsTextSnapshot ?? quote.operator.termsText;
 
   // stripePaymentIntentId is only ever set once a real Checkout Session was
   // created — its presence means a card hold genuinely went through
@@ -128,8 +132,8 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
         ${quote.operator.wireInstructions && (waivesCardHold || quote.paymentMethod === "wire") ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
         ${followUpLine}
         ${
-          quote.operator.termsText
-            ? `<p><strong>Charter terms you agreed to:</strong></p><p style="white-space:pre-wrap">${quote.operator.termsText}</p>`
+          termsTextAtSend
+            ? `<p><strong>Charter terms you agreed to:</strong></p><p style="white-space:pre-wrap">${termsTextAtSend}</p>`
             : ""
         }
         <p>— ${quote.operator.name}</p>

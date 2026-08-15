@@ -118,8 +118,13 @@ async function acceptQuote(token: string, formData: FormData) {
   const hdrs = await headers();
   const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || hdrs.get("x-real-ip") || null;
   const userAgent = hdrs.get("user-agent");
-  const termsHash = quote.operator.termsText
-    ? createHash("sha256").update(quote.operator.termsText).digest("hex")
+  // Hash the snapshot taken when the quote was sent (what this client
+  // actually read), not the operator's live, currently-editable termsText —
+  // otherwise an edit in Settings between send and signature would silently
+  // change what acceptedTermsHash claims they agreed to.
+  const termsTextForHash = quote.termsTextSnapshot ?? quote.operator.termsText;
+  const termsHash = termsTextForHash
+    ? createHash("sha256").update(termsTextForHash).digest("hex")
     : null;
   const acceptedAt = new Date();
 
@@ -277,6 +282,11 @@ export default async function ClientQuotePage({
   const operator = quote.operator;
   const tripRequest = quote.tripRequest;
   const option = quote.selectedOption;
+  // Snapshotted at send time (see sendQuote) so an operator editing their
+  // charter terms in Settings after this quote went out can't change what
+  // this particular client sees or is recorded as having agreed to. Falls
+  // back to the live text for quotes sent before this field existed.
+  const termsText = quote.termsTextSnapshot ?? operator.termsText;
   const legs = revenueLegsOf(option.itinerary);
   const pax = tripRequest ? paxCount(tripRequest.legs) : null;
 
@@ -540,13 +550,13 @@ export default async function ClientQuotePage({
             </div>
           </section>
 
-          {operator.termsText && !pendingDecision && quote.status !== "pending_confirmation" && (
+          {termsText && !pendingDecision && quote.status !== "pending_confirmation" && (
             <section className="mt-6">
               <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Charter Terms
               </h2>
               <div className="mt-2 max-h-64 overflow-y-auto rounded-md border border-border p-3 text-sm whitespace-pre-wrap text-muted-foreground">
-                {operator.termsText}
+                {termsText}
               </div>
             </section>
           )}
@@ -599,7 +609,7 @@ export default async function ClientQuotePage({
                 </p>
               </div>
               <TermsAcceptGate
-                termsText={operator.termsText}
+                termsText={termsText}
                 depositAmount={option.depositAmount}
                 ccProcessingFeePercent={operator.ccProcessingFeePercent}
                 waivesCardHold={quote.contact?.paymentTerms === "cash_on_account"}

@@ -248,8 +248,8 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   pass needed — harmless since everything's zeroed, just a bit of
   unnecessary UI for what's actually a non-revenue record.
 
-- **Overnight/repositioning logic overhaul — core fix shipped, advisory
-  detection deferred** (raised directly, explicitly called "imperative").
+- ~~**Overnight/repositioning logic overhaul — shipped, including the
+  reload gap**~~ (raised directly, explicitly called "imperative").
   The bug: "returns to home base" and "sits overnight between legs" were
   treated as one mutually-exclusive toggle (checked = 0 nights + trailing
   leg home; unchecked = manual nights, no trailing leg) when they're
@@ -280,14 +280,22 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
     toggle inserted, so unchecking it removes exactly those and nothing
     else (not the permanent leading/trailing ones, not anything added by
     hand).
-  Known gap: reopening an already-saved quote only recognizes the
-  leading/trailing repositioning legs as auto-managed on reload (same
-  heuristic as before) — any "between legs" repositioning legs a quote
-  was built with don't get re-tagged `betweenLegs: true` on reload, so
-  toggling the checkbox off on a reopened quote won't auto-remove them
-  (they'd need removing by hand). Low-impact in practice since most
-  quotes are built once and sent, not heavily re-toggled after reload.
-  Also unchanged: editing a revenue leg's airports/dates after the
+  **Follow-up — reload gap closed**: reopening an already-saved quote
+  used to only recognize the leading/trailing repositioning legs as
+  auto-managed — any "between legs" repositioning leg a quote was
+  built with reloaded as a plain manual leg instead, so toggling the
+  checkbox off on a reopened quote wouldn't auto-remove them. Fixed in
+  `components/quote/quote-builder-form.tsx`'s reload mapping: every
+  repositioning leg is now recognized as auto-managed, and any one
+  that isn't the very first or last row is tagged `betweenLegs: true`
+  — by construction, the toggle only ever inserts repositioning legs
+  internally (bracketing a gap between two revenue legs), so position
+  alone reliably identifies them. `homeSide` for an internal leg is
+  derived by checking which endpoint (dep or arr) matches the current
+  aircraft's home base, mirroring how `makeRepoLeg` originally built
+  the pair, rather than assuming a fixed position like the boundary
+  legs can.
+  Still unchanged: editing a revenue leg's airports/dates after the
   toggle is on doesn't reactively move the adjacent auto repositioning
   legs to match — pre-existing limitation of the leading/trailing legs
   too, not something this pass made worse.
@@ -571,13 +579,50 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   caching becomes worth revisiting too.
 - **Opportunity scoring: repositioning uses aircraft base, not a live
   fleet-tracking feed** (raised alongside the scoring refinement below):
-  the new distance-tiered scoring still reasons from
-  `Aircraft.currentBase`/`homeBase`, which is only as fresh as the last
-  manual update — there's no real-time "where is this tail right now"
-  data source. Also, the range/reachability check only looks at the
-  first requested leg, not the full multi-leg itinerary, so a
-  multi-leg trip that's fine outbound but exceeds range on a later leg
-  won't get caught yet.
+  the distance-tiered scoring still reasons from `Aircraft.currentBase`/
+  `homeBase`, which is only as fresh as the last manual update — there's
+  no real-time "where is this tail right now" data source. Out of scope
+  for a quick fix (would need a real ADS-B/fleet-tracking integration);
+  flagging remains, not attempted.
+  ~~The range/reachability check only looked at the first requested leg,
+  not the full multi-leg itinerary~~ — **fixed**: found while chasing a
+  separate, more serious repositioning bug (see below). Every leg's
+  distance is now checked, and the aircraft filter uses the longest one,
+  so a multi-leg trip that's fine outbound but exceeds range on a later
+  leg is correctly excluded instead of slipping through.
+
+- ~~**Opportunity scoring: the 2-hour repositioning cap stopped actually
+  filtering anything — fixed**~~ (user-reported: "it does not appear to
+  be using that 2 hour repositioning time from the aircraft's location.
+  That two hour filter should still be there on top of the changes we
+  made"). A screenshot showed every single trip request scoring
+  "medium — positioning distance is unknown," regardless of route —
+  the tell that this wasn't the ranking-priority change misbehaving,
+  it was every distance calculation failing outright. Root cause in
+  `lib/ai/score-opportunity.ts`: `anchorsToResolve` (the batch of
+  airports resolved for pickup/dropoff distance math) only collected
+  each aircraft's own gap-boundary airports — never the trip request's
+  own dep/arr airports, which `repoHoursBetween` also needs to look up
+  distance *to*. That lookup missed every time, `pickupHours` came back
+  null on every request, and the null branch returns "medium" without
+  ever reaching the 2-hour cap check — so the cap had silently stopped
+  doing anything. Fixed by adding `firstLeg.depAirport`/
+  `lastLeg.arrAirport` to the resolved set.
+  Second, related fix found in the same pass: the cap was only ever
+  checked against the final dropoff-ranked winner, not applied before
+  ranking — so in principle an aircraft requiring an enormous
+  repositioning to even reach the client could still win the ranking
+  purely by having a great next-position fit, since nothing excluded it
+  from the candidate pool first. `REPO_MEDIUM_HOURS` is now a hard
+  pre-filter (`withinPickupRange`) applied before the dropoff-priority
+  sort runs, matching what was actually asked: the cap gates which
+  aircraft are eligible, the dropoff-priority ranking only decides
+  among whichever of those remain.
+  Trip requests already scored under the broken code keep their stale
+  "medium — positioning unknown" result until re-scored — the fix only
+  applies to newly-scored requests. Offered to build a "re-score"
+  action for the existing queue; not yet requested.
+
 - **Category-relaxed scoring always calls out the mismatch, even for
   an operator with only one category of aircraft**: after relaxing
   the hard category filter, every off-preference match adds a
@@ -618,19 +663,22 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   conflicting slot could both still slip through as a narrow race —
   closing that fully would need serializable isolation or a unique
   constraint, not attempted here.
-- **Client quote page — terms-hash snapshotting** (raised while building
-  Step 15/16): `acceptedTermsHash` is computed at accept time from
-  whatever `operator.termsText` currently holds, not from a snapshot
-  taken when the quote was sent. If an operator edits their charter
-  terms in Settings between sending a quote and the client accepting
-  it, the hash reflects the edited version, not what the client
-  actually read on the page (which is also live-fetched, so the page
-  and the hash always agree with each other — just not necessarily
-  with whatever the operator originally intended when the quote was
-  sent). Low risk in practice (terms rarely change quote-to-quote) but
-  worth hardening later by storing a terms snapshot on the Quote at
-  send time, matching how `Operator.termsVersion` already snapshots a
-  hash on Settings save.
+- ~~**Client quote page — terms-hash snapshotting — shipped**~~ (raised
+  while building Step 15/16): `acceptedTermsHash` used to be computed
+  at accept time from whatever `operator.termsText` currently held,
+  not from a snapshot taken when the quote was sent — an operator
+  editing their charter terms in Settings between sending a quote and
+  the client accepting it would silently change both what the client
+  saw and what the hash claimed they'd agreed to. Fixed exactly as
+  scoped: new `Quote.termsTextSnapshot` (migration
+  `20260815100000_quote_terms_snapshot`), captured in `sendQuote`
+  (`app/(app)/quotes/[id]/page.tsx`) the moment a draft goes out.
+  `/q/[token]`'s Charter Terms section, `TermsAcceptGate`, the
+  `acceptedTermsHash` computation, and the confirmation email's
+  "Charter terms you agreed to" section (`lib/booking-server.ts`) all
+  read `quote.termsTextSnapshot ?? operator.termsText` now — falling
+  back to the live text only for quotes sent before this field
+  existed.
 - ~~**Resend card hold link — shipped**~~ (raised directly): Stripe Checkout
   Sessions expire 24h after creation, and the client's confirmation email
   only ever contains the one link generated at booking time

@@ -131,26 +131,22 @@ export async function scoreOpportunity(
 
   // AI-extracted (and some manually entered) legs sometimes carry the
   // 3-letter IATA code (e.g. "SAN") instead of the 4-letter ICAO code
-  // ("KSAN") this function and the rest of the app assume. Normalize once
-  // here so every lookup and comparison below just works.
-  const codeMap = await resolveAirportCodesToIcao([
-    firstLegRaw.depAirport,
-    firstLegRaw.arrAirport,
-    lastLegRaw.depAirport,
-    lastLegRaw.arrAirport,
-  ]);
+  // ("KSAN") this function and the rest of the app assume. Normalize every
+  // leg's codes (not just the first/last) once here so every lookup and
+  // comparison below just works, including the full-itinerary range check
+  // right after this.
+  const codeMap = await resolveAirportCodesToIcao(
+    legs.flatMap((l) => [l.depAirport, l.arrAirport].filter((c): c is string => Boolean(c)))
+  );
   const resolve = (code?: string) => (code ? (codeMap[code.toUpperCase()] ?? code) : code);
+  const normalizedLegs = legs.map((l) => ({
+    ...l,
+    depAirport: resolve(l.depAirport),
+    arrAirport: resolve(l.arrAirport),
+  }));
 
-  const firstLeg: Leg = {
-    ...firstLegRaw,
-    depAirport: resolve(firstLegRaw.depAirport),
-    arrAirport: resolve(firstLegRaw.arrAirport),
-  };
-  const lastLeg: Leg = {
-    ...lastLegRaw,
-    depAirport: resolve(lastLegRaw.depAirport),
-    arrAirport: resolve(lastLegRaw.arrAirport),
-  };
+  const firstLeg: Leg = normalizedLegs[0];
+  const lastLeg: Leg = normalizedLegs[normalizedLegs.length - 1];
 
   const historyNote = await buildHistoryNote(tripRequest);
 
@@ -172,25 +168,35 @@ export async function scoreOpportunity(
   // trip or it can't. Category preference (below) is not, and is no longer
   // treated like one: a good routing/positioning fit on an off-preference
   // aircraft can still win the business rather than being passed on outright.
-  const [depAirport, arrAirport] = await Promise.all([
-    prisma.airport.findUnique({ where: { icao: firstLeg.depAirport! } }),
-    firstLeg.arrAirport
-      ? prisma.airport.findUnique({ where: { icao: firstLeg.arrAirport } })
-      : Promise.resolve(null),
-  ]);
-  const legDistanceNm =
-    depAirport && arrAirport
-      ? greatCircleDistanceNm(depAirport.lat, depAirport.lon, arrAirport.lat, arrAirport.lon)
-      : null;
+  // Checked across every leg of the itinerary, not just the first — a
+  // multi-leg trip that's fine outbound but exceeds range on a later leg
+  // needs excluding too, not just ones that fail right out of the gate.
+  const legAirportCodes = [
+    ...new Set(
+      normalizedLegs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))
+    ),
+  ];
+  const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
+  const legAirportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
+
+  const legDistancesNm = normalizedLegs
+    .map((l) => {
+      if (!l.depAirport || !l.arrAirport) return null;
+      const dep = legAirportByIcao[l.depAirport];
+      const arr = legAirportByIcao[l.arrAirport];
+      return dep && arr ? greatCircleDistanceNm(dep.lat, dep.lon, arr.lat, arr.lon) : null;
+    })
+    .filter((d): d is number => d !== null);
+  const maxLegDistanceNm = legDistancesNm.length > 0 ? Math.max(...legDistancesNm) : null;
 
   const reachable = allActive.filter(
-    (a) => !a.rangeNm || legDistanceNm === null || a.rangeNm >= legDistanceNm
+    (a) => !a.rangeNm || maxLegDistanceNm === null || a.rangeNm >= maxLegDistanceNm
   );
 
   if (reachable.length === 0) {
     return finalize(tripRequestId, {
       opportunityScore: "pass",
-      scoreReason: `Route (~${Math.round(legDistanceNm ?? 0)}nm) exceeds every active aircraft's range`,
+      scoreReason: `Route (~${Math.round(maxLegDistanceNm ?? 0)}nm on its longest leg) exceeds every active aircraft's range`,
       positioningNote: null,
       historyNote,
       recommendedAction: "pass",

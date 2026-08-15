@@ -198,6 +198,16 @@ model Quote {
   internalNotes String? // operator-only, never shown to the client — shared across all options, not option-specific
   validUntil    DateTime
 
+  // Snapshotted from Operator.termsText the moment the quote is sent (see
+  // sendQuote in app/(app)/quotes/[id]/page.tsx) — the client-facing page
+  // and acceptedTermsHash both read this instead of the live, editable
+  // Operator.termsText, so an operator editing their charter terms in
+  // Settings after a quote goes out can't retroactively change what a
+  // given quote's client is shown or what they're recorded as having
+  // agreed to. Null for quotes sent before this field existed; those fall
+  // back to the live Operator.termsText, same as always.
+  termsTextSnapshot String?
+
   // Non-revenue trips created directly (bypassing the client quoting
   // pipeline entirely) — owner flights, maintenance ferries, etc. Null for
   // every normal client-facing quote.

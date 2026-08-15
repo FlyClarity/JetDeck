@@ -302,20 +302,38 @@ function QuoteOptionFields({
     if (initialValues.legs && initialValues.legs.length > 0) {
       const savedLegs = initialValues.legs;
       return savedLegs.map((leg, idx) => {
-        const auto = leg.billAs === "repositioning" && (idx === 0 || idx === savedLegs.length - 1);
-        // Reload only ever recognizes the leading/trailing repositioning
-        // legs as auto-managed — any repositioning leg the "between legs"
-        // toggle inserted at save time reloads as a plain manual leg
-        // instead (betweenLegs: false), so toggling it back off here won't
-        // auto-remove those specific legs. Rare in practice (a
-        // freshly-built quote is the common path); acceptable gap for now.
-        const homeSide: "dep" | "arr" | null = auto ? (idx === 0 ? "dep" : "arr") : null;
+        const isBoundary = idx === 0 || idx === savedLegs.length - 1;
+        const auto = leg.billAs === "repositioning";
+        // Every repositioning leg is auto-managed on reload, not just the
+        // leading/trailing ones — the "between legs" toggle only ever
+        // inserts a repositioning leg internally (bracketing a gap between
+        // two revenue legs), so any repositioning leg that isn't the very
+        // first or last row is one of those pairs. betweenLegs marks that,
+        // so toggling the checkbox back off on a reopened quote correctly
+        // removes exactly the legs it would have inserted, same as on a
+        // freshly-built quote.
+        const betweenLegs = auto && !isBoundary;
+        const homeSide: "dep" | "arr" | null = !auto
+          ? null
+          : isBoundary
+            ? idx === 0
+              ? "dep"
+              : "arr"
+            // Internal pair: whichever endpoint matches the current
+            // aircraft's home base is the "home" side — mirrors how
+            // makeRepoLeg constructs these (one leg going home, one
+            // leaving it) rather than assuming a fixed position.
+            : leg.dep && homeBaseAirport && leg.dep.icao === homeBaseAirport.icao
+              ? "dep"
+              : leg.arr && homeBaseAirport && leg.arr.icao === homeBaseAirport.icao
+                ? "arr"
+                : null;
         return {
           id: rowId(),
           billAs: leg.billAs,
           auto,
           homeSide,
-          betweenLegs: false,
+          betweenLegs,
           dep: leg.dep,
           arr: leg.arr,
           date: leg.date,
