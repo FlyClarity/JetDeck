@@ -19,6 +19,7 @@ async function getQuoteByToken(token: string) {
     include: {
       operator: true,
       tripRequest: true,
+      contact: true,
       selectedOption: { include: { aircraft: true, brokeredAircraft: true } },
       options: {
         include: { aircraft: true, brokeredAircraft: true },
@@ -108,6 +109,12 @@ async function acceptQuote(token: string, formData: FormData) {
   const acceptedByName = String(formData.get("acceptedByName") ?? "").trim() || null;
   if (!acceptedByName) return;
 
+  const paymentMethodRaw = String(formData.get("paymentMethod") ?? "");
+  const paymentMethod = paymentMethodRaw === "wire" || paymentMethodRaw === "credit_card" ? paymentMethodRaw : null;
+  const waivesCardHold = quote.contact?.paymentTerms === "cash_on_account";
+  const needsPaymentMethod = !waivesCardHold && !!quote.selectedOption.depositAmount && quote.selectedOption.depositAmount > 0;
+  if (needsPaymentMethod && !paymentMethod) return;
+
   const hdrs = await headers();
   const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || hdrs.get("x-real-ip") || null;
   const userAgent = hdrs.get("user-agent");
@@ -132,6 +139,7 @@ async function acceptQuote(token: string, formData: FormData) {
       acceptedUserAgent: userAgent,
       acceptedTermsHash: termsHash,
       conflictWarning,
+      paymentMethod,
     },
   });
 
@@ -524,7 +532,7 @@ export default async function ClientQuotePage({
               </div>
               {option.depositAmount !== null && (
                 <Row
-                  label={`Deposit (${Math.round(operator.depositPercent * 100)}%)`}
+                  label={`Payment for Flight (${Math.round(operator.depositPercent * 100)}%)`}
                   value={formatCurrency(option.depositAmount ?? 0)}
                   emphasis="muted"
                 />
@@ -558,10 +566,12 @@ export default async function ClientQuotePage({
               <p className="mt-1 text-muted-foreground">
                 Accepted {quote.acceptedAt?.toLocaleString()}.{" "}
                 {quote.cardHoldStatus === "pending"
-                  ? "Please complete checkout to authorize your deposit card hold — your confirmation email with the charter agreement and wire instructions will follow once that's done. If you closed the checkout page before finishing, contact us and we'll send a new link."
-                  : quote.cardHoldStatus === "authorized"
-                    ? "Your deposit card hold is authorized. A confirmation email with your charter agreement and wire instructions is on its way."
-                    : "A confirmation email with your charter agreement and wire instructions is on its way."}
+                  ? "Please complete checkout to authorize your card hold — your confirmation email with the charter agreement will follow once that's done. If you closed the checkout page before finishing, contact us and we'll send a new link."
+                  : quote.cardHoldStatus === "authorized" && quote.paymentMethod === "wire"
+                    ? "Your backup card hold is authorized. A confirmation email with your charter agreement and wire instructions is on its way."
+                    : quote.cardHoldStatus === "authorized"
+                      ? "Your card hold is authorized. A confirmation email with your charter agreement is on its way."
+                      : "A confirmation email with your charter agreement is on its way."}
               </p>
             </div>
           ) : quote.status === "pending_confirmation" ? (
@@ -590,7 +600,9 @@ export default async function ClientQuotePage({
               </div>
               <TermsAcceptGate
                 termsText={operator.termsText}
-                depositPercent={operator.depositPercent}
+                depositAmount={option.depositAmount}
+                ccProcessingFeePercent={operator.ccProcessingFeePercent}
+                waivesCardHold={quote.contact?.paymentTerms === "cash_on_account"}
                 action={acceptQuoteWithToken}
               />
               {requestChangesOrDecline}

@@ -42,7 +42,11 @@ const stripe = buildClient();
 export async function createCardHoldCheckoutSession(params: {
   quoteId: string;
   quoteNumber: string;
-  depositAmount: number;
+  // The actual dollar amount to hold — the plain payment-for-flight amount
+  // for a wire payer (this hold is just a backup), or that amount plus the
+  // operator's CC processing fee surcharge for a credit-card payer (this
+  // hold IS the payment). Computed by the caller — see finalizeBooking.
+  holdAmount: number;
   appUrl: string;
   token: string;
   connectedAccountId?: string | null;
@@ -68,8 +72,8 @@ export async function createCardHoldCheckoutSession(params: {
       {
         price_data: {
           currency: "usd",
-          product_data: { name: `Booking deposit hold — ${params.quoteNumber}` },
-          unit_amount: Math.round(params.depositAmount * 100),
+          product_data: { name: `Card hold — ${params.quoteNumber}` },
+          unit_amount: Math.round(params.holdAmount * 100),
         },
         quantity: 1,
       },
@@ -86,6 +90,23 @@ export async function createCardHoldCheckoutSession(params: {
     session.id;
 
   return { url: session.url, paymentIntentId };
+}
+
+// Releases a manual-capture hold without ever charging it — used when a
+// wire payer's payment actually shows up, so the backup card hold placed at
+// signing no longer needs to sit there. Stripe rejects cancelling a
+// PaymentIntent that's already been captured or canceled; treated as
+// already-resolved rather than a hard failure, since either way the hold
+// isn't sitting open anymore by the time this is called.
+export async function cancelCardHold(paymentIntentId: string): Promise<boolean> {
+  if (!stripe) return false;
+  try {
+    await stripe.paymentIntents.cancel(paymentIntentId);
+    return true;
+  } catch (err) {
+    console.error(`Failed to cancel card hold ${paymentIntentId}`, err);
+    return false;
+  }
 }
 
 export function verifyStripeWebhook(body: string, signature: string): Stripe.Event | null {

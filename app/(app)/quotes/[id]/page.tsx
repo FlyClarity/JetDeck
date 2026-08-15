@@ -9,6 +9,7 @@ import {
   confirmPendingBookingForOperator,
   declinePendingBookingForOperator,
   resendCardHoldLink,
+  markWireReceived,
 } from "@/lib/booking-server";
 import { parseOptionFromFormData, parseOptionCount } from "@/lib/quote-option-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
@@ -196,6 +197,16 @@ async function resendCardHold(id: string) {
   redirect(`/quotes/${id}`);
 }
 
+async function markWireReceivedAction(id: string) {
+  "use server";
+
+  const scoped = await getScopedQuote(id);
+  if (!scoped) return;
+  await markWireReceived(scoped.operator.id, id);
+
+  redirect(`/quotes/${id}`);
+}
+
 export default async function QuotePage({
   params,
 }: {
@@ -337,6 +348,7 @@ export default async function QuotePage({
   const confirmPendingBookingWithId = confirmPendingBooking.bind(null, quote.id);
   const declinePendingBookingWithId = declinePendingBooking.bind(null, quote.id);
   const resendCardHoldWithId = resendCardHold.bind(null, quote.id);
+  const markWireReceivedWithId = markWireReceivedAction.bind(null, quote.id);
   const clientLink = `${await getAppUrl()}/q/${quote.token}`;
 
   return (
@@ -482,18 +494,41 @@ export default async function QuotePage({
             {quote.acceptedIp && (
               <p className="mt-1 text-xs text-muted-foreground">IP: {quote.acceptedIp}</p>
             )}
+            {quote.paymentMethod && (
+              <p className="mt-1 text-xs text-muted-foreground capitalize">
+                Paying by: {quote.paymentMethod === "wire" ? "Wire transfer" : "Credit card"}
+              </p>
+            )}
             {quote.cardHoldStatus && (
               <p className="mt-1 text-xs text-muted-foreground capitalize">
                 Card hold: {quote.cardHoldStatus}
+                {quote.cardHoldAmount ? ` (${formatCurrency(quote.cardHoldAmount)})` : ""}
+                {quote.paymentMethod === "wire" ? " — backup" : ""}
               </p>
             )}
-            {option.depositAmount && option.depositAmount > 0 && quote.cardHoldStatus !== "captured" && (
-              <form action={resendCardHoldWithId} className="mt-2">
+            {quote.paymentMethod === "wire" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {quote.wireConfirmedAt
+                  ? `Wire received ${quote.wireConfirmedAt.toLocaleString()} — trip confirmed.`
+                  : "Awaiting wire payment."}
+              </p>
+            )}
+            {quote.paymentMethod === "wire" && !quote.wireConfirmedAt && (
+              <form action={markWireReceivedWithId} className="mt-2">
                 <Button type="submit" variant="outline" size="sm">
-                  Resend card hold link
+                  Mark Wire Received
                 </Button>
               </form>
             )}
+            {option.depositAmount &&
+              option.depositAmount > 0 &&
+              !["captured", "released"].includes(quote.cardHoldStatus ?? "") && (
+                <form action={resendCardHoldWithId} className="mt-2">
+                  <Button type="submit" variant="outline" size="sm">
+                    Resend card hold link
+                  </Button>
+                </form>
+              )}
           </div>
 
           {quote.conflictWarning && (

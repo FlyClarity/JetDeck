@@ -4,20 +4,36 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 
 const SCROLL_THRESHOLD_PX = 16;
 
+function formatCurrency(n: number) {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
 export function TermsAcceptGate({
   termsText,
-  depositPercent,
+  depositAmount,
+  ccProcessingFeePercent,
+  waivesCardHold,
   action,
 }: {
   termsText: string | null;
-  depositPercent: number;
+  // Dollar amount due for the flight before any card processing fee — null
+  // or 0 when nothing is owed up front (no payment step at all in that
+  // case). Named after the underlying Operator.depositPercent setting, but
+  // shown to the client simply as payment for their flight, not a "deposit."
+  depositAmount: number | null;
+  ccProcessingFeePercent: number;
+  // Cash-on-account clients (Contacts page) skip Stripe entirely — no card
+  // hold, no payment method choice, billed outside JetDeck instead.
+  waivesCardHold: boolean;
   action: (formData: FormData) => void | Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [scrolledToEnd, setScrolledToEnd] = useState(!termsText);
+  const [paymentMethod, setPaymentMethod] = useState<"wire" | "credit_card" | null>(null);
   const checkedInitialOverflow = useRef(false);
 
   function checkScrolled(el: HTMLDivElement) {
@@ -26,7 +42,9 @@ export function TermsAcceptGate({
     }
   }
 
-  const canAccept = scrolledToEnd && name.trim().length > 1;
+  const needsPaymentMethod = !waivesCardHold && !!depositAmount && depositAmount > 0;
+  const canAccept = scrolledToEnd && name.trim().length > 1 && (!needsPaymentMethod || paymentMethod !== null);
+  const ccFee = depositAmount ? (depositAmount * ccProcessingFeePercent) / 100 : 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -57,6 +75,41 @@ export function TermsAcceptGate({
         </section>
       )}
 
+      {needsPaymentMethod && (
+        <section className="flex flex-col gap-2">
+          <Label>How would you like to pay for your flight?</Label>
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                { value: "wire" as const, label: "Wire Transfer" },
+                { value: "credit_card" as const, label: "Credit Card" },
+              ]
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setPaymentMethod(opt.value)}
+                className={cn(
+                  "rounded-md border p-3 text-left text-sm transition-colors",
+                  paymentMethod === opt.value
+                    ? "border-accent bg-accent/10"
+                    : "border-border hover:border-accent/60"
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {paymentMethod === "wire" &&
+              `You'll pay ${formatCurrency(depositAmount ?? 0)} for your flight via wire (instructions will follow by email). A credit card hold of ${formatCurrency(depositAmount ?? 0)} is also authorized as backup security in case the wire isn't received.`}
+            {paymentMethod === "credit_card" &&
+              `A credit card hold of ${formatCurrency((depositAmount ?? 0) + ccFee)} will be authorized as payment for your flight — includes a ${ccProcessingFeePercent}% card processing fee (${formatCurrency(ccFee)}).`}
+            {paymentMethod === null && "Choose an option above to continue."}
+          </p>
+        </section>
+      )}
+
       <div className="flex flex-col gap-2">
         <Label htmlFor="acceptedByNameInput">
           Type your full name to confirm you&apos;ve read the terms above
@@ -71,12 +124,17 @@ export function TermsAcceptGate({
 
       <p className="text-sm text-muted-foreground">
         By clicking the button below, you confirm that you have read and agree to the Charter
-        Terms above and authorize a credit card hold of {Math.round(depositPercent * 100)}% of
-        the total as a booking deposit.
+        Terms above
+        {waivesCardHold
+          ? "."
+          : needsPaymentMethod
+            ? ", and authorize the card hold described above."
+            : "."}
       </p>
 
       <form action={action}>
         <input type="hidden" name="acceptedByName" value={name} />
+        {paymentMethod && <input type="hidden" name="paymentMethod" value={paymentMethod} />}
         <Button type="submit" size="lg" className="w-full" disabled={!canAccept}>
           I Accept — Book This Charter
         </Button>

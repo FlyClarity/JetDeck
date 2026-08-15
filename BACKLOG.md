@@ -1201,20 +1201,46 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   current Stripe account is now the platform key, not an individual
   operator account) — flagged, not yet confirmed done.
 
-- **Wire vs. credit card payment method choice — not started, blocked
-  on Stripe Connect above**. Raised directly alongside Connect: after
-  signing, the client should be able to choose how they pay their
-  deposit — wire transfer (skips Stripe entirely, confirmation email
-  sends immediately with the existing wire-instructions content — the
-  user is fine with that being the full "invoice," no PDF generation
-  needed, they use QuickBooks separately for that) or credit card
-  (adds a processing fee — percentage configurable per operator in
-  Settings, user mentioned "3% or whatever is set" as the ballpark —
-  on top of the deposit amount, shown transparently before the client
-  commits, then proceeds through the same immediate-redirect Checkout
-  flow already built). Deliberately sequenced after Connect rather
-  than built against the current single-account setup, to avoid
-  building the payment-method logic twice.
+- ~~**Wire vs. credit card payment method choice — shipped**~~. Raised
+  directly alongside Connect, then refined through two rounds of
+  clarification once Connect actually shipped — the built design ended
+  up meaningfully different from the original one-or-the-other framing:
+  1. **A card hold is authorized either way** (unless the linked
+     Contact is cash-on-account, which still skips Stripe entirely, no
+     change there). Paying by wire, the hold is just backup security
+     for the plain amount; paying by credit card, the hold *is* the
+     payment, so the operator's `ccProcessingFeePercent` surcharge
+     (Settings, default 3%) gets added on top — confirmed directly: "a
+     credit card hold/information is still required, unless... that
+     client is exempt."
+  2. **Wire confirmation is a manual operator action, not automatic on
+     selection** — confirmed directly: "the flight should be confirmed
+     immediately if wire is received." New "Mark Wire Received" button
+     on the quote detail page (`markWireReceived` in
+     `lib/booking-server.ts`) sets `Quote.wireConfirmedAt`, flips the
+     linked Trip to `"confirmed"`, and releases the now-unneeded backup
+     hold via a new `cancelCardHold` in `lib/stripe.ts`
+     (`stripe.paymentIntents.cancel`). A credit-card payer's hold IS
+     the payment, so there's no equivalent manual step for them.
+  3. **Client-facing wording deliberately avoids "deposit"** — corrected
+     directly: "Lets not refer to it as a deposit it is paying for the
+     flight." Every client-visible surface (the payment-method picker
+     on the sign step, the pricing line item, the accepted-status
+     banner, the confirmation email) says "payment for your flight"
+     instead. Internal field/config names (`depositAmount`,
+     `depositPercent`) were left as-is — operator-only, not part of
+     what was raised.
+  New `Quote.paymentMethod` ("wire" | "credit_card", chosen alongside
+  the signature in the rebuilt `TermsAcceptGate`), `Quote.
+  cardHoldAmount` (the actual dollar amount held — snapshotted at
+  creation so it stays accurate even if the operator's fee % changes
+  later; reused as-is by "Resend card hold link" rather than
+  recomputed), and `Quote.wireConfirmedAt` (migration
+  `20260815090000_quote_payment_method`). The payment-method picker
+  itself is skipped entirely when there's nothing to pay up front or
+  the client is cash-on-account — same `needsPaymentMethod` gate on
+  both the client page (enforced server-side in `acceptQuote`) and the
+  component that renders the choice.
 
 - ~~**Client notes moved from Quote to QuoteOption — shipped**~~ (bug
   raised directly): "Notes for client" was still quote-wide after

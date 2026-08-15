@@ -247,6 +247,30 @@ model Quote {
   cancelledAt     DateTime?
   cancellationNote String?
 
+  // Payment method — chosen by the client at the signature step, alongside
+  // acceptedAt/acceptedByName. Independent of cardHoldStatus: a card hold is
+  // authorized either way (unless the linked Contact is cash-on-account,
+  // which skips Stripe entirely) — "wire" just means the hold is a backup
+  // rather than how the flight actually gets paid for. See finalizeBooking
+  // and markWireReceived in lib/booking-server.ts.
+  paymentMethod String? // "wire" | "credit_card"
+
+  // The actual dollar amount held via Stripe — equals the option's
+  // depositAmount for a wire payer, or depositAmount plus the operator's
+  // ccProcessingFeePercent surcharge for a credit-card payer (the fee only
+  // ever applies when the card itself is how the flight gets paid for).
+  // Null until a hold is actually created (no hold at all for cash-on-
+  // account). Snapshotted here rather than recomputed later so it stays
+  // accurate even if the operator changes ccProcessingFeePercent afterward.
+  cardHoldAmount Float?
+
+  // Set by the operator (Mark Wire Received, on the quote detail page) once
+  // an actual wire payment shows up — the trigger that flips the linked
+  // Trip to "confirmed" and releases the backup card hold, since it's no
+  // longer needed. Stays null for a credit-card payer (their card hold IS
+  // the payment) and for cash-on-account (no hold to release).
+  wireConfirmedAt DateTime?
+
   // Stripe
   stripePaymentIntentId String?
   cardHoldStatus        String? // "pending" | "authorized" | "released" | "captured"

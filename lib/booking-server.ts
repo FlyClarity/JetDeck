@@ -3,7 +3,7 @@ import { sendEmail } from "@/lib/email";
 import { formatCurrency } from "@/lib/quote";
 import { getAppUrl } from "@/lib/url";
 import { generateTripNumber } from "@/lib/trip-server";
-import { createCardHoldCheckoutSession } from "@/lib/stripe";
+import { createCardHoldCheckoutSession, cancelCardHold } from "@/lib/stripe";
 import {
   revenueLegsOf,
   legDate,
@@ -97,20 +97,22 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
   // stripePaymentIntentId is only ever set once a real Checkout Session was
   // created — its presence means a card hold genuinely went through
   // Stripe's flow (this email only fires after checkout completes, or
-  // never had one to begin with), distinct from "there's a deposit but
+  // never had one to begin with), distinct from "there's a payment due but
   // Stripe isn't configured," which still needs the old manual-follow-up
   // copy. A cash-on-account client (Contacts page) never gets a card hold
-  // at all, regardless of the quote's deposit amount — billed separately.
-  const depositLine = !option.depositAmount
+  // at all, regardless of the quote's payment amount — billed separately.
+  const paymentLine = !option.depositAmount
     ? ""
     : waivesCardHold
-      ? `<br/><strong>Deposit:</strong> ${formatCurrency(option.depositAmount)} — billed on account`
+      ? `<br/><strong>Payment for your flight:</strong> ${formatCurrency(option.depositAmount)} — billed on account`
       : quote.stripePaymentIntentId
-        ? `<br/><strong>Deposit:</strong> ${formatCurrency(option.depositAmount)} — card hold authorized`
-        : `<br/><strong>Deposit due:</strong> ${formatCurrency(option.depositAmount)}`;
+        ? quote.paymentMethod === "wire"
+          ? `<br/><strong>Payment for your flight:</strong> ${formatCurrency(option.depositAmount)} — pay via wire (instructions below). A credit card hold of ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} is authorized as backup security.`
+          : `<br/><strong>Payment for your flight:</strong> ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} — card hold authorized${quote.paymentMethod === "credit_card" ? ` (includes card processing fee)` : ""}`
+        : `<br/><strong>Payment due:</strong> ${formatCurrency(option.depositAmount)}`;
   const followUpLine =
     option.depositAmount && !quote.stripePaymentIntentId && !waivesCardHold
-      ? `<p>Our team will follow up shortly with a secure card authorization link for your deposit hold.</p>`
+      ? `<p>Our team will follow up shortly with a secure card authorization link.</p>`
       : "";
 
   if (requestorEmail) {
@@ -122,8 +124,8 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
         <p>Thank you for booking with ${quote.operator.name}. Your charter agreement is confirmed.</p>
         <p><strong>Reference:</strong> ${quote.quoteNumber}</p>
         <p><strong>Routing:</strong><br/>${routingHtml}</p>
-        <p><strong>Total:</strong> ${formatCurrency(option.total)}${depositLine}</p>
-        ${quote.operator.wireInstructions ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
+        <p><strong>Total:</strong> ${formatCurrency(option.total)}${paymentLine}</p>
+        ${quote.operator.wireInstructions && (waivesCardHold || quote.paymentMethod === "wire") ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
         ${followUpLine}
         ${
           quote.operator.termsText
@@ -210,10 +212,20 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
   const appUrl = await getAppUrl();
   let cardHoldUrl: string | null = null;
   if (!waivesCardHold && option.depositAmount && option.depositAmount > 0) {
+    // A card hold is authorized either way (unless cash-on-account, above)
+    // — the difference is what it's for. Paying by wire, the hold is just a
+    // backup for the plain flight-payment amount; paying by credit card,
+    // the hold IS the payment, so the operator's CC processing fee surcharge
+    // gets added on top. Snapshotted onto the quote so later displays/emails
+    // stay accurate even if the operator's fee % changes afterward.
+    const holdAmount =
+      quote.paymentMethod === "credit_card"
+        ? option.depositAmount * (1 + quote.operator.ccProcessingFeePercent / 100)
+        : option.depositAmount;
     const session = await createCardHoldCheckoutSession({
       quoteId: quote.id,
       quoteNumber: quote.quoteNumber,
-      depositAmount: option.depositAmount,
+      holdAmount,
       appUrl,
       token: quote.token,
       // Falls back to a plain platform-account charge when the operator
@@ -226,7 +238,11 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
       cardHoldUrl = session.url;
       await prisma.quote.update({
         where: { id: quote.id },
-        data: { stripePaymentIntentId: session.paymentIntentId, cardHoldStatus: "pending" },
+        data: {
+          stripePaymentIntentId: session.paymentIntentId,
+          cardHoldStatus: "pending",
+          cardHoldAmount: holdAmount,
+        },
       });
     }
   }
@@ -256,11 +272,16 @@ export async function resendCardHoldLink(operatorId: string, quoteId: string) {
   if (!quote || quote.status !== "accepted") return false;
   if (!quote.selectedOption?.depositAmount || quote.selectedOption.depositAmount <= 0) return false;
 
+  // Reuse whatever amount was actually communicated originally (includes the
+  // CC processing fee if that's what they picked) rather than recomputing —
+  // a quote from before this field existed falls back to the plain amount.
+  const holdAmount = quote.cardHoldAmount ?? quote.selectedOption.depositAmount;
+
   const appUrl = await getAppUrl();
   const session = await createCardHoldCheckoutSession({
     quoteId: quote.id,
     quoteNumber: quote.quoteNumber,
-    depositAmount: quote.selectedOption.depositAmount,
+    holdAmount,
     appUrl,
     token: quote.token,
     connectedAccountId: quote.operator.stripeChargesEnabled ? quote.operator.stripeAccountId : null,
@@ -269,7 +290,11 @@ export async function resendCardHoldLink(operatorId: string, quoteId: string) {
 
   await prisma.quote.update({
     where: { id: quote.id },
-    data: { stripePaymentIntentId: session.paymentIntentId, cardHoldStatus: "pending" },
+    data: {
+      stripePaymentIntentId: session.paymentIntentId,
+      cardHoldStatus: "pending",
+      cardHoldAmount: holdAmount,
+    },
   });
 
   const requestorEmail = quote.tripRequest?.requestorEmail;
@@ -277,11 +302,45 @@ export async function resendCardHoldLink(operatorId: string, quoteId: string) {
     await sendEmail({
       to: requestorEmail,
       subject: `New card hold link — ${quote.quoteNumber}`,
-      html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>Your previous card authorization link expired. Please use this new link to authorize your deposit hold — no charge is made, this only places a hold: <a href="${session.url}">${session.url}</a></p><p>— ${quote.operator.name}</p>`,
+      html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>Your previous card authorization link expired. Please use this new link to authorize your card hold — no charge is made, this only places a hold: <a href="${session.url}">${session.url}</a></p><p>— ${quote.operator.name}</p>`,
       replyTo: quote.operator.replyToEmail ?? undefined,
       from: quote.operator.fromEmail,
       fromName: quote.operator.name,
     });
+  }
+
+  return true;
+}
+
+// Called by the operator (a "Mark Wire Received" button on the quote detail
+// page) once a wire payment actually shows up in their account — JetDeck has
+// no bank feed to detect this automatically. Only meaningful for a wire
+// payer: their card hold was always just backup security, not the payment
+// itself, so once the real payment is in hand the hold can be released and
+// the Trip can move to "confirmed" for dispatch/ops purposes. A credit-card
+// payer's hold already IS the payment — nothing to do here for them.
+export async function markWireReceived(operatorId: string, quoteId: string) {
+  const quote = await prisma.quote.findFirst({
+    where: { id: quoteId, operatorId },
+    include: { trip: true },
+  });
+  if (!quote || quote.status !== "accepted") return false;
+  if (quote.paymentMethod !== "wire" || quote.wireConfirmedAt) return false;
+
+  if (quote.stripePaymentIntentId && quote.cardHoldStatus && !["captured", "released"].includes(quote.cardHoldStatus)) {
+    const released = await cancelCardHold(quote.stripePaymentIntentId);
+    if (released) {
+      await prisma.quote.update({ where: { id: quote.id }, data: { cardHoldStatus: "released" } });
+    }
+  }
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { wireConfirmedAt: new Date() },
+  });
+
+  if (quote.trip) {
+    await prisma.trip.update({ where: { id: quote.trip.id }, data: { status: "confirmed" } });
   }
 
   return true;
