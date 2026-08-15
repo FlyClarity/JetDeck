@@ -1195,3 +1195,46 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   all of its options (no way to know which option it was "meant" for
   once a quote already has more than one — preserves the content
   rather than dropping it).
+
+- **Opportunity scoring rebuilt around an aircraft gap timeline —
+  shipped** (raised directly, with real examples: an aircraft sitting
+  at KMYL 8/20–23 waiting for its return leg, a week-long Florida trip,
+  a one-way with nothing booked after). The old model
+  (`lib/ai/score-opportunity.ts`) treated "has a trip during this
+  window" as roughly synonymous with unavailable — `isAircraftBusy`
+  only checked for an exact-date collision, and ranking only ever
+  measured distance from `Aircraft.currentBase`, a single stored
+  snapshot rather than a real schedule. That's backwards from how
+  charter dispatching actually works: every gap in an aircraft's
+  schedule is a selling opportunity to fill, not a reason to bury
+  matching requests — the operator wants to see everything that fits
+  geographically into where the plane already is (or is about to be)
+  and where it needs to go next, and rank it by how well it keeps the
+  aircraft productively moving.
+  New model: every confirmed leg (revenue or repositioning) across all
+  of an aircraft's active trips gets flattened and sorted
+  chronologically into a sequence of **gaps** — each bounded by where
+  the aircraft arrives from (`startAnchor`) and where it needs to
+  depart from next (`endAnchor`: the following leg's departure
+  airport, or home base if nothing else is booked). A multi-day trip's
+  own sitting period between two of its legs, a one-way with nothing
+  booked after, and a fleet with zero bookings at all all fall out of
+  the same model with no special-casing needed. An incoming request is
+  scored against whichever gap its full date range fits inside — if it
+  doesn't fit any gap cleanly (would require bumping something already
+  confirmed), that aircraft is excluded, same spirit as before but now
+  actually correct about *why*.
+  Ranking priority was a direct design decision, not assumed:
+  productive repositioning outranks cheap pickup — candidates are
+  sorted primarily by how well the request's dropoff point sets up the
+  gap's end anchor (closer to where the plane needs to be next wins),
+  falling back to pickup distance as a tiebreaker only when dropoff
+  quality ties. The high/medium/auto-pass tier itself still keys off
+  pickup distance alone against the original, unchanged thresholds —
+  deliberately conservative, so the auto-pass aggressiveness doesn't
+  shift, only which aircraft/gap combination wins and how it's
+  explained.
+  The "conflicts with a confirmed trip on `<tail>`" pass reason is now
+  "would require rescheduling an existing booking" — broader and more
+  accurate, since a request can now fail to fit for reasons beyond a
+  single exact-date collision (e.g. spanning across a gap boundary).
