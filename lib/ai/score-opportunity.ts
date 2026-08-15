@@ -259,7 +259,20 @@ export async function scoreOpportunity(
   const pool = categoryMatches.length > 0 ? categoryMatches : fitted;
   const offCategory = tripRequest.aircraftPref !== null && categoryMatches.length === 0;
 
-  const anchorsToResolve = [...new Set(pool.flatMap((f) => [f.gap.startAnchor, f.gap.endAnchor]))];
+  // Must include the trip request's own dep/arr airports, not just each
+  // aircraft's gap boundaries — repoHoursBetween below measures distance
+  // *from* a gap anchor *to* firstLeg.depAirport/lastLeg.arrAirport, so
+  // leaving those two out of the resolved set meant that lookup always
+  // missed, pickup/dropoff hours came back null on every request, and the
+  // 2-hour repositioning cap below (gated on knowing pickupHours) never
+  // actually ran.
+  const anchorsToResolve = [
+    ...new Set([
+      ...pool.flatMap((f) => [f.gap.startAnchor, f.gap.endAnchor]),
+      firstLeg.depAirport!,
+      lastLeg.arrAirport!,
+    ]),
+  ];
   const anchorAirports = await prisma.airport.findMany({ where: { icao: { in: anchorsToResolve } } });
   const anchorByIcao = Object.fromEntries(anchorAirports.map((a) => [a.icao, a]));
 
@@ -272,26 +285,53 @@ export async function scoreOpportunity(
     return estimateFlightHours(distanceNm, cruiseSpeedKts, 0);
   }
 
-  const ranked = pool
-    .map(({ aircraft, gap }) => ({
-      aircraft,
-      gap,
-      pickupHours: repoHoursBetween(gap.startAnchor, firstLeg.depAirport!, aircraft.cruiseSpeedKts),
-      dropoffHours: repoHoursBetween(lastLeg.arrAirport!, gap.endAnchor, aircraft.cruiseSpeedKts),
-    }))
-    // Productive repositioning matters more than cheap pickup — an aircraft
-    // that ends up well-positioned for whatever's next outranks one that's
-    // merely convenient to grab, even if that one's pickup leg is shorter.
-    .sort((a, b) => {
-      const dropoffDiff = (a.dropoffHours ?? Infinity) - (b.dropoffHours ?? Infinity);
-      if (dropoffDiff !== 0) return dropoffDiff;
-      return (a.pickupHours ?? Infinity) - (b.pickupHours ?? Infinity);
+  const scored = pool.map(({ aircraft, gap }) => ({
+    aircraft,
+    gap,
+    pickupHours: repoHoursBetween(gap.startAnchor, firstLeg.depAirport!, aircraft.cruiseSpeedKts),
+    dropoffHours: repoHoursBetween(lastLeg.arrAirport!, gap.endAnchor, aircraft.cruiseSpeedKts),
+  }));
+
+  function categoryNoteFor(aircraft: Aircraft): string {
+    return offCategory
+      ? ` (${aircraft.tailNumber} is ${aircraft.category}, not the requested ${tripRequest.aircraftPref} — flagged as a good fit anyway rather than passed)`
+      : "";
+  }
+
+  // The 2-hour pickup-repositioning cap is a hard eligibility filter, not
+  // just a tiebreaker on top of it — an aircraft too far out of position to
+  // reach the client at all shouldn't be able to win the ranking below just
+  // because it happens to end up well-positioned for whatever's next.
+  // Unknown pickup distance (no cruise speed / airport data) is kept rather
+  // than excluded, same as always — scored medium further down instead of
+  // silently dropped.
+  const withinPickupRange = scored.filter((s) => s.pickupHours === null || s.pickupHours <= REPO_MEDIUM_HOURS);
+
+  if (withinPickupRange.length === 0) {
+    const nearest = scored.reduce((best, s) =>
+      (s.pickupHours ?? Infinity) < (best.pickupHours ?? Infinity) ? s : best
+    );
+    return finalize(tripRequestId, {
+      opportunityScore: "pass",
+      scoreReason: `Nearest open aircraft (${nearest.aircraft.tailNumber}) requires a ${repoLabel(nearest.pickupHours ?? 0)} repositioning to pick up — too far out of position${categoryNoteFor(nearest.aircraft)}`,
+      positioningNote: null,
+      historyNote,
+      recommendedAction: "pass",
     });
+  }
+
+  // Among aircraft close enough to actually take the trip, productive
+  // repositioning matters more than cheap pickup — one that ends up
+  // well-positioned for whatever's next outranks one that's merely
+  // convenient to grab, even if that one's pickup leg is shorter.
+  const ranked = withinPickupRange.sort((a, b) => {
+    const dropoffDiff = (a.dropoffHours ?? Infinity) - (b.dropoffHours ?? Infinity);
+    if (dropoffDiff !== 0) return dropoffDiff;
+    return (a.pickupHours ?? Infinity) - (b.pickupHours ?? Infinity);
+  });
 
   const chosen = ranked[0];
-  const categoryNote = offCategory
-    ? ` (${chosen.aircraft.tailNumber} is ${chosen.aircraft.category}, not the requested ${tripRequest.aircraftPref} — flagged as a good fit anyway rather than passed)`
-    : "";
+  const categoryNote = categoryNoteFor(chosen.aircraft);
 
   const pickupPhrase =
     chosen.pickupHours === null
@@ -321,19 +361,10 @@ export async function scoreOpportunity(
     });
   }
 
-  // Beyond the medium threshold, even the closest available aircraft is too
-  // far out of position to be worth quoting — auto-pass instead of scoring
-  // it low and leaving it in the queue.
-  if (chosen.pickupHours > REPO_MEDIUM_HOURS) {
-    return finalize(tripRequestId, {
-      opportunityScore: "pass",
-      scoreReason: `Nearest open aircraft (${chosen.aircraft.tailNumber}) requires a ${repoLabel(chosen.pickupHours)} repositioning to pick up — too far out of position${categoryNote}`,
-      positioningNote,
-      historyNote,
-      recommendedAction: "pass",
-    });
-  }
-
+  // chosen is drawn from withinPickupRange, so pickupHours here is
+  // guaranteed <= REPO_MEDIUM_HOURS (the null case already returned above)
+  // — the >REPO_MEDIUM_HOURS auto-pass already happened earlier, before
+  // ranking, when no aircraft made it into withinPickupRange at all.
   return finalize(tripRequestId, {
     opportunityScore: chosen.pickupHours <= REPO_HIGH_HOURS ? "high" : "medium",
     scoreReason: `${positioningNote}${categoryNote}`,
