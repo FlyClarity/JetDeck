@@ -262,8 +262,16 @@ export function Row({
   return (
     <div className="flex justify-between">
       <span className={emphasis === "muted" ? "text-muted-foreground" : ""}>{label}</span>
-      <span className={emphasis === "destructive" ? "text-destructive" : ""}>{value}</span>
+      <span className={emphasis === "destructive" ? "font-medium text-destructive" : ""}>{value}</span>
     </div>
+  );
+}
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="text-[13px] font-semibold tracking-wide text-foreground/55 uppercase">
+      {children}
+    </h2>
   );
 }
 
@@ -367,25 +375,27 @@ export default async function ClientQuotePage({
   );
 
   return (
-    <div className="min-h-screen bg-muted/20">
-      <div className="mx-auto w-full max-w-2xl px-6 py-12">
+    <div className="min-h-screen bg-muted/30">
+      <div className="mx-auto w-full max-w-xl px-6 py-16">
         <header className="flex items-center gap-3">
           {operator.logoUrl && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={operator.logoUrl} alt={operator.name} className="h-10 w-auto" />
+            <img src={operator.logoUrl} alt={operator.name} className="h-9 w-auto" />
           )}
-          <span className="text-lg font-semibold tracking-tight">{operator.name}</span>
+          <span className="text-base font-semibold tracking-tight text-foreground/80">
+            {operator.name}
+          </span>
         </header>
 
-        <div className="mt-8 rounded-lg border border-border bg-background p-6">
+        <div className="mt-6 rounded-2xl border border-border bg-background p-7 shadow-sm sm:p-9">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">{quote.quoteNumber}</h1>
-              <p className="text-muted-foreground">
+              <p className="mt-0.5 text-muted-foreground">
                 Prepared for {tripRequest?.requestorName ?? "you"}
               </p>
             </div>
-            <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-sm font-medium capitalize text-muted-foreground">
+            <span className="shrink-0 rounded-full bg-muted px-3 py-1 text-xs font-medium capitalize text-muted-foreground">
               {isExpired
                 ? "Expired"
                 : quote.status === "pending_confirmation"
@@ -397,11 +407,9 @@ export default async function ClientQuotePage({
           </div>
 
           {showOptionPicker && (
-            <section className="mt-6">
-              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                Choose an option
-              </h2>
-              <div className="mt-2 flex flex-col gap-2">
+            <section className="mt-7">
+              <SectionHeading>Choose an option</SectionHeading>
+              <div className="mt-3 flex flex-col gap-2">
                 {quote.options.map((o) => {
                   const isSelected = o.id === option.id;
                   const optLegs = revenueLegsOf(o.itinerary);
@@ -413,7 +421,7 @@ export default async function ClientQuotePage({
                       <button
                         type="submit"
                         disabled={isSelected}
-                        className={`w-full rounded-md border p-3 text-left text-sm transition-colors ${
+                        className={`w-full rounded-xl border p-4 text-left text-sm transition-colors ${
                           isSelected
                             ? "border-accent bg-accent/10"
                             : "border-border hover:border-accent/60"
@@ -440,15 +448,13 @@ export default async function ClientQuotePage({
             </section>
           )}
 
-          <section className="mt-6">
-            <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Itinerary
-            </h2>
-            <div className="mt-2 flex flex-col gap-2">
+          <section className="mt-7">
+            <SectionHeading>Itinerary</SectionHeading>
+            <div className="mt-3 flex flex-col gap-2">
               {legs.map((leg, i) => (
                 <div
                   key={i}
-                  className="flex items-center justify-between rounded-md border border-border p-3 text-sm"
+                  className="flex items-center justify-between rounded-xl border border-border/70 p-4 text-sm"
                 >
                   <span>
                     <span className="font-medium">
@@ -468,32 +474,30 @@ export default async function ClientQuotePage({
                 </div>
               ))}
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <p className="mt-3 text-sm text-muted-foreground">
               {aircraftLabel}
               {pax !== null && ` · ${pax} passengers`}
             </p>
           </section>
 
           {option.aircraft && (option.aircraft.photos.length > 0 || option.aircraft.amenities.length > 0) && (
-            <section className="mt-6">
-              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                Aircraft
-              </h2>
+            <section className="mt-7">
+              <SectionHeading>Aircraft</SectionHeading>
               {option.aircraft.photos.length > 0 && (
-                <div className="mt-2 flex gap-2 overflow-x-auto">
+                <div className="mt-3 flex gap-2 overflow-x-auto">
                   {option.aircraft.photos.map((url) => (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       key={url}
                       src={url}
                       alt={aircraftLabel}
-                      className="h-32 w-48 shrink-0 rounded-md border border-border object-cover"
+                      className="h-32 w-48 shrink-0 rounded-xl border border-border/70 object-cover"
                     />
                   ))}
                 </div>
               )}
               {option.aircraft.amenities.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
+                <div className="mt-3 flex flex-wrap gap-1.5">
                   {option.aircraft.amenities.map((a) => (
                     <span
                       key={a}
@@ -508,19 +512,15 @@ export default async function ClientQuotePage({
           )}
 
           {option.clientNotes && (
-            <section className="mt-6">
-              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                Notes
-              </h2>
-              <p className="mt-2 text-sm whitespace-pre-wrap">{option.clientNotes}</p>
+            <section className="mt-7">
+              <SectionHeading>Notes</SectionHeading>
+              <p className="mt-3 text-sm whitespace-pre-wrap">{option.clientNotes}</p>
             </section>
           )}
 
-          <section className="mt-6">
-            <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Pricing
-            </h2>
-            <div className="mt-2 flex flex-col gap-1.5 text-sm">
+          <section className="mt-7">
+            <SectionHeading>Pricing</SectionHeading>
+            <div className="mt-3 flex flex-col gap-2 text-sm">
               {legs.map((leg, i) => (
                 <Row
                   key={i}
@@ -529,14 +529,14 @@ export default async function ClientQuotePage({
                   emphasis="muted"
                 />
               ))}
-              <div className="flex justify-between border-t border-border pt-1.5">
+              <div className="flex justify-between border-t border-border pt-2">
                 <span>Subtotal</span>
                 <span>{formatCurrency(preTaxSubtotal)}</span>
               </div>
               {option.fetTax > 0 && (
                 <Row label="Federal Excise Tax (7.5%)" value={formatCurrency(option.fetTax)} emphasis="muted" />
               )}
-              <div className="mt-2 flex justify-between border-t border-border pt-2 font-semibold">
+              <div className="mt-1 flex justify-between border-t border-border pt-3 text-base font-semibold">
                 <span>Total</span>
                 <span>{formatCurrency(option.total)}</span>
               </div>
@@ -551,11 +551,9 @@ export default async function ClientQuotePage({
           </section>
 
           {termsText && !pendingDecision && quote.status !== "pending_confirmation" && (
-            <section className="mt-6">
-              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                Charter Terms
-              </h2>
-              <div className="mt-2 max-h-64 overflow-y-auto rounded-md border border-border p-3 text-sm whitespace-pre-wrap text-muted-foreground">
+            <section className="mt-7">
+              <SectionHeading>Charter Terms</SectionHeading>
+              <div className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-border/70 p-4 text-sm whitespace-pre-wrap text-muted-foreground">
                 {termsText}
               </div>
             </section>
@@ -571,7 +569,7 @@ export default async function ClientQuotePage({
           </p>
 
           {quote.status === "accepted" ? (
-            <div className="mt-6 rounded-md border border-accent/40 bg-accent/10 p-4 text-sm">
+            <div className="mt-7 rounded-xl border border-accent/40 bg-accent/10 p-4 text-sm">
               <p className="font-medium">You&apos;re confirmed!</p>
               <p className="mt-1 text-muted-foreground">
                 Accepted {quote.acceptedAt?.toLocaleString()}.{" "}
@@ -585,7 +583,7 @@ export default async function ClientQuotePage({
               </p>
             </div>
           ) : quote.status === "pending_confirmation" ? (
-            <div className="mt-6 rounded-md border border-accent/40 bg-accent/10 p-4 text-sm">
+            <div className="mt-7 rounded-xl border border-accent/40 bg-accent/10 p-4 text-sm">
               <p className="font-medium">Confirming availability</p>
               <p className="mt-1 text-muted-foreground">
                 Thanks for your request — we&apos;re confirming aircraft availability for your
@@ -593,16 +591,16 @@ export default async function ClientQuotePage({
               </p>
             </div>
           ) : quote.status === "declined" ? (
-            <div className="mt-6 rounded-md border border-border p-4 text-sm text-muted-foreground">
+            <div className="mt-7 rounded-xl border border-border p-4 text-sm text-muted-foreground">
               This quote was declined. Contact {operator.name} if that was a mistake.
             </div>
           ) : isExpired ? (
-            <div className="mt-6 rounded-md border border-border p-4 text-sm text-muted-foreground">
+            <div className="mt-7 rounded-xl border border-border p-4 text-sm text-muted-foreground">
               This quote has expired. Contact {operator.name} for an updated quote.
             </div>
           ) : quote.status === "approved" ? (
-            <div className="mt-8 flex flex-col gap-4 border-t border-border pt-6">
-              <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm">
+            <div className="mt-9 flex flex-col gap-4 border-t border-border pt-7">
+              <div className="rounded-xl border border-accent/40 bg-accent/10 p-4 text-sm">
                 <p className="font-medium">Good news — your aircraft is available!</p>
                 <p className="mt-1 text-muted-foreground">
                   Review the charter terms below and sign to finalize your booking.
@@ -618,14 +616,14 @@ export default async function ClientQuotePage({
               {requestChangesOrDecline}
             </div>
           ) : (
-            <div className="mt-8 flex flex-col gap-4 border-t border-border pt-6">
+            <div className="mt-9 flex flex-col gap-4 border-t border-border pt-7">
               <div className="flex flex-col gap-2">
                 <p className="text-sm text-muted-foreground">
                   Requesting to book doesn&apos;t charge or commit you yet — we&apos;ll confirm
                   aircraft availability and follow up before anything is finalized.
                 </p>
                 <form action={requestToBookWithToken}>
-                  <Button type="submit" size="lg" className="w-full">
+                  <Button type="submit" size="lg" className="h-11 w-full rounded-xl">
                     Request to Book
                   </Button>
                 </form>
@@ -635,7 +633,7 @@ export default async function ClientQuotePage({
           )}
 
           {requested === "1" && (
-            <p className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-3 text-sm">
+            <p className="mt-4 rounded-xl border border-accent/40 bg-accent/10 p-3 text-sm">
               Your message has been sent — we&apos;ll follow up shortly.
             </p>
           )}

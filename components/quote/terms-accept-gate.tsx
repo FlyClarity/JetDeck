@@ -50,7 +50,7 @@ export function TermsAcceptGate({
     <div className="flex flex-col gap-4">
       {termsText && (
         <section>
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          <h2 className="text-[13px] font-semibold tracking-wide text-foreground/55 uppercase">
             Charter Terms
           </h2>
           <div
@@ -63,7 +63,7 @@ export function TermsAcceptGate({
               }
             }}
             onScroll={(e) => checkScrolled(e.currentTarget)}
-            className="mt-2 max-h-64 overflow-y-auto rounded-md border border-border p-3 text-sm whitespace-pre-wrap text-muted-foreground"
+            className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-border/70 p-4 text-sm whitespace-pre-wrap text-muted-foreground"
           >
             {termsText}
           </div>
@@ -90,7 +90,7 @@ export function TermsAcceptGate({
                 type="button"
                 onClick={() => setPaymentMethod(opt.value)}
                 className={cn(
-                  "rounded-md border p-3 text-left text-sm transition-colors",
+                  "rounded-xl border p-3 text-left text-sm transition-colors",
                   paymentMethod === opt.value
                     ? "border-accent bg-accent/10"
                     : "border-border hover:border-accent/60"
@@ -135,7 +135,7 @@ export function TermsAcceptGate({
       <form action={action}>
         <input type="hidden" name="acceptedByName" value={name} />
         {paymentMethod && <input type="hidden" name="paymentMethod" value={paymentMethod} />}
-        <Button type="submit" size="lg" className="w-full" disabled={!canAccept}>
+        <Button type="submit" size="lg" className="h-11 w-full rounded-xl" disabled={!canAccept}>
           I Accept — Book This Charter
         </Button>
       </form>
