@@ -1346,3 +1346,19 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   "would require rescheduling an existing booking" — broader and more
   accurate, since a request can now fail to fit for reasons beyond a
   single exact-date collision (e.g. spanning across a gap boundary).
+
+- ~~**Client quote page — modern font + cleaner layout — shipped**~~
+  (raised directly: "I want more of a simple modern font and layout so
+  when they are looking at the quote it looks clean. But lets keep all
+  operator font what we have now."). Scoped entirely to `/q/[token]`
+  — the operator dashboard's JetBrains Mono is untouched. New
+  `app/q/layout.tsx` loads Inter and scopes it to this route tree via
+  a wrapping div (`font-[family-name:var(--font-inter)]`), rather than
+  touching the root layout or `globals.css`, so nothing else in the
+  app is affected. Visual refresh on `/q/[token]` and
+  `TermsAcceptGate` (same client-facing flow): `rounded-2xl` card with
+  a subtle shadow instead of a flat bordered box, more generous
+  padding/section spacing, quieter section labels, a bolder pricing
+  total, `rounded-xl` throughout instead of the sharper `rounded-md`
+  used elsewhere. Purely visual — no booking logic, data binding, or
+  conditional flow touched. User confirmed: "WOW thats beautiful."
