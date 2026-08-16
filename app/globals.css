@@ -90,8 +90,8 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --font-sans: var(--font-jetbrains-mono);
-  --font-mono: var(--font-jetbrains-mono);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-inter);
 }
 
 @layer base {
