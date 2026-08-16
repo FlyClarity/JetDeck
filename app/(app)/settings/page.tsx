@@ -27,7 +27,7 @@ async function startStripeOnboarding() {
   let accountId = operator.stripeAccountId;
   if (!accountId) {
     accountId = await createConnectedAccount({ name: operator.name, email: operator.notifyEmail });
-    if (!accountId) return;
+    if (!accountId) redirect("/settings?stripe_error=1");
     await prisma.operator.update({ where: { id: operator.id }, data: { stripeAccountId: accountId } });
   }
 
@@ -37,7 +37,7 @@ async function startStripeOnboarding() {
     `${appUrl}/settings?stripe_refresh=1`,
     `${appUrl}/settings?stripe_return=1`
   );
-  if (!onboardingUrl) return;
+  if (!onboardingUrl) redirect("/settings?stripe_error=1");
 
   redirect(onboardingUrl);
 }
@@ -102,10 +102,10 @@ async function updateSettings(formData: FormData) {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ saved?: string }>;
+  searchParams: Promise<{ saved?: string; stripe_error?: string }>;
 }) {
   const operator = await getCurrentOperator();
-  const { saved } = await searchParams;
+  const { saved, stripe_error: stripeError } = await searchParams;
 
   if (!operator) {
     return null;
@@ -145,6 +145,12 @@ export default async function SettingsPage({
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
           Payments
         </h2>
+        {stripeError === "1" && (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+            Couldn&apos;t reach Stripe to connect your account. Check that JetDeck&apos;s Stripe
+            key is configured correctly and try again — contact support if it keeps happening.
+          </p>
+        )}
         {operator.stripeChargesEnabled ? (
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm">

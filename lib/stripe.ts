@@ -135,17 +135,28 @@ export async function createConnectedAccount(operator: {
     console.warn("STRIPE_SECRET_KEY not set — cannot create Stripe Connect account");
     return null;
   }
-  const account = await stripe.accounts.create({
-    type: "express",
-    business_type: "company",
-    business_profile: { name: operator.name },
-    email: operator.email ?? undefined,
-    capabilities: {
-      card_payments: { requested: true },
-      transfers: { requested: true },
-    },
-  });
-  return account.id;
+  try {
+    const account = await stripe.accounts.create({
+      type: "express",
+      business_type: "company",
+      business_profile: { name: operator.name },
+      email: operator.email ?? undefined,
+      capabilities: {
+        card_payments: { requested: true },
+        transfers: { requested: true },
+      },
+    });
+    return account.id;
+  } catch (err) {
+    // Most likely cause of a failure here: the platform's own Stripe
+    // account isn't approved for Connect in the mode (test/live) the
+    // current STRIPE_SECRET_KEY belongs to — Stripe requires a separate
+    // Connect platform application/review per mode. Logged rather than
+    // thrown so a misconfiguration surfaces as "couldn't connect, try
+    // again" on the Settings page instead of crashing it outright.
+    console.error("Failed to create Stripe Connect account", err);
+    return null;
+  }
 }
 
 // Stripe's hosted onboarding flow — the operator fills in business/bank
@@ -163,13 +174,18 @@ export async function createConnectOnboardingLink(
   returnUrl: string
 ): Promise<string | null> {
   if (!stripe) return null;
-  const accountLink = await stripe.accountLinks.create({
-    account: accountId,
-    refresh_url: refreshUrl,
-    return_url: returnUrl,
-    type: "account_onboarding",
-  });
-  return accountLink.url;
+  try {
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: refreshUrl,
+      return_url: returnUrl,
+      type: "account_onboarding",
+    });
+    return accountLink.url;
+  } catch (err) {
+    console.error(`Failed to create Connect onboarding link for account ${accountId}`, err);
+    return null;
+  }
 }
 
 // A one-time link into the operator's own Stripe Express Dashboard (their
