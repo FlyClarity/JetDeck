@@ -1362,3 +1362,81 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   total, `rounded-xl` throughout instead of the sharper `rounded-md`
   used elsewhere. Purely visual — no booking logic, data binding, or
   conditional flow touched. User confirmed: "WOW thats beautiful."
+
+- ~~**Production migration: live Stripe + Clerk Production instance —
+  shipped**~~ (raised directly: "I am getting ready to move away from
+  the test key for JetDeck"). Clarity Aviation moved off test-mode
+  credentials for both Stripe and Clerk — the two identity/payment
+  providers this app depends on. One real code fix came out of it;
+  the rest was operator-side configuration, recorded here since the
+  failure modes hit along the way are exactly what the next operator
+  migration (or the next environment) will probably hit too.
+  **Code fix**: `createConnectedAccount`/`createConnectOnboardingLink`
+  (`lib/stripe.ts`) had no try/catch, unlike every other Stripe call in
+  the file — a rejected request threw unhandled out of the "Connect
+  Stripe" server action and crashed the whole Settings page instead of
+  failing gracefully. Both now log and return `null` on failure;
+  `startStripeOnboarding` redirects to `/settings?stripe_error=1` on
+  either failure path, and Settings renders a visible red banner in the
+  Payments section instead of a dead page. This is what turned every
+  subsequent Stripe misconfiguration below into a readable message
+  instead of a crash.
+  **What actually went wrong, in order** (each one distinct, worth
+  knowing about since they look identical from the client-page
+  symptom alone):
+  1. Test-mode `Operator.stripeAccountId`/`stripeChargesEnabled`
+     don't carry over when `STRIPE_SECRET_KEY` switches to live —
+     Stripe test/live are separate account spaces. Cleared via a
+     one-off SQL update (`UPDATE "Operator" SET "stripeAccountId" =
+     NULL, "stripeChargesEnabled" = false WHERE id = ...`) so
+     "Connect Stripe" would create a fresh live-mode account instead
+     of erroring against a dead test-mode id.
+  2. First live key tried was a **restricted key**
+     (`rk_live_...`), missing the `connected_account_write`,
+     `accounts_kyc_basic_read`, and `business_network_profile_read`
+     permissions Connect account creation needs. Decided to switch to
+     the standard `sk_live_...` secret key instead of hand-tracking
+     restricted-key permissions across every Stripe feature this app
+     uses (Checkout, Connect, PaymentIntents).
+  3. The Vercel env var update to the standard key didn't actually
+     take the first time — `STRIPE_SECRET_KEY` was still serving the
+     old restricted key (by then revoked in the Stripe dashboard,
+     surfacing as `api_key_expired`) even after a redeploy. Re-saving
+     it for real fixed this.
+  4. Once the correct key was live, Stripe's own fraud/risk system
+     temporarily blocked connected-account creation on the platform
+     account ("suspicious activity") — almost certainly triggered by
+     the repeated Connect-account-creation attempts while debugging
+     steps 1–3 in quick succession on a brand-new live account.
+     Resolved entirely on Stripe's side (dashboard confirmation), no
+     code or config change needed.
+  **Separately, Clerk**: `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` was still
+  `pk_test_...` (Clerk's Development instance) even though the app was
+  live on a custom domain — Development instances don't reliably
+  support the session handshake against a custom domain, which
+  surfaced as `MIDDLEWARE_INVOCATION_FAILED` (a 500 from
+  `middleware.ts`'s `clerkMiddleware`) the moment a real sign-in
+  redirect landed back on the app. Fixed by creating a Clerk
+  **Production** instance, verifying the custom domain via the DNS
+  records Clerk provides, and swapping in the resulting `pk_live_`/
+  `sk_live_` keys. Since Clerk's Development and Production instances
+  are entirely separate user/org databases, the operator had to sign
+  up fresh under Production — which would have created a second,
+  empty `Operator` row via the `organization.created` webhook
+  (`app/api/webhooks/clerk/route.ts`) rather than reusing the real one
+  with all its Fleet/Contacts/quote history. Avoided with one more
+  targeted SQL update, keyed by name rather than copy-pasted ids to
+  avoid transcription errors:
+  ```sql
+  DO $$
+  DECLARE new_org_id text;
+  BEGIN
+    SELECT "clerkOrgId" INTO new_org_id FROM "Operator" WHERE name = 'DOPA Jets Inc.';
+    DELETE FROM "Operator" WHERE name = 'DOPA Jets Inc.';
+    UPDATE "Operator" SET "clerkOrgId" = new_org_id WHERE name = 'Clarity Aviation, LLC';
+  END $$;
+  ```
+  (deleting the duplicate before updating, since `clerkOrgId` is
+  unique and both rows briefly holding the same value would violate
+  that). Confirmed via `SELECT` afterward: one `Operator` row,
+  original id and data intact, new Clerk org id attached.
