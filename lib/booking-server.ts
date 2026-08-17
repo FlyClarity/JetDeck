@@ -112,7 +112,9 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
       : quote.stripePaymentIntentId
         ? quote.paymentMethod === "wire"
           ? `<br/><strong>Payment for your flight:</strong> ${formatCurrency(option.depositAmount)} — pay via wire (instructions below). A credit card hold of ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} is authorized as backup security.`
-          : `<br/><strong>Payment for your flight:</strong> ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} — card hold authorized${quote.paymentMethod === "credit_card" ? ` (includes card processing fee)` : ""}`
+          : quote.paymentMethod === "credit_card"
+            ? `<br/><strong>Payment for your flight:</strong> ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} — charged to your card (includes card processing fee)`
+            : `<br/><strong>Payment for your flight:</strong> ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} — card hold authorized`
         : `<br/><strong>Payment due:</strong> ${formatCurrency(option.depositAmount)}`;
   const followUpLine =
     option.depositAmount && !quote.stripePaymentIntentId && !waivesCardHold
@@ -306,7 +308,7 @@ export async function resendCardHoldLink(operatorId: string, quoteId: string) {
     await sendEmail({
       to: requestorEmail,
       subject: `New card hold link — ${quote.quoteNumber}`,
-      html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>Your previous card authorization link expired. Please use this new link to authorize your card hold — no charge is made, this only places a hold: <a href="${session.url}">${session.url}</a></p><p>— ${quote.operator.name}</p>`,
+      html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>Your previous card authorization link expired. Please use this new link to authorize your card hold — no charge is made, this only places a hold: <a href="${session.url}">Authorize Card Hold</a></p><p>— ${quote.operator.name}</p>`,
       replyTo: quote.operator.replyToEmail ?? undefined,
       from: quote.operator.fromEmail,
       fromName: quote.operator.name,
@@ -380,7 +382,7 @@ export async function confirmPendingBookingForOperator(operatorId: string, quote
     await sendEmail({
       to: requestorEmail,
       subject: `Good news — ${quote.quoteNumber} is available!`,
-      html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>We can confirm ${quote.operator.name} has your aircraft available for this trip. Please finalize your booking — review the charter terms and authorize your deposit hold: <a href="${appUrl}/q/${quote.token}">${appUrl}/q/${quote.token}</a></p><p>— ${quote.operator.name}</p>`,
+      html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>We can confirm ${quote.operator.name} has your aircraft available for this trip. Please finalize your booking — review the charter terms and complete payment: <a href="${appUrl}/q/${quote.token}">Finalize Your Booking</a></p><p>— ${quote.operator.name}</p>`,
       replyTo: quote.operator.replyToEmail ?? undefined,
       from: quote.operator.fromEmail,
       fromName: quote.operator.name,

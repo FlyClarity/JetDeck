@@ -166,7 +166,10 @@ model TripRequest {
   aiPriceSuggestion Float?
 
   status String @default("new")
-  // "new" | "scoring" | "ready" | "quoted" | "passed" | "closed"
+  // "new" | "scoring" | "ready" | "quoted" | "passed" | "expired" | "closed"
+  // "expired" is set by a daily cron sweep (lib/expire-stale.ts) for
+  // requests still sitting in "new"/"ready" — never even quoted — whose
+  // last requested leg date has passed with no action taken.
 
   createdAt DateTime @default(now())
   quotes    Quote[]
@@ -218,6 +221,12 @@ model Quote {
   status String @default("draft")
   // "draft" | "sent" | "pending_confirmation" | "approved" | "accepted"
   // | "declined" | "expired" | "converted" | "cancelled"
+  // "expired" is set two ways: computed live on /q/[token] from validUntil
+  // (the pricing offer's own shelf life) without ever being stored, or set
+  // for real by the daily cron sweep (lib/expire-stale.ts) for a
+  // draft/sent/pending_confirmation/approved quote whose selected option's
+  // last leg date has passed with no acceptance — a different trigger
+  // (the flight date, not the quote's validity window) than the live check.
   // Two-step booking: client clicks "Request to Book" (non-binding, no
   // terms/signature yet) -> pending_confirmation, requestedAt set. Operator
   // reviews (same-aircraft conflict check runs automatically as advisory

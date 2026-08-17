@@ -104,7 +104,7 @@ export function TermsAcceptGate({
             {paymentMethod === "wire" &&
               `You'll pay ${formatCurrency(depositAmount ?? 0)} for your flight via wire (instructions will follow by email). A credit card hold of ${formatCurrency(depositAmount ?? 0)} is also authorized as backup security in case the wire isn't received.`}
             {paymentMethod === "credit_card" &&
-              `A credit card hold of ${formatCurrency((depositAmount ?? 0) + ccFee)} will be authorized as payment for your flight — includes a ${ccProcessingFeePercent}% card processing fee (${formatCurrency(ccFee)}).`}
+              `Your card will be charged ${formatCurrency((depositAmount ?? 0) + ccFee)} for your flight — includes a ${ccProcessingFeePercent}% card processing fee (${formatCurrency(ccFee)}).`}
             {paymentMethod === null && "Choose an option above to continue."}
           </p>
         </section>
@@ -128,7 +128,9 @@ export function TermsAcceptGate({
         {waivesCardHold
           ? "."
           : needsPaymentMethod
-            ? ", and authorize the card hold described above."
+            ? paymentMethod === "credit_card"
+              ? ", and authorize the payment described above."
+              : ", and authorize the card hold described above."
             : "."}
       </p>
 

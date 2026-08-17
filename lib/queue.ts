@@ -28,6 +28,7 @@ export const STATUS_LABELS: Record<string, string> = {
   ready: "Ready to Quote",
   quoted: "Quoted",
   passed: "Passed",
+  expired: "Expired",
   closed: "Closed",
 };
 

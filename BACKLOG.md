@@ -1440,3 +1440,70 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   unique and both rows briefly holding the same value would violate
   that). Confirmed via `SELECT` afterward: one `Operator` row,
   original id and data intact, new Clerk org id attached.
+
+- ~~**Client-facing email links show friendly anchor text instead of the
+  raw URL — shipped**~~ (raised directly): "Your quote is ready:
+  https://www.jetdeck.us/q/abc123..." read as a wall of URL rather
+  than a clean link. Three client-facing emails were showing the raw
+  link as the visible anchor text — the send-quote email
+  (`app/(app)/quotes/[id]/page.tsx`), the resend-card-hold-link email
+  and the operator-confirmed-availability email (both
+  `lib/booking-server.ts`) — now read "View Quote," "Authorize Card
+  Hold," and "Finalize Your Booking" respectively. Operator-facing
+  notification emails (to `notifyEmail`) were left as raw links
+  on purpose — not what was raised, and an operator may actually want
+  the plain URL visible/copyable there.
+
+- ~~**Credit card payment still said "hold" instead of "charge" —
+  shipped**~~ (raised directly: "when they select credit card it
+  still refers to it as hold... they are paying the full amount via
+  credit card, not a 'hold'"). The wire path was already correct
+  (a card hold really is just backup security there) — the credit
+  card path's copy hadn't been updated to match, even though the
+  underlying amount/fee math was already right. Fixed in
+  `TermsAcceptGate` (the payment-method description and the
+  "authorize the ... described above" disclaimer line), the
+  accepted-status banner on `/q/[token]` (`quote.cardHoldStatus ===
+  "authorized"` now reads "Your payment is confirmed" for credit
+  card, vs "Your backup card hold is authorized" for wire), and the
+  confirmation email's payment line in `lib/booking-server.ts`
+  ("charged to your card" instead of "card hold authorized"). No
+  change to the actual Stripe mechanism (still a manual-capture hold
+  either way, per the existing capture-later design) — this was
+  purely a client-facing wording fix, matching what was actually
+  asked.
+
+- ~~**Auto-expire stale, unconfirmed requests/quotes past their flight
+  date — shipped**~~ (raised directly: "Can the system purge
+  requests/quotes that have not been accepted/confirmed after the
+  date of the flight for that request has passed?"). Confirmed via
+  `AskUserQuestion` before building: mark as expired and keep the
+  data (reversible, preserves reporting history), not a hard delete.
+  New `lib/expire-stale.ts`, run daily by a Vercel Cron Job hitting
+  `/api/cron/expire-stale` (registered in a new `vercel.json`,
+  protected by a `CRON_SECRET` bearer-token check so the endpoint
+  can't be triggered by anyone who finds the URL):
+  - `TripRequest`s still sitting in `"new"`/`"ready"` — never even
+    quoted — whose last requested leg date has passed get set to a
+    new `"expired"` status. Deliberately scoped to only those two
+    statuses: once a request has a `Quote` (`"quoted"`), its fate is
+    tracked through that quote instead, so expiring the request too
+    would be redundant.
+  - `Quote`s still in `"draft"`/`"sent"`/`"pending_confirmation"`/
+    `"approved"` whose selected option's last itinerary leg date has
+    passed also get set to `"expired"` — `Quote.status` already
+    anticipated this value in its schema comment (previously only
+    ever computed live from `validUntil` on `/q/[token]`, never
+    actually stored); this is a different trigger (the flight date
+    itself, not the pricing offer's shelf life) now stored for real.
+  Wired into the existing Quoting Queue UI rather than a new surface:
+  a new `"Expired"` entry in `STATUS_FILTERS` (alongside Active/
+  Passed/Inactive) shows expired trip requests with its own count
+  badge, and `"expired"` was added to `INACTIVE_QUOTE_STATUSES` so
+  expired quotes fold into the existing "Inactive" tab alongside
+  declined/cancelled ones rather than getting a redundant tab of
+  their own. `/q/[token]`'s `isExpired` flag (already driving the
+  status pill and the "this quote has expired" client message) now
+  also treats the stored `"expired"` status as expired, so no new
+  branch was needed there — it already did the right thing once the
+  flag recognized the new case.

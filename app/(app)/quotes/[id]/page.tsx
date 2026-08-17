@@ -127,7 +127,7 @@ async function sendQuote(id: string) {
   await sendEmail({
     to: quote.tripRequest.requestorEmail,
     subject: `Your Charter Quote — ${quote.quoteNumber}`,
-    html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">${quoteLink}</a></p><p>${pricingLine} Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
+    html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">View Quote</a></p><p>${pricingLine} Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
     replyTo: operator.replyToEmail ?? undefined,
     from: operator.fromEmail,
     fromName: operator.name,

@@ -327,7 +327,16 @@ export default async function ClientQuotePage({
     preTaxSubtotal
   );
 
-  const isExpired = ["sent", "approved"].includes(quote.status) && quote.validUntil < new Date();
+  // "expired" itself is a real stored status now (see the daily cron sweep,
+  // lib/expire-stale.ts) for quotes whose flight date passed unconfirmed —
+  // distinct from the existing validUntil-based check, which is about the
+  // pricing offer's own shelf life. Folding the stored status into this
+  // same flag means every downstream branch that already keys off
+  // isExpired (the status pill, the action section, pendingDecision) picks
+  // it up automatically with no separate branch needed.
+  const isExpired =
+    quote.status === "expired" ||
+    (["sent", "approved"].includes(quote.status) && quote.validUntil < new Date());
   const pendingDecision = ["sent", "approved"].includes(quote.status) && !isExpired;
   const daysRemaining = Math.ceil(
     (quote.validUntil.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)
@@ -574,11 +583,13 @@ export default async function ClientQuotePage({
               <p className="mt-1 text-muted-foreground">
                 Accepted {quote.acceptedAt?.toLocaleString()}.{" "}
                 {quote.cardHoldStatus === "pending"
-                  ? "Please complete checkout to authorize your card hold — your confirmation email with the charter agreement will follow once that's done. If you closed the checkout page before finishing, contact us and we'll send a new link."
+                  ? quote.paymentMethod === "credit_card"
+                    ? "Please complete checkout to charge your card — your confirmation email with the charter agreement will follow once that's done. If you closed the checkout page before finishing, contact us and we'll send a new link."
+                    : "Please complete checkout to authorize your card hold — your confirmation email with the charter agreement will follow once that's done. If you closed the checkout page before finishing, contact us and we'll send a new link."
                   : quote.cardHoldStatus === "authorized" && quote.paymentMethod === "wire"
                     ? "Your backup card hold is authorized. A confirmation email with your charter agreement and wire instructions is on its way."
                     : quote.cardHoldStatus === "authorized"
-                      ? "Your card hold is authorized. A confirmation email with your charter agreement is on its way."
+                      ? "Your payment is confirmed. A confirmation email with your charter agreement is on its way."
                       : "A confirmation email with your charter agreement is on its way."}
               </p>
             </div>

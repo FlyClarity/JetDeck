@@ -73,6 +73,7 @@ const VIEWS = [
 const STATUS_FILTERS = [
   { key: "active", label: "Active" },
   { key: "passed", label: "Passed" },
+  { key: "expired", label: "Expired" },
   { key: "inactive", label: "Inactive" },
 ] as const;
 
@@ -88,9 +89,13 @@ const QUOTE_ACTION_LABEL: Record<string, string> = {
   accepted: "Accepted — view →",
   declined: "Declined — view →",
   cancelled: "Cancelled — view →",
+  expired: "Expired — view →",
 };
 
-const INACTIVE_QUOTE_STATUSES = ["declined", "cancelled"];
+// "expired" (flight date passed unconfirmed — see lib/expire-stale.ts)
+// folds into the same "no longer live" bucket as declined/cancelled rather
+// than getting its own tab — same reasoning as those two originally.
+const INACTIVE_QUOTE_STATUSES = ["declined", "cancelled", "expired"];
 
 const TRIP_TYPE_LABELS: Record<string, string> = {
   one_way: "One-way",
@@ -126,10 +131,10 @@ export function QuoteQueue({
   }, [searchParams, tripRequests]);
 
   const [activeView, setActiveView] = useState<ViewKey>(() =>
-    openTrip?.status === "passed" ? "all" : "ready"
+    openTrip && ["passed", "expired"].includes(openTrip.status) ? "all" : "ready"
   );
   const [statusFilter, setStatusFilter] = useState<StatusFilterKey>(() =>
-    openTrip?.status === "passed" ? "passed" : "active"
+    openTrip?.status === "passed" ? "passed" : openTrip?.status === "expired" ? "expired" : "active"
   );
   const [selectedId, setSelectedId] = useState<string | null>(() => openTrip?.id ?? null);
   const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
@@ -168,6 +173,11 @@ export function QuoteQueue({
     [tripRequests]
   );
 
+  const expiredCount = useMemo(
+    () => tripRequests.filter((t) => t.status === "expired").length,
+    [tripRequests]
+  );
+
   const draftCount = useMemo(() => quotes.filter((q) => q.status === "draft").length, [quotes]);
 
   const inactiveCount = useMemo(
@@ -194,12 +204,14 @@ export function QuoteQueue({
   const currentList = useMemo(() => {
     if (isQuoteView) return [];
     if (activeView === "ready") return tripRequests.filter((t) => t.status === "ready");
-    // "Active" hides passed requests, and also hides quoted ones — once a
-    // trip request has a quote, it's tracked via the Draft/Sent/Accepted
-    // tabs instead, so leaving it in "All Requests" too just double-lists
-    // the same lead in two places.
+    // "Active" hides passed and expired requests, and also hides quoted
+    // ones — once a trip request has a quote, it's tracked via the
+    // Draft/Sent/Accepted tabs instead, so leaving it in "All Requests" too
+    // just double-lists the same lead in two places.
     if (statusFilter === "active") {
-      return tripRequests.filter((t) => t.status !== "passed" && t.status !== "quoted");
+      return tripRequests.filter(
+        (t) => t.status !== "passed" && t.status !== "quoted" && t.status !== "expired"
+      );
     }
     return tripRequests.filter((t) => t.status === statusFilter);
   }, [isQuoteView, activeView, statusFilter, tripRequests]);
@@ -316,6 +328,9 @@ export function QuoteQueue({
                     {f.label}
                     {f.key === "passed" && passedCount > 0 && (
                       <span className="ml-1 text-muted-foreground">{passedCount}</span>
+                    )}
+                    {f.key === "expired" && expiredCount > 0 && (
+                      <span className="ml-1 text-muted-foreground">{expiredCount}</span>
                     )}
                     {f.key === "inactive" && inactiveCount > 0 && (
                       <span className="ml-1 text-muted-foreground">{inactiveCount}</span>
@@ -502,7 +517,7 @@ export function QuoteQueue({
                 Quote Now (Q)
               </Link>
             </Button>
-            {selectedTripRequest.status !== "passed" && (
+            {!["passed", "expired"].includes(selectedTripRequest.status) && (
               <Button
                 type="button"
                 variant="outline"
