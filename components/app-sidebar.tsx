@@ -98,30 +98,60 @@ export function AppSidebar({
       </div>
 
       <div className="px-3">
-        <div className="relative grid grid-cols-2 rounded-lg bg-muted p-1 text-xs font-medium">
-          <div
-            className="absolute inset-y-1 w-[calc(50%-0.25rem)] rounded-md bg-background shadow-sm transition-transform duration-200 ease-out"
-            style={{ transform: mode === "ops" ? "translateX(calc(100% + 0.25rem))" : "translateX(0)" }}
-          />
-          <Link
-            href="/dashboard"
-            className={cn(
-              "relative z-10 rounded-md px-1 py-1.5 text-center transition-colors",
-              mode === "sales" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {collapsed ? "S" : "Sales"}
-          </Link>
-          <Link
-            href="/ops"
-            className={cn(
-              "relative z-10 rounded-md px-1 py-1.5 text-center transition-colors",
-              mode === "ops" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {collapsed ? "O" : "Ops"}
-          </Link>
-        </div>
+        {collapsed ? (
+          // Two "S"/"O" letters side by side don't have room to breathe in a
+          // 56px rail — stacked full-width rows read far more cleanly than a
+          // cramped horizontal split.
+          <div className="flex flex-col gap-1 rounded-lg bg-muted p-1 text-xs font-medium">
+            <Link
+              href="/dashboard"
+              className={cn(
+                "rounded-md py-1.5 text-center transition-colors",
+                mode === "sales"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              S
+            </Link>
+            <Link
+              href="/ops"
+              className={cn(
+                "rounded-md py-1.5 text-center transition-colors",
+                mode === "ops"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              O
+            </Link>
+          </div>
+        ) : (
+          <div className="relative grid grid-cols-2 rounded-lg bg-muted p-1 text-xs font-medium">
+            <div
+              className="absolute inset-y-1 w-[calc(50%-0.25rem)] rounded-md bg-background shadow-sm transition-transform duration-200 ease-out"
+              style={{ transform: mode === "ops" ? "translateX(calc(100% + 0.25rem))" : "translateX(0)" }}
+            />
+            <Link
+              href="/dashboard"
+              className={cn(
+                "relative z-10 rounded-md px-1 py-1.5 text-center transition-colors",
+                mode === "sales" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Sales
+            </Link>
+            <Link
+              href="/ops"
+              className={cn(
+                "relative z-10 rounded-md px-1 py-1.5 text-center transition-colors",
+                mode === "ops" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Ops
+            </Link>
+          </div>
+        )}
       </div>
 
       <nav className="mt-4 flex flex-1 flex-col gap-0.5 px-2">

@@ -1696,3 +1696,21 @@ affect everything after it too:
   `organizationPreviewMainIdentifier: "truncate"`) so the org name
   itself truncates with an ellipsis instead of just getting clipped
   mid-character.
+- ~~**Collapsed Sales/Ops switcher cramped + dashboard filter bar
+  overflowing behind buttons — fixed**~~: two more things the user
+  caught on the live deploy. (1) The collapsed sidebar's Sales/Ops
+  switcher packed "S" and "O" side-by-side into a `grid-cols-2` inside
+  a 56px rail — barely enough room for either letter, let alone both,
+  and read as garbled/overlapping. Now renders as two full-width
+  stacked rows when collapsed (only the expanded state keeps the
+  side-by-side pill with the sliding highlight). (2) The dashboard's
+  filter/tab row (`components/queue/quote-queue.tsx`) already had
+  `overflow-x-auto` on the tabs container, but was missing `min-w-0` —
+  a classic flexbox gotcha where a flex item won't actually shrink
+  below its content's natural width (and so `overflow-x-auto` never
+  engages) unless `min-width: 0` overrides the default `min-width:
+  auto`. That bug predates the sidebar, but only became visible once
+  the sidebar ate ~224px of horizontal room the top nav never
+  permanently claimed — narrower windows now show it overlapping the
+  "+ Log Internal Flight"/"+ New Quote" buttons instead of scrolling.
+  One-line fix: `min-w-0` added to that container.

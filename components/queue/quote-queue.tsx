@@ -280,7 +280,7 @@ export function QuoteQueue({
     <div className="flex flex-1">
       <div className="flex flex-1 flex-col border-r border-border">
         <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
-          <div className="flex gap-1 overflow-x-auto">
+          <div className="flex min-w-0 gap-1 overflow-x-auto">
             {VIEWS.map((view) => (
               <button
                 key={view.key}
