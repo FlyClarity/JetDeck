@@ -79,7 +79,7 @@ export function AppSidebar({
   return (
     <aside
       className={cn(
-        "flex flex-col border-r border-border bg-card transition-[width] duration-200",
+        "flex flex-col overflow-hidden border-r border-border bg-card transition-[width] duration-200",
         collapsed ? "w-14" : "w-56"
       )}
     >
@@ -157,10 +157,24 @@ export function AppSidebar({
         })}
       </nav>
 
-      <div className={cn("flex items-center gap-2 border-t border-border p-3", collapsed && "flex-col")}>
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2 overflow-hidden border-t border-border p-3",
+          collapsed && "flex-col"
+        )}
+      >
         {!collapsed && (
-          <div className="min-w-0 flex-1">
-            <OrganizationSwitcher hidePersonal />
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <OrganizationSwitcher
+              hidePersonal
+              appearance={{
+                elements: {
+                  rootBox: "w-full max-w-full",
+                  organizationSwitcherTrigger: "w-full max-w-full overflow-hidden",
+                  organizationPreviewMainIdentifier: "truncate",
+                },
+              }}
+            />
           </div>
         )}
         <UserButton />

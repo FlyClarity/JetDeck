@@ -1680,3 +1680,19 @@ affect everything after it too:
     boot (confirms no build-time crash) were possible here. Worth a
     once-over on the live deploy, especially the collapsed-state icon
     layout and the segmented control's sliding highlight.
+- ~~**Org name spilling outside the sidebar — fixed**~~: exactly what
+  the "not visually verified" note above was worried about — the user
+  caught it on the live deploy. Clerk's `OrganizationSwitcher` trigger
+  has no built-in max-width, so "Clarity Aviation, LLC" rendered at
+  its natural width and visually spilled out past the sidebar's right
+  edge into the main content area instead of wrapping/truncating.
+  Fixed by actually clipping it rather than trusting Clerk to size
+  itself: `overflow-hidden` added to the `<aside>` itself and to the
+  footer row (belt-and-suspenders — CSS overflow clipping doesn't
+  care what's inside it, so it holds regardless of Clerk's internal
+  DOM), plus an `appearance.elements` override on
+  `OrganizationSwitcher` (`organizationSwitcherTrigger:
+  "w-full max-w-full overflow-hidden"`,
+  `organizationPreviewMainIdentifier: "truncate"`) so the org name
+  itself truncates with an ellipsis instead of just getting clipped
+  mid-character.
