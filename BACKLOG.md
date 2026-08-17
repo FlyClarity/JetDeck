@@ -1728,3 +1728,63 @@ affect everything after it too:
   chrome shape. The `min-w-0` dashboard-filter-bar fix and the
   `OrganizationSwitcher` overflow-clipping fix from the sidebar detour
   both stay — they're real bugs independent of nav shape.
+
+## Ops Build Brief — Crew roster + assignment (Steps 22/24, folding in Step 21)
+
+- ~~**Crew roster + assignment — shipped**~~: next module after
+  Passenger Manifest, per the user's pick from the remaining Ops Build
+  Brief items (Crew roster/assignment, Ops Dashboard board view,
+  checklist, communications, post-flight close, squawks, invoicing,
+  owner updates). Deliberately minimal roster — no duty-time/currency
+  tracking, type ratings, or a scheduling calendar, matching the
+  brief's own explicit deferral of those as later modules; this is
+  just enough to put a name on a trip.
+  - New `CrewMember` (name, role, email, phone, active) and
+    `TripCrewAssignment` (join table, `roleOnTrip` snapshots
+    `CrewMember.role` at assignment time rather than always reading
+    the live role, so changing someone's default role later doesn't
+    rewrite history on trips they already flew) models, migration
+    `20260818090000_crew_roster`. `lib/crew.ts` for the
+    `CREW_ROLES` constant (captain/first officer/flight attendant/
+    other) and a label helper, matching the `lib/aircraft.ts` pattern.
+  - Roster CRUD at `/ops/crew` (list), `/ops/crew/new`,
+    `/ops/crew/[id]` (edit + active/inactive toggle) — same
+    server-action-in-a-Server-Component pattern as Fleet's aircraft
+    pages. Added to the Ops nav in `components/app-header.tsx`.
+  - Assignment lives on the trip detail page
+    (`/ops/trips/[id]`): a new Crew section between Itinerary and
+    Passenger Manifest, listing assigned crew with a Remove button and
+    a picker (active, not-already-assigned crew only) to add more.
+    Assigning crew upserts a `TripCrewAssignment`
+    (`@@unique([tripId, crewId])`, so re-assigning the same person is
+    a no-op rather than an error) and bumps `Trip.status` to
+    `"crew_assigned"` — but only when the trip is still in a
+    pre-crew status (`confirmed`/`awaiting_payment`/`ops_review`), so
+    re-assigning crew on a trip that's already further along (e.g.
+    in-flight) never regresses it. This is also what makes
+    `"crew_assigned"` a real status for the first time — it's existed
+    in `Trip.status`'s documented enum since the passenger-manifest
+    work but nothing set it until now.
+  - Folded in Step 21 (the `Trip.status` schema mismatch flagged when
+    the Ops Build Brief kicked off): the schema comment now documents
+    the brief's full proposed status set
+    (`manifest_pending`/`manifest_complete`/`released`, and
+    `cancelled_by_client`/`cancelled_by_operator`/`cancelled_weather`
+    replacing the plain `"cancelled"` the auto-expire cascade used
+    before). Renamed the one cancellation path that actually exists
+    (`cancelBooking`'s cascade) to `"cancelled_by_operator"`. The
+    other new statuses are documented but deliberately **not** wired
+    to any transition yet — there's no client-initiated or
+    weather-cancellation flow, and no manifest-driven or release/
+    closeout flow, to hang them on. Same pattern as `"expired"` before
+    it: comment-first, wired in once the feature that needs it
+    actually gets built.
+  - Small parity additions elsewhere: `/ops/trips` list gets a Crew
+    column (assigned names, or "Unassigned"); the print manifest
+    (`/ops/trips/[id]/manifest-print`) now lists crew under the
+    itinerary, matching what a real dispatch manifest would show.
+  - Not built: any actual scheduling/availability view (who's free
+    when), duty-time/rest tracking, type ratings/currency, or crew
+    self-service (crew don't get their own login or a way to see
+    their own assignments — this is entirely an ops-side roster
+    today).

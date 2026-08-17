@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
+import { crewRoleLabel } from "@/lib/crew";
 
 // Deliberately outside the (ops) route group — no nav chrome, so printing
 // (or "Save as PDF") from the browser produces a clean page for the trip
@@ -19,6 +20,7 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
     where: { id, operatorId: operator.id },
     include: {
       passengers: { orderBy: [{ isLead: "desc" }, { createdAt: "asc" }] },
+      crewAssignments: { include: { crew: true }, orderBy: { createdAt: "asc" } },
       quote: { include: { selectedOption: { include: { aircraft: true } } } },
     },
   });
@@ -44,6 +46,15 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
           </p>
         ))}
       </div>
+
+      {trip.crewAssignments.length > 0 && (
+        <p className="mt-2">
+          Crew:{" "}
+          {trip.crewAssignments
+            .map((a) => `${a.crew.name} (${crewRoleLabel(a.roleOnTrip)})`)
+            .join(", ")}
+        </p>
+      )}
 
       <table className="mt-6 w-full border-collapse text-left">
         <thead>

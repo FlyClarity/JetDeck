@@ -19,6 +19,7 @@ export default async function TripsPage() {
     },
     include: {
       passengers: true,
+      crewAssignments: { include: { crew: true } },
       quote: { include: { tripRequest: true, selectedOption: true } },
     },
     orderBy: { createdAt: "desc" },
@@ -44,6 +45,7 @@ export default async function TripsPage() {
                 <th className="py-2 pr-4 font-medium">Route</th>
                 <th className="py-2 pr-4 font-medium">Departs</th>
                 <th className="py-2 pr-4 font-medium">Manifest</th>
+                <th className="py-2 pr-4 font-medium">Crew</th>
                 <th className="py-2 pr-4 font-medium">Status</th>
               </tr>
             </thead>
@@ -70,6 +72,11 @@ export default async function TripsPage() {
                     <td className="py-3 pr-4 text-muted-foreground">{firstLeg?.date ?? "—"}</td>
                     <td className="py-3 pr-4 text-muted-foreground">
                       {t.passengers.length > 0 ? `${submitted}/${t.passengers.length} submitted` : "—"}
+                    </td>
+                    <td className="py-3 pr-4 text-muted-foreground">
+                      {t.crewAssignments.length > 0
+                        ? t.crewAssignments.map((a) => a.crew.name).join(", ")
+                        : "Unassigned"}
                     </td>
                     <td className="py-3 pr-4">
                       <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">

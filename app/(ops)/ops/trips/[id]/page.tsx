@@ -5,9 +5,22 @@ import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
 import { STATUS_LABELS } from "@/lib/trip";
+import { crewRoleLabel } from "@/lib/crew";
 import { Button } from "@/components/ui/button";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { getAppUrl } from "@/lib/url";
+
+// Crew assignment only ever moves a trip forward out of the pre-crew
+// statuses — never regresses a trip that's already further along (e.g.
+// re-assigning crew on an in-flight trip shouldn't knock it back a stage).
+const PRE_CREW_STATUSES = ["confirmed", "awaiting_payment", "ops_review"];
 
 async function getScopedTrip(id: string) {
   const { clerkOrgId } = await getTenantContext();
@@ -19,6 +32,7 @@ async function getScopedTrip(id: string) {
     where: { id, operatorId: operator.id },
     include: {
       passengers: { orderBy: [{ isLead: "desc" }, { createdAt: "asc" }] },
+      crewAssignments: { include: { crew: true }, orderBy: { createdAt: "asc" } },
       quote: {
         include: {
           tripRequest: true,
@@ -50,6 +64,44 @@ async function verifyPassenger(tripId: string, passengerId: string) {
   revalidatePath(`/ops/trips/${tripId}`);
 }
 
+async function assignCrew(tripId: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+
+  const crewId = String(formData.get("crewId") ?? "");
+  const crew = await prisma.crewMember.findFirst({
+    where: { id: crewId, operatorId: scoped.operator.id },
+  });
+  if (!crew) return;
+
+  await prisma.tripCrewAssignment.upsert({
+    where: { tripId_crewId: { tripId, crewId } },
+    create: { operatorId: scoped.operator.id, tripId, crewId, roleOnTrip: crew.role },
+    update: {},
+  });
+
+  if (PRE_CREW_STATUSES.includes(scoped.trip.status)) {
+    await prisma.trip.update({ where: { id: tripId }, data: { status: "crew_assigned" } });
+  }
+
+  revalidatePath(`/ops/trips/${tripId}`);
+}
+
+async function unassignCrew(tripId: string, assignmentId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+
+  await prisma.tripCrewAssignment.deleteMany({
+    where: { id: assignmentId, tripId, operatorId: scoped.operator.id },
+  });
+
+  revalidatePath(`/ops/trips/${tripId}`);
+}
+
 export default async function TripDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const scoped = await getScopedTrip(id);
@@ -67,6 +119,13 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
     : (trip.quote.tripRequest?.requestorName ?? "");
 
   const appUrl = await getAppUrl();
+
+  const assignedCrewIds = trip.crewAssignments.map((a) => a.crewId);
+  const availableCrew = await prisma.crewMember.findMany({
+    where: { operatorId: scoped.operator.id, active: true, id: { notIn: assignedCrewIds } },
+    orderBy: { name: "asc" },
+  });
+  const assignWithId = assignCrew.bind(null, trip.id);
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
@@ -94,6 +153,58 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="mt-6 rounded-md border border-border p-4">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Crew</h2>
+        {trip.crewAssignments.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">No crew assigned yet.</p>
+        ) : (
+          <div className="mt-2 flex flex-col gap-2">
+            {trip.crewAssignments.map((a) => {
+              const unassignWithIds = unassignCrew.bind(null, trip.id, a.id);
+              return (
+                <div key={a.id} className="flex items-center justify-between gap-3 text-sm">
+                  <span>
+                    {a.crew.name} <span className="text-muted-foreground">({crewRoleLabel(a.roleOnTrip)})</span>
+                  </span>
+                  <form action={unassignWithIds}>
+                    <Button type="submit" size="sm" variant="ghost">
+                      Remove
+                    </Button>
+                  </form>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {availableCrew.length > 0 ? (
+          <form action={assignWithId} className="mt-3 flex items-center gap-2">
+            <Select name="crewId">
+              <SelectTrigger className="w-64">
+                <SelectValue placeholder="Select crew member" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableCrew.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name} ({crewRoleLabel(c.role)})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button type="submit" size="sm" variant="outline">
+              Assign
+            </Button>
+          </form>
+        ) : (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {trip.crewAssignments.length === 0 ? "No" : "No more"} active crew available to assign —{" "}
+            <Link href="/ops/crew/new" className="underline underline-offset-4">
+              add crew
+            </Link>
+            .
+          </p>
+        )}
       </div>
 
       <div className="mt-6 flex items-center justify-between">

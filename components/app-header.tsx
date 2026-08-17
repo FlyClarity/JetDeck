@@ -29,6 +29,7 @@ export function AppHeader({
   ];
   const opsItems: { href: string; label: string; badge?: number }[] = [
     { href: "/ops/trips", label: "Trips" },
+    { href: "/ops/crew", label: "Crew" },
   ];
   const items = mode === "sales" ? salesItems : opsItems;
 

@@ -55,6 +55,7 @@ model Operator {
   trips              Trip[]
   preferredOperators PreferredOperator[]
   inboundEmails      InboundEmail[]
+  crewMembers        CrewMember[]
 }
 
 model Contact {
@@ -386,14 +387,20 @@ model Trip {
   status String @default("confirmed")
   // "confirmed" | "awaiting_payment" | "ops_review" | "crew_assigned"
   // | "pre_flight" | "in_flight" | "completed" | "invoiced" | "closed"
-  // | "cancelled" (cascaded from Quote.status when an operator cancels an
-  // already-accepted booking)
+  // | "cancelled_by_operator" (cascaded from Quote.status when an operator
+  // cancels an already-accepted booking — "cancelled_by_client" and
+  // "cancelled_weather" are reserved for when those flows exist, nothing
+  // sets them yet) | "manifest_pending" | "manifest_complete" | "released"
+  // (reserved — the Ops Build Brief's proposed flow, not wired to any
+  // transition yet; "crew_assigned" is the only one of this group actually
+  // set today, by assignCrew in ops/trips/[id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   passengers        Passenger[]
   manifestReminders ManifestReminder[]
+  crewAssignments   TripCrewAssignment[]
 }
 
 // One row per passenger on a Trip, including the lead passenger. Every
@@ -450,6 +457,45 @@ model ManifestReminder {
   createdAt  DateTime  @default(now())
 
   @@unique([tripId, type])
+}
+
+// The operator's pilots/crew. Deliberately minimal — the brief explicitly
+// defers full duty-time/currency tracking, type ratings, and a scheduling
+// calendar as their own later modules; this is just enough to assign a
+// name to a trip.
+model CrewMember {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+
+  name  String
+  role  String // "captain" | "first_officer" | "flight_attendant" | "other"
+  email String?
+  phone String?
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments TripCrewAssignment[]
+}
+
+// roleOnTrip snapshots CrewMember.role at assignment time rather than
+// always reading the live role — someone's normal role can change (or
+// they could crew a trip in a different seat than usual) without rewriting
+// history on trips they already flew.
+model TripCrewAssignment {
+  id         String     @id @default(cuid())
+  operatorId String
+  tripId     String
+  trip       Trip       @relation(fields: [tripId], references: [id])
+  crewId     String
+  crew       CrewMember @relation(fields: [crewId], references: [id])
+  roleOnTrip String
+
+  createdAt DateTime @default(now())
+
+  @@unique([tripId, crewId])
 }
 
 // Trusted third-party operators — the operator's sourcing network
