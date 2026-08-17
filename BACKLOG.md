@@ -1840,3 +1840,11 @@ affect everything after it too:
     move trips out of the active pipeline), and no manual override
     that skips stages or jumps non-sequentially — only one step at a
     time, forward or back.
+- ~~**Cancelled trips leaking onto the board — fixed**~~: user caught
+  it right after the board shipped. `/ops/trips`' list query has
+  carried a `quote: { status: { not: "cancelled" } }` belt-and-
+  suspenders filter since the original cancel-cascade bug (a Trip
+  whose Quote was cancelled without the status ever cascading onto
+  the Trip row itself), but the new board query only filtered on
+  `Trip.status` — the same guard never got copied over when the board
+  was built. Added it.

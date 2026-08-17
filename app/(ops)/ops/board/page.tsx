@@ -38,7 +38,14 @@ export default async function OpsBoardPage() {
   if (!operator) return null;
 
   const trips = await prisma.trip.findMany({
-    where: { operatorId: operator.id, status: { in: [...TRIP_STAGES] } },
+    where: {
+      operatorId: operator.id,
+      status: { in: [...TRIP_STAGES] },
+      // Belt-and-suspenders, same as /ops/trips: a cancelled Quote should
+      // never show as a live card here even if something failed to cascade
+      // cancellation onto the Trip row itself.
+      quote: { status: { not: "cancelled" } },
+    },
     include: {
       passengers: true,
       crewAssignments: { include: { crew: true } },
