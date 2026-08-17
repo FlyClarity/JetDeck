@@ -93,6 +93,27 @@ function utcOffsetMinutes(timeZone: string, instant: Date): number {
   return (asUtcMs - instant.getTime()) / 60000;
 }
 
+// The actual UTC instant a local "HH:MM" departure on a given date
+// corresponds to, given the departure airport's IANA timezone — used for
+// threshold comparisons (e.g. "is this within 24 hours of departure?")
+// where what's needed is a real instant, not just a display string. Same
+// UTC-offset-correction approach as addHoursAcrossTimezones below. Falls
+// back to treating the local time as if it were UTC when the timezone or
+// time string isn't available — imprecise, but only ever affects how
+// early/late a reminder fires, not whether the flight itself is correct.
+export function departureInstantUtc(
+  date: string,
+  depTime: string | null | undefined,
+  timezone: string | null | undefined
+): Date | null {
+  const time = depTime && /^\d{1,2}:\d{2}$/.test(depTime) ? depTime : "00:00";
+  const naiveUtcMs = Date.parse(`${date}T${time}:00Z`);
+  if (Number.isNaN(naiveUtcMs)) return null;
+  if (!timezone) return new Date(naiveUtcMs);
+  const offsetMin = utcOffsetMinutes(timezone, new Date(naiveUtcMs));
+  return new Date(naiveUtcMs - offsetMin * 60000);
+}
+
 // Adds a fractional number of hours to a local "HH:MM" departure time and
 // returns the resulting *local* arrival time plus how many calendar days
 // (in the arrival zone's own local date) that crossed — converting across

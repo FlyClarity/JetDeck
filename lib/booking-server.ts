@@ -4,6 +4,7 @@ import { formatCurrency } from "@/lib/quote";
 import { getAppUrl } from "@/lib/url";
 import { generateTripNumber } from "@/lib/trip-server";
 import { createCardHoldCheckoutSession, cancelCardHold } from "@/lib/stripe";
+import { createManifestForTrip } from "@/lib/manifest";
 import {
   revenueLegsOf,
   legDate,
@@ -193,7 +194,7 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
   const waivesCardHold = quote.contact?.paymentTerms === "cash_on_account";
 
   const tripNumber = await generateTripNumber(quote.operatorId);
-  await prisma.trip.create({
+  const trip = await prisma.trip.create({
     data: {
       operatorId: quote.operatorId,
       tripNumber,
@@ -201,6 +202,17 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
       status: waivesCardHold ? "confirmed" : "awaiting_payment",
     },
   });
+
+  // Sales→ops handoff: kick off passenger manifest collection immediately
+  // rather than waiting on a crew-assignment step that doesn't exist yet
+  // (see lib/manifest.ts) — starting collection as early as possible only
+  // helps. Best-effort: a failure here (e.g. email provider down) shouldn't
+  // break booking finalization, which is already in progress by this point.
+  try {
+    await createManifestForTrip(trip.id);
+  } catch (err) {
+    console.error(`Failed to create manifest for trip ${trip.id}`, err);
+  }
 
   // Positioning tracking: the aircraft ends this trip wherever its last
   // itinerary leg lands, whether that's the trip's actual destination or

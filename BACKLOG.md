@@ -1507,3 +1507,96 @@ Ideas and requests noted for later — not part of the current Phase 1 build ord
   also treats the stored `"expired"` status as expired, so no new
   branch was needed there — it already did the right thing once the
   flag recognized the new case.
+
+---
+
+## Ops Build Brief (v1.0) — reprioritized start
+
+User supplied a companion Ops Build Brief (trip lifecycle, manifest
+collection, crew assignment, checklist, communications, post-flight
+close, squawks, owner updates — full step order in the brief itself,
+Steps 21–33 continuing from the Sales Brief's Steps 1–20). Two things
+worth recording before the first module's entry below, since they
+affect everything after it too:
+
+- **`Trip.status`'s existing schema comment doesn't match the brief's
+  proposed flow** — today: `"confirmed" | "awaiting_payment" |
+  "ops_review" | "crew_assigned" | "pre_flight" | "in_flight" |
+  "completed" | "invoiced" | "closed"`. The brief adds
+  `manifest_pending`/`manifest_complete`/`released` and three
+  cancellation variants (`cancelled_by_client`/`cancelled_by_operator`/
+  `cancelled_weather`) that aren't in the current enum. Not
+  reconciled yet — still open, needs doing whenever Trip model
+  expansion (the brief's Step 21) actually happens.
+- **Reprioritized**: the brief's own step order builds Trip fields →
+  Crew roster → Ops Dashboard → Crew assignment → Checklist before
+  ever reaching Passenger Manifest (Steps 26–28), even though the
+  brief itself calls that module "the highest-priority... directly
+  solves the biggest operational pain identified." User asked to
+  move it up. Done as a standalone slice rather than literally
+  reordering the numbered steps — see below.
+
+- ~~**Passenger manifest collection — shipped (moved up ahead of Crew/
+  Dashboard/Checklist)**~~: built as a self-contained slice rather
+  than following the brief's step order, since its own trigger
+  (`CREW_ASSIGNED` status) depends on a Crew module that doesn't
+  exist yet. Decoupled the trigger instead — the manifest link now
+  goes out **the moment a Trip is created** (`finalizeBooking`, right
+  at the sales→ops handoff), which is strictly earlier than the
+  brief's own design and needs nothing else built first. Skipped
+  entirely for internal trips (owner flights, maintenance,
+  repositioning — `quotes/internal/new`), since those are created
+  directly by the operator, who already knows who's aboard.
+  New models exactly as specified in the brief (`Passenger`,
+  `ManifestReminder`, migration `20260817090000_passenger_manifest`),
+  with one addition: `@@unique([tripId, type])` on
+  `ManifestReminder` so the reminder sweep can `upsert` instead of
+  needing its own duplicate-check query.
+  - **`lib/manifest.ts`**: `createManifestForTrip` (seeds the lead
+    `Passenger` row from `Quote.contact`/`tripRequest`, since
+    `Passenger` itself has no email field — matching the brief's own
+    schema — and emails the manifest link) and `sendManifestReminders`
+    (the 72/48/24/12hr sweep, run by a new hourly Vercel Cron,
+    `/api/cron/manifest-reminders`, same `CRON_SECRET` bearer-auth
+    pattern as the expire-stale cron). Departure timing is computed
+    from the Quote's existing itinerary data (`revenueLegsOf` +
+    a new `departureInstantUtc` helper in `lib/time.ts`, timezone-aware
+    via the departure airport's `Airport.timezone`) rather than
+    waiting on the Step 21 Trip date fields that don't exist yet.
+    Degrades gracefully on a coarser cron schedule (e.g. a Vercel
+    Hobby plan, limited to once daily) — always checks actual
+    hours-until-departure rather than assuming how recently it last
+    ran, so a threshold just fires a bit late instead of not firing.
+  - **`/manifest/[token]`**: public, no login, mirrors the `/q/[token]`/
+    `/intake/[operatorSlug]` pattern. Every passenger (lead or
+    additional) gets their own token; `isLead` controls whether the
+    page shows just that person's own form or the whole trip's
+    roster with an "+ Add Another Passenger" action (capped at the
+    aircraft's `seats`) and forwardable per-passenger links
+    (`CopyLinkButton`, reused from the quote-link work). ID photo
+    upload reuses the exact `@vercel/blob` `put()` pattern from
+    Aircraft photos.
+  - **Minimal operator UI** (`/trips`, `/trips/[id]`) — Trip records
+    existed in the database with no operator-facing page at all
+    before this; building manifest visibility required *some* home
+    for it, so a bare-bones list + detail page was built now rather
+    than waiting for the brief's full board-view Ops Dashboard
+    (Step 23). Detail page: passenger list with submission/ID
+    status, a Verify toggle (`verifiedAt`/`verifiedBy`), and a "Print
+    Manifest" link. New `lib/trip.ts` for `Trip.status` labels,
+    matching the existing `lib/queue.ts` pattern for `TripRequest`.
+    This becomes the seed the real Ops Dashboard later expands into,
+    not a permanent replacement for it.
+  - **PDF download**: the brief asks for "Download manifest as PDF."
+    Built as a clean, chrome-free print view instead
+    (`/trips/[id]/manifest-print`, deliberately outside the `(app)`
+    layout group so it has no nav header) that the operator can
+    Ctrl+P → Save as PDF from — same practical outcome (a copy for
+    the trip file) without pulling in a PDF-generation dependency.
+    Worth swapping for real server-generated PDFs later if the print
+    step turns out to be friction in practice.
+  Not built yet (still open, per the brief's own later steps): Crew
+  roster/assignment, the full Ops Dashboard board view, pre-flight
+  checklist, automated trip-status-driven communications beyond the
+  manifest emails, post-flight close, squawk logging, owner updates,
+  invoice generation.

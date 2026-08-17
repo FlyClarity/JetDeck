@@ -389,6 +389,65 @@ model Trip {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  passengers        Passenger[]
+  manifestReminders ManifestReminder[]
+}
+
+// One row per passenger on a Trip, including the lead passenger. Every
+// passenger — lead or additional — gets their own unique token so the lead
+// can forward an individual link rather than sharing their own; isLead
+// just controls which capabilities the /manifest/[token] page exposes for
+// that row (the lead can add/see the whole trip's roster, others can only
+// see and edit themselves).
+model Passenger {
+  id         String @id @default(cuid())
+  operatorId String
+  tripId     String
+  trip       Trip   @relation(fields: [tripId], references: [id])
+  token      String @unique @default(cuid())
+
+  // Identity
+  firstName   String?
+  lastName    String?
+  dateOfBirth DateTime?
+  weightLbs   Int?
+
+  // ID
+  idType   String? // "passport" | "drivers_license" | "government_id"
+  idNumber String?
+  idExpiry DateTime?
+  idImageUrl String? // uploaded to Vercel Blob, same pattern as Aircraft.photos
+
+  // Optional
+  ktn             String? // known traveler number / TSA PreCheck
+  specialRequests String?
+
+  // Status
+  isLead      Boolean   @default(false)
+  submittedAt DateTime?
+  verifiedAt  DateTime?
+  verifiedBy  String? // Clerk user ID
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Tracks which reminder thresholds have already fired for a trip, so the
+// cron sweep (lib/manifest.ts) never sends the same one twice. One row per
+// threshold, created lazily by the sweep itself the first time it applies
+// (not pre-created when the trip is booked), since which thresholds even
+// make sense depends on how much runway there is before departure.
+model ManifestReminder {
+  id         String    @id @default(cuid())
+  operatorId String
+  tripId     String
+  trip       Trip      @relation(fields: [tripId], references: [id])
+  type       String // "72hr" | "48hr" | "24hr" | "12hr"
+  sentAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([tripId, type])
 }
 
 // Trusted third-party operators — the operator's sourcing network

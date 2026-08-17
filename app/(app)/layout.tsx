@@ -79,6 +79,12 @@ export default async function AppLayout({
           >
             Dashboard
           </Link>
+          <Link
+            href="/trips"
+            className="text-sm text-muted-foreground hover:text-foreground"
+          >
+            Trips
+          </Link>
           {operator.operatorType !== "broker" && (
             <Link
               href="/fleet"
