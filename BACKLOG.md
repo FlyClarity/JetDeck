@@ -1556,15 +1556,16 @@ affect everything after it too:
     `Passenger` row from `Quote.contact`/`tripRequest`, since
     `Passenger` itself has no email field — matching the brief's own
     schema — and emails the manifest link) and `sendManifestReminders`
-    (the 72/48/24/12hr sweep, run by a new hourly Vercel Cron,
+    (the 72/48/24/12hr sweep, run by a new daily Vercel Cron,
     `/api/cron/manifest-reminders`, same `CRON_SECRET` bearer-auth
     pattern as the expire-stale cron). Departure timing is computed
     from the Quote's existing itinerary data (`revenueLegsOf` +
     a new `departureInstantUtc` helper in `lib/time.ts`, timezone-aware
     via the departure airport's `Airport.timezone`) rather than
     waiting on the Step 21 Trip date fields that don't exist yet.
-    Degrades gracefully on a coarser cron schedule (e.g. a Vercel
-    Hobby plan, limited to once daily) — always checks actual
+    First deploy attempt used an hourly schedule and failed outright —
+    the Vercel plan on this project only allows daily crons, so
+    `manifest-reminders` runs once a day instead. Always checks actual
     hours-until-departure rather than assuming how recently it last
     ran, so a threshold just fires a bit late instead of not firing.
   - **`/manifest/[token]`**: public, no login, mirrors the `/q/[token]`/
