@@ -1714,3 +1714,17 @@ affect everything after it too:
   permanently claimed — narrower windows now show it overlapping the
   "+ Log Internal Flight"/"+ New Quote" buttons instead of scrolling.
   One-line fix: `min-w-0` added to that container.
+- ~~**Sidebar reverted back to a top nav, keeping the Sales/Ops
+  switcher — shipped**~~: after living with it, the user decided
+  against the left sidebar overall (not any specific bug — the shape
+  itself). `components/app-sidebar.tsx` deleted; new
+  `components/app-header.tsx` replaces it as what both `(app)` and
+  `(ops)` layouts render, restoring a horizontal header bar (same
+  general shape as before the sidebar existed) but keeping the
+  Apple-style Sales/Ops segmented switcher this whole detour was
+  chasing in the first place — now living next to the wordmark instead
+  of at the top of a sidebar. Same pathname-driven mode detection as
+  the sidebar had (`/ops(.*)` → Ops), so no behavior changed, only the
+  chrome shape. The `min-w-0` dashboard-filter-bar fix and the
+  `OrganizationSwitcher` overflow-clipping fix from the sidebar detour
+  both stay — they're real bugs independent of nav shape.

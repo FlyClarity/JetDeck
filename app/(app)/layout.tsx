@@ -3,7 +3,7 @@ import { CreateOrganization, OrganizationSwitcher } from "@clerk/nextjs";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { EscapeToBack } from "@/components/escape-to-back";
-import { AppSidebar } from "@/components/app-sidebar";
+import { AppHeader } from "@/components/app-header";
 
 export default async function AppLayout({
   children,
@@ -67,10 +67,10 @@ export default async function AppLayout({
   }
 
   return (
-    <div className="flex flex-1 flex-row">
+    <div className="flex flex-1 flex-col">
       <EscapeToBack />
-      <AppSidebar needsReviewCount={needsReviewCount} showFleet={operator.operatorType !== "broker"} />
-      <main className="flex flex-1 flex-col overflow-x-hidden">{children}</main>
+      <AppHeader needsReviewCount={needsReviewCount} showFleet={operator.operatorType !== "broker"} />
+      <main className="flex flex-1 flex-col">{children}</main>
     </div>
   );
 }
