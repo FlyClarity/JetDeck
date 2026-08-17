@@ -1601,3 +1601,42 @@ affect everything after it too:
   checklist, automated trip-status-driven communications beyond the
   manifest emails, post-flight close, squawk logging, owner updates,
   invoice generation.
+
+## Ops Build Brief (v1.0) — three follow-up fixes on the manifest slice
+
+- ~~**Cancelled bookings kept showing as active Trips — fixed**~~: the
+  operator's "Cancel booking" action (`app/(app)/quotes/[id]/page.tsx`,
+  `cancelBooking`) has always set `Quote.status = "cancelled"`, but
+  never touched the `Trip` row created for it back in `finalizeBooking`
+  — so a cancelled booking just sat on `/ops/trips` looking like any
+  other live trip forever. Fixed two ways: `cancelBooking` now cascades
+  `Trip.status = "cancelled"` (added to the status enum comment in
+  `prisma/schema.prisma` and to `lib/trip.ts`'s `STATUS_LABELS`, no
+  migration needed — still an unconstrained string column); and the
+  Trips list query also filters on `quote: { status: { not:
+  "cancelled" } }` as a belt-and-suspenders self-heal, so any Trip rows
+  already stuck from before this fix disappear from the list
+  immediately without needing a one-off DB update.
+- ~~**Trips list route showed only start→end — fixed**~~: a multi-stop
+  or round trip (e.g. KTEB → MIA → KTEB) collapsed to `KTEB → KTEB`,
+  since the list only ever read `legs[0]` and `legs[last]`. Now chains
+  every leg's airports (`legs[0].depAirport, ...legs.map(arrAirport)`)
+  so the full routing shows.
+- ~~**Ops moved to a genuinely separate dashboard, not a Trips tab —
+  shipped**~~: was a single "Trips" link inside the sales-side nav
+  (`(app)/layout.tsx`); the user wanted actual separation. New `(ops)`
+  route group (`app/(ops)/layout.tsx`) with its own header/nav — "JETDECK
+  OPS" branding, a "← Sales" link back, room to add Crew/Checklist/etc.
+  links later — same Clerk org/session as the sales side, not a new
+  login (asked the user directly: same-login-different-nav vs.
+  role-gated access; went with the former since a
+  permission/role concept doesn't exist on Operator users yet and
+  wasn't asked for). Everything moved under a real `/ops` URL prefix
+  rather than staying at bare `/trips`, so future ops modules (Crew,
+  Dashboard board view, Checklist) have a natural home without another
+  URL migration: `/ops` (redirects to `/ops/trips` — the only module
+  today), `/ops/trips`, `/ops/trips/[id]`, and
+  `/ops/trips/[id]/manifest-print` (still outside the `(ops)` group,
+  same as before, so the print view stays chrome-free).
+  `middleware.ts`'s route matcher swapped `/trips(.*)` for `/ops(.*)`.
+  The sales nav's old "Trips" link is now "Ops →", pointing at `/ops`.

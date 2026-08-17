@@ -8,4 +8,5 @@ export const STATUS_LABELS: Record<string, string> = {
   completed: "Completed",
   invoiced: "Invoiced",
   closed: "Closed",
+  cancelled: "Cancelled",
 };

@@ -5,7 +5,7 @@ const isProtectedRoute = createRouteMatcher([
   "/inbox(.*)",
   "/quotes(.*)",
   "/requests(.*)",
-  "/trips(.*)",
+  "/ops(.*)",
   "/fleet(.*)",
   "/settings(.*)",
 ]);

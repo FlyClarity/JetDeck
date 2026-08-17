@@ -152,6 +152,15 @@ async function cancelBooking(id: string, formData: FormData) {
     data: { status: "cancelled", cancelledAt: new Date(), cancellationNote: note },
   });
 
+  // A Trip already exists by the time a Quote can reach "accepted" (created
+  // in finalizeBooking before the status flips), so this always has a row
+  // to cascade to — without it, cancelled bookings kept showing up on the
+  // Trips list looking active forever.
+  await prisma.trip.updateMany({
+    where: { quoteId: quote.id },
+    data: { status: "cancelled" },
+  });
+
   if (quote.tripRequest?.requestorEmail) {
     await sendEmail({
       to: quote.tripRequest.requestorEmail,

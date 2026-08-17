@@ -80,10 +80,10 @@ export default async function AppLayout({
             Dashboard
           </Link>
           <Link
-            href="/trips"
+            href="/ops"
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            Trips
+            Ops →
           </Link>
           {operator.operatorType !== "broker" && (
             <Link

@@ -386,6 +386,8 @@ model Trip {
   status String @default("confirmed")
   // "confirmed" | "awaiting_payment" | "ops_review" | "crew_assigned"
   // | "pre_flight" | "in_flight" | "completed" | "invoiced" | "closed"
+  // | "cancelled" (cascaded from Quote.status when an operator cancels an
+  // already-accepted booking)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

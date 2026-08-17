@@ -9,7 +9,14 @@ export default async function TripsPage() {
   if (!operator) return null;
 
   const trips = await prisma.trip.findMany({
-    where: { operatorId: operator.id, status: { notIn: ["invoiced", "closed"] } },
+    where: {
+      operatorId: operator.id,
+      status: { notIn: ["invoiced", "closed", "cancelled"] },
+      // Belt-and-suspenders: cancelBooking cascades Quote cancellation to
+      // Trip.status now, but this also self-heals any Trip rows left over
+      // from before that cascade existed.
+      quote: { status: { not: "cancelled" } },
+    },
     include: {
       passengers: true,
       quote: { include: { tripRequest: true, selectedOption: true } },
@@ -44,15 +51,18 @@ export default async function TripsPage() {
               {trips.map((t) => {
                 const legs = revenueLegsOf(t.quote.selectedOption?.itinerary);
                 const firstLeg = legs[0];
-                const lastLeg = legs[legs.length - 1];
-                const route = firstLeg
-                  ? `${firstLeg.depAirport ?? "?"} → ${lastLeg?.arrAirport ?? "?"}`
-                  : "Route unknown";
+                // Full stop-by-stop routing rather than just start→end, so a
+                // multi-leg or round trip (e.g. KTEB → KMIA → KTEB) doesn't
+                // collapse into a route that looks like a one-way KTEB → KTEB.
+                const route =
+                  legs.length > 0
+                    ? [legs[0].depAirport ?? "?", ...legs.map((l) => l.arrAirport ?? "?")].join(" → ")
+                    : "Route unknown";
                 const submitted = t.passengers.filter((p) => p.submittedAt).length;
                 return (
                   <tr key={t.id} className="border-b border-border last:border-0">
                     <td className="py-3 pr-4">
-                      <Link href={`/trips/${t.id}`} className="font-medium hover:underline hover:underline-offset-4">
+                      <Link href={`/ops/trips/${t.id}`} className="font-medium hover:underline hover:underline-offset-4">
                         {t.tripNumber}
                       </Link>
                     </td>

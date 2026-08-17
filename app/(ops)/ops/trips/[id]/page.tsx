@@ -47,7 +47,7 @@ async function verifyPassenger(tripId: string, passengerId: string) {
     data: passenger.verifiedAt ? { verifiedAt: null, verifiedBy: null } : { verifiedAt: new Date(), verifiedBy: userId },
   });
 
-  revalidatePath(`/trips/${tripId}`);
+  revalidatePath(`/ops/trips/${tripId}`);
 }
 
 export default async function TripDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -107,7 +107,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
         </h2>
         {trip.passengers.length > 0 && (
           <Button size="sm" variant="outline" asChild>
-            <Link href={`/trips/${trip.id}/manifest-print`} target="_blank">
+            <Link href={`/ops/trips/${trip.id}/manifest-print`} target="_blank">
               Print Manifest
             </Link>
           </Button>

@@ -3,10 +3,10 @@ import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
 
-// Deliberately outside the (app) route group — no nav chrome, so printing
+// Deliberately outside the (ops) route group — no nav chrome, so printing
 // (or "Save as PDF") from the browser produces a clean page for the trip
 // file. Standing in for real PDF generation for now; still auth-protected
-// by middleware.ts's route matcher same as everything else under /trips.
+// by middleware.ts's route matcher same as everything else under /ops.
 export default async function ManifestPrintPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { clerkOrgId } = await getTenantContext();
