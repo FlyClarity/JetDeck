@@ -1640,3 +1640,43 @@ affect everything after it too:
   same as before, so the print view stays chrome-free).
   `middleware.ts`'s route matcher swapped `/trips(.*)` for `/ops(.*)`.
   The sales nav's old "Trips" link is now "Ops →", pointing at `/ops`.
+
+## Collapsible left sidebar + Sales/Ops switcher
+
+- ~~**Horizontal top nav → collapsible left sidebar, with an Apple-style
+  Sales/Ops segmented switcher — shipped**~~: both `(app)/layout.tsx`
+  and `(ops)/layout.tsx` had their own separate `<header>` with a
+  horizontal link row (duplicated nearly verbatim between the two).
+  Replaced both with one shared client component,
+  `components/app-sidebar.tsx`, rendered by each layout instead of its
+  old header. The sidebar itself derives which nav items to show
+  (`Dashboard`/`Fleet`/`Contacts`/`Needs Review`/`Settings` vs. just
+  `Trips` for now) from whether the current pathname starts with
+  `/ops` — no separate "mode" prop needed, the URL is already the
+  single source of truth, which also drives the segmented control's
+  active side. `needsReviewCount`/`showFleet` are still computed
+  server-side in `(app)/layout.tsx` (unchanged queries) and passed
+  down as props since those need the DB.
+  - Collapse state persists across reloads via `localStorage`, read
+    through `useSyncExternalStore` rather than `useState` +
+    `useEffect` — the effect-based version tripped this repo's
+    `react-hooks/set-state-in-effect` lint rule (calling `setState`
+    synchronously inside an effect body), and `useSyncExternalStore`
+    is the more correct tool for "read from an external store, avoid
+    an SSR/client snapshot mismatch" anyway: it renders the server
+    snapshot (`false`, i.e. expanded) until hydration finishes, then
+    swaps to the real stored value with no manual mount-guard needed.
+  - Collapsed width is icon-only (`lucide-react` icons, already a
+    project dependency); expanded shows icons + labels. The Sales/Ops
+    switcher collapses to single-letter "S"/"O" tabs rather than
+    disappearing, so mode-switching still works collapsed.
+  - `OrganizationSwitcher`/`UserButton` (Clerk) moved from each header
+    into the sidebar footer; `OrganizationSwitcher` itself is hidden
+    when collapsed (it doesn't have a sane icon-only form), `UserButton`
+    always shows since it's already just an avatar.
+  - Not visually verified in an authenticated browser — this sandbox
+    has no `.env.local` (no live Clerk keys or `DATABASE_URL`), so
+    only `tsc`/`eslint`/`next build` and an unauthenticated dev-server
+    boot (confirms no build-time crash) were possible here. Worth a
+    once-over on the live deploy, especially the collapsed-state icon
+    layout and the segmented control's sliding highlight.

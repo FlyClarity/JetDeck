@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { CreateOrganization, OrganizationSwitcher, UserButton } from "@clerk/nextjs";
+import { CreateOrganization, OrganizationSwitcher } from "@clerk/nextjs";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { EscapeToBack } from "@/components/escape-to-back";
+import { AppSidebar } from "@/components/app-sidebar";
 
 export default async function AppLayout({
   children,
@@ -66,61 +67,10 @@ export default async function AppLayout({
   }
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 flex-row">
       <EscapeToBack />
-      <header className="flex items-center justify-between border-b border-border px-6 py-3">
-        <span className="text-sm font-semibold tracking-wide text-primary">
-          JETDECK
-        </span>
-        <div className="flex items-center gap-4">
-          <Link
-            href="/dashboard"
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            Dashboard
-          </Link>
-          <Link
-            href="/ops"
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            Ops →
-          </Link>
-          {operator.operatorType !== "broker" && (
-            <Link
-              href="/fleet"
-              className="text-sm text-muted-foreground hover:text-foreground"
-            >
-              Fleet
-            </Link>
-          )}
-          <Link
-            href="/contacts"
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            Contacts
-          </Link>
-          <Link
-            href="/inbox/review"
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-          >
-            Needs Review
-            {needsReviewCount > 0 && (
-              <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-xs font-medium text-accent-foreground">
-                {needsReviewCount}
-              </span>
-            )}
-          </Link>
-          <Link
-            href="/settings"
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            Settings
-          </Link>
-          <OrganizationSwitcher />
-          <UserButton />
-        </div>
-      </header>
-      <main className="flex flex-1 flex-col">{children}</main>
+      <AppSidebar needsReviewCount={needsReviewCount} showFleet={operator.operatorType !== "broker"} />
+      <main className="flex flex-1 flex-col overflow-x-hidden">{children}</main>
     </div>
   );
 }
