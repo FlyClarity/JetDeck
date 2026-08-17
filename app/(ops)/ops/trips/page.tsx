@@ -11,7 +11,10 @@ export default async function TripsPage() {
   const trips = await prisma.trip.findMany({
     where: {
       operatorId: operator.id,
-      status: { notIn: ["invoiced", "closed", "cancelled"] },
+      // Excludes both the current cancellation status and the old
+      // "cancelled" value pre-existing rows may still carry from before
+      // cancelBooking started writing "cancelled_by_operator".
+      status: { notIn: ["invoiced", "closed", "cancelled", "cancelled_by_operator"] },
       // Belt-and-suspenders: cancelBooking cascades Quote cancellation to
       // Trip.status now, but this also self-heals any Trip rows left over
       // from before that cascade existed.

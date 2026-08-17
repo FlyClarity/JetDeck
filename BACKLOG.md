@@ -1788,3 +1788,55 @@ affect everything after it too:
     self-service (crew don't get their own login or a way to see
     their own assignments — this is entirely an ops-side roster
     today).
+- ~~**Fixed a bug from the crew commit: `cancelled_by_operator` rename
+  was only in the schema comment, not the actual code**~~: caught
+  while checking the codebase before starting the board. The BACKLOG
+  entry and `Trip.status` schema comment both claimed
+  `cancelBooking`'s cascade had been renamed from `"cancelled"` to
+  `"cancelled_by_operator"` — it hadn't; the write path, `lib/trip.ts`'s
+  `STATUS_LABELS` key, and the `/ops/trips` list filter were all still
+  using the old value, just the doc comment had drifted ahead of the
+  code. Fixed for real this time: the cascade now writes
+  `"cancelled_by_operator"`, `STATUS_LABELS` has both keys (new value
+  plus `cancelled` kept mapped for any trip cancelled before this fix
+  shipped), and the `/ops/trips` filter excludes both values so
+  already-cancelled trips don't reappear.
+
+## Ops Build Brief — Ops Dashboard board view (Step 23)
+
+- ~~**Ops Board — shipped**~~: next pick after Crew (user: "there are a
+  few items for the crew stuff but they are larger items that might
+  be easier to work in later. Lets go ahead with 23" — crew feedback
+  deferred, not yet actioned). Before this, nothing in the app ever
+  actually set a trip to `ops_review`, `pre_flight`, `in_flight`, or
+  `completed` — those statuses have existed in `Trip.status`'s
+  documented enum since Passenger Manifest, completely unreachable.
+  The board is what makes them real.
+  - `/ops/board`: one column per stage in a new ordered
+    `TRIP_STAGES` constant (`lib/trip.ts`) — `awaiting_payment` →
+    `confirmed` → `ops_review` → `crew_assigned` → `pre_flight` →
+    `in_flight` → `completed`. Excludes `invoiced`/`closed`/
+    `cancelled_by_operator`, matching `/ops/trips`' existing filter —
+    those trips are done with this pipeline. No drag-and-drop (no
+    dnd library in the project, and pulling one in for a first cut
+    felt like the wrong tradeoff) — each card gets "← Back"/"Next →"
+    buttons that step it one stage in `TRIP_STAGES`, disabled at
+    either end. Deliberately doesn't gate advancing past
+    `crew_assigned` on actually having crew assigned — the stage name
+    is aspirational/pipeline position, not a hard requirement; the
+    Crew section on the trip detail page stays the real source of
+    truth for who's actually on the trip.
+  - Cards show route, departure date, assigned crew (or
+    "Unassigned"), and manifest submission count where applicable —
+    same data as the `/ops/trips` list, reused for at-a-glance
+    scanning without opening each trip.
+  - `/ops` now redirects to `/ops/board` instead of `/ops/trips` — the
+    board is the real ops home now. `/ops/trips` (the flat list) and
+    the new "Board" nav link both stay; the list is still useful for
+    scanning/sorting, no reason to remove something already built and
+    working.
+  - Not built: any archiving/graduation out of the `Completed` column
+    (it'll just accumulate until Post-flight close/Invoicing exist to
+    move trips out of the active pipeline), and no manual override
+    that skips stages or jumps non-sequentially — only one step at a
+    time, forward or back.

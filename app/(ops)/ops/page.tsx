@@ -1,8 +1,7 @@
 import { redirect } from "next/navigation";
 
-// Trips is the only Ops module today — this is the landing spot the sales
-// nav's "Ops" link points to, so it has somewhere sensible to grow into as
-// Crew/Checklist/etc. get built without another nav-link migration.
+// The Sales/Ops switcher's "Ops" side points here — bounce straight to the
+// board, the actual ops home now that it exists.
 export default function OpsIndexPage() {
-  redirect("/ops/trips");
+  redirect("/ops/board");
 }

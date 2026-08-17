@@ -158,7 +158,7 @@ async function cancelBooking(id: string, formData: FormData) {
   // Trips list looking active forever.
   await prisma.trip.updateMany({
     where: { quoteId: quote.id },
-    data: { status: "cancelled" },
+    data: { status: "cancelled_by_operator" },
   });
 
   if (quote.tripRequest?.requestorEmail) {

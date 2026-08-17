@@ -28,6 +28,7 @@ export function AppHeader({
     { href: "/settings", label: "Settings" },
   ];
   const opsItems: { href: string; label: string; badge?: number }[] = [
+    { href: "/ops/board", label: "Board" },
     { href: "/ops/trips", label: "Trips" },
     { href: "/ops/crew", label: "Crew" },
   ];
