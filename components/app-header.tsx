@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import { cn } from "@/lib/utils";
+import { CommandPalette } from "@/components/command-palette";
 
 // Shared by both (app) and (ops) layouts — previously each had its own
 // near-duplicate horizontal header. The Sales/Ops split ("mode") is derived
@@ -98,6 +99,7 @@ export function AppHeader({
             </Link>
           );
         })}
+        <CommandPalette />
         <OrganizationSwitcher hidePersonal />
         <UserButton />
       </div>

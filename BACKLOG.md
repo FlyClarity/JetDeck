@@ -2065,3 +2065,45 @@ Follow-ups from testing the above:
   the user to check the Vercel dashboard's Cron Jobs tab (can be
   manually triggered from there) or share a concrete example (which
   quote, what departure date) to narrow down further.
+
+## App-wide command palette
+
+- ~~**Global search, "/" to open — shipped**~~: the tab-local search box
+  shipped a round earlier only ever searched whatever list the
+  dashboard queue currently had loaded (Quotes/Trip Requests) — the
+  user asked for something app-wide instead, discussed building it
+  now vs. deferring until more modules exist (recommended now: adding
+  a new entity type later is a small additive change to the search
+  endpoint, not a rearchitecture, and there's no real "end" to defer
+  to in an actively-evolving build), and went with building it now.
+  Replaces the tab-local box entirely (removed) rather than keeping
+  both.
+  - `app/api/search/route.ts`: one endpoint, `getTenantContext()`
+    resource-based auth (Clerk's own recommended pattern — see
+    `lib/auth.ts` — since middleware path matchers can drift out of
+    sync; added `/api/search` to the matcher anyway for consistency
+    with how every other protected route is listed there). Queries
+    Quotes, Trip Requests, Contacts, Fleet, Crew, and Trips in
+    parallel, all operator-scoped, `contains`/insensitive matching,
+    top 5 per type.
+  - `components/command-palette.tsx`: self-contained — renders both
+    its own header trigger button and the modal overlay, so mounting
+    it once in `AppHeader` was enough, no state to lift or wire in
+    from outside. Opens on `/` from anywhere (guarded against firing
+    while actually typing a literal "/" into a text field, same
+    pattern as the existing j/k/p dashboard shortcuts), closes on
+    Escape, arrow keys + Enter to navigate results without a mouse.
+    200ms debounced fetch with `AbortController` cancellation of
+    in-flight requests as the query changes.
+    No Radix Dialog/cmdk dependency added — hand-rolled, since the
+    behavior needed (overlay, escape-to-close, click-outside-to-close)
+    was simple enough not to justify a new dependency.
+  - Hit the same `react-hooks/set-state-in-effect` lint rule as the
+    sidebar's collapse state a few rounds back — restructured so the
+    "reset on open" logic lives in the event handler that opens the
+    palette (a real discrete event, no effect needed at all) rather
+    than a `useEffect` watching `open`, and the debounced-search
+    effect's early "query too short" case does nothing rather than
+    clearing `results` synchronously, since the render already shows
+    "Keep typing…" from query length alone without needing `results`
+    itself cleared.
