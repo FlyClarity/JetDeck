@@ -1915,3 +1915,37 @@ see the open questions at the end of this entry.
   common real-world cause of exactly this symptom. Asked the user to
   check the sending domain's verification status in Resend's
   dashboard, and which mailbox is actually seeing the spam flag.
+
+Follow-ups from testing the above:
+- **Reply-to-quote spam**: confirmed it's the *operator's own* inbox
+  flagging the client's reply, not the client's. A Gmail screenshot
+  showed the telltale "kym@independentjets.info via flyclarity.com"
+  sender tag — Gmail's label for a message not DKIM-authenticated by
+  the domain it claims to be from, routed instead through the
+  visible-domain's own infrastructure. `app/api/webhooks/postmark/
+  route.ts` has a comment confirming the mechanism: the operator's
+  real inbox address is set up to route through an
+  `inbound.<domain>` address Postmark actually monitors, for the AI
+  triage pipeline — so a plain reply with nothing to do with triage
+  takes the same relay hop as a new trip request, and that hop is
+  almost certainly what breaks DKIM alignment for the original
+  sender. Not something the codebase alone can confirm or fix — the
+  actual mail-routing configuration (Google Workspace routing rule?
+  DNS MX straight at Postmark with a forward back to Gmail?) lives
+  outside the repo. Asked the user to check how that routing is
+  actually configured before deciding whether this needs an app-side
+  change (e.g., not routing plain replies through the triage
+  pipeline) or a DNS/routing fix on their end.
+- ~~**Sales/Ops switcher pill still touching the edge, now on the Ops
+  side — fixed for real this time**~~: the `left-1` fix from the
+  previous round anchored the untransformed (Sales) position
+  correctly, but the indicator's width (`calc(50% - 0.25rem)`) only
+  accounted for one 4px inset — the left one. Once `translateX`
+  slides it over for Ops, that math lands its right edge exactly at
+  the container's right edge (0 gap) instead of the intended matching
+  4px inset, because a `translateX(100%)` shift is relative to the
+  element's own width, and reaching a symmetric mirror position needs
+  the width to leave room for both the outer edge inset *and* the
+  gap in the middle — `calc(50% - 0.375rem)`, not `calc(50% -
+  0.25rem)`. Worked through the pixel math explicitly this time
+  (documented in the component) rather than adjusting by feel.

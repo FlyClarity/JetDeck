@@ -42,13 +42,19 @@ export function AppHeader({
         </span>
         <div className="relative grid grid-cols-2 rounded-lg bg-muted p-1 text-xs font-medium">
           <div
-            // left-1 anchors the untransformed (Sales) position explicitly —
-            // without it, this absolutely positioned div has no horizontal
-            // anchor at all (only inset-y for top/bottom), so its base
-            // position was left to each browser's fallback "static position"
-            // instead of the intended 4px inset matching the pill's own p-1,
-            // and it rendered flush against the switcher's edge.
-            className="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md bg-background shadow-sm transition-transform duration-200 ease-out"
+            // left-1 anchors the untransformed (Sales) position at a 4px
+            // inset matching the pill's own p-1. The width has to leave room
+            // for BOTH that left inset and a matching 4px inset on the right
+            // once translateX slides it over for Ops — translateX(100%) is
+            // relative to the element's own width, so sliding by "its own
+            // width + 4px" lands its right edge at
+            // left(4px) + width + width + 4px, which only ends up 4px from
+            // the container's right edge if width is 50% MINUS both of
+            // those 4px insets (0.375rem = 4px start inset + 4px middle gap,
+            // halved) — not just one. Using only one 4px subtraction (as
+            // this originally shipped) left the Ops position flush against
+            // the right edge, the same bug the Sales fix was meant to solve.
+            className="absolute inset-y-1 left-1 w-[calc(50%-0.375rem)] rounded-md bg-background shadow-sm transition-transform duration-200 ease-out"
             style={{ transform: mode === "ops" ? "translateX(calc(100% + 0.25rem))" : "translateX(0)" }}
           />
           <Link
