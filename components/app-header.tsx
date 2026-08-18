@@ -42,7 +42,13 @@ export function AppHeader({
         </span>
         <div className="relative grid grid-cols-2 rounded-lg bg-muted p-1 text-xs font-medium">
           <div
-            className="absolute inset-y-1 w-[calc(50%-0.25rem)] rounded-md bg-background shadow-sm transition-transform duration-200 ease-out"
+            // left-1 anchors the untransformed (Sales) position explicitly —
+            // without it, this absolutely positioned div has no horizontal
+            // anchor at all (only inset-y for top/bottom), so its base
+            // position was left to each browser's fallback "static position"
+            // instead of the intended 4px inset matching the pill's own p-1,
+            // and it rendered flush against the switcher's edge.
+            className="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md bg-background shadow-sm transition-transform duration-200 ease-out"
             style={{ transform: mode === "ops" ? "translateX(calc(100% + 0.25rem))" : "translateX(0)" }}
           />
           <Link

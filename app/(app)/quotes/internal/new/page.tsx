@@ -3,7 +3,6 @@ import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
 import { generateQuoteNumber } from "@/lib/quote-server";
-import { generateTripNumber } from "@/lib/trip-server";
 import { findBookingConflict } from "@/lib/booking-server";
 import { InternalTripForm } from "@/components/quote/internal-trip-form";
 
@@ -92,11 +91,10 @@ async function createInternalTrip(
     data: { selectedOptionId: option.id },
   });
 
-  const tripNumber = await generateTripNumber(operator.id);
   await prisma.trip.create({
     data: {
       operatorId: operator.id,
-      tripNumber,
+      tripNumber: quoteNumber,
       quoteId: quote.id,
       status: "confirmed",
     },

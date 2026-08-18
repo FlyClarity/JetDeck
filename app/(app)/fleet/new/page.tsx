@@ -45,6 +45,12 @@ async function createAircraft(formData: FormData) {
       cruiseSpeedKts: formData.get("cruiseSpeedKts")
         ? Number(formData.get("cruiseSpeedKts"))
         : null,
+      yearOfManufacture: formData.get("yearOfManufacture")
+        ? Number(formData.get("yearOfManufacture"))
+        : null,
+      yearOfRefurbishment: formData.get("yearOfRefurbishment")
+        ? Number(formData.get("yearOfRefurbishment"))
+        : null,
       amenities: formData.getAll("amenities").map(String),
     },
   });
@@ -127,6 +133,17 @@ export default async function NewAircraftPage() {
             <p className="text-sm text-muted-foreground">
               From the manufacturer&apos;s spec sheet — drives flight-time estimates.
             </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="yearOfManufacture">Year of manufacture (optional)</Label>
+            <Input id="yearOfManufacture" name="yearOfManufacture" type="number" min={1900} placeholder="2015" />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="yearOfRefurbishment">Year of refurbishment (optional)</Label>
+            <Input id="yearOfRefurbishment" name="yearOfRefurbishment" type="number" min={1900} placeholder="2022" />
           </div>
         </div>
 

@@ -2,7 +2,6 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { formatCurrency } from "@/lib/quote";
 import { getAppUrl } from "@/lib/url";
-import { generateTripNumber } from "@/lib/trip-server";
 import { createCardHoldCheckoutSession, cancelCardHold } from "@/lib/stripe";
 import { createManifestForTrip } from "@/lib/manifest";
 import {
@@ -193,11 +192,14 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
   // invoiced/settled outside JetDeck instead.
   const waivesCardHold = quote.contact?.paymentTerms === "cash_on_account";
 
-  const tripNumber = await generateTripNumber(quote.operatorId);
+  // Reuses the quote's own number rather than minting a separate trip
+  // sequence — one identifier for sales, ops, and the client to reference
+  // through the whole lifecycle instead of two different numbers for the
+  // same booking.
   const trip = await prisma.trip.create({
     data: {
       operatorId: quote.operatorId,
-      tripNumber,
+      tripNumber: quote.quoteNumber,
       quoteId: quote.id,
       status: waivesCardHold ? "confirmed" : "awaiting_payment",
     },

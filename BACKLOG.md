@@ -1848,3 +1848,70 @@ affect everything after it too:
   the Trip row itself), but the new board query only filtered on
   `Trip.status` — the same guard never got copied over when the board
   was built. Added it.
+
+## Board/Crew round of feedback
+
+Six items from testing the Board + Crew work. Two (crew qualifications/
+availability, and outbound email landing in spam) needed scoping/
+diagnostic questions back to the user rather than a same-pass fix —
+see the open questions at the end of this entry.
+
+- ~~**Sales/Ops switcher's active pill touched the container's edge —
+  fixed**~~: the sliding white indicator behind "Sales"/"Ops"
+  (`components/app-header.tsx`) had `inset-y-1` for top/bottom but no
+  horizontal anchor at all — `left` was left to whatever "static
+  position" fallback the browser computed for an absolutely
+  positioned element with no explicit `left`/`right`, instead of the
+  intended 4px inset matching the pill's own `p-1`. Added `left-1`
+  explicitly so it's actually anchored the same as the visible Sales/
+  Ops text is.
+- ~~**Crew picker dropdown text overflowing past its box, crowding the
+  Assign button — fixed**~~: `/ops/trips/[id]`'s crew-assignment
+  `<SelectTrigger>` had a fixed `w-64` but no `overflow-hidden`, and
+  the `<SelectValue>` had no `truncate` — a longer "Name (Role)"
+  string (e.g. "Andrew Harnetiaux (Captain (PIC))") just spilled past
+  the box's right edge instead of being contained. Added
+  `overflow-hidden` to the trigger and `min-w-0 truncate` to the
+  value — same class of flex-truncation gotcha as the dashboard
+  filter-bar bug from the sidebar detour.
+- ~~**Quote and Trip had separate identifiers — fixed**~~: `Quote`
+  generated its own `Q-2026-XXXX` sequence, `Trip` generated a
+  completely separate `T-2026-XXXX` sequence at booking time — the
+  same charter had two different numbers depending on whether sales
+  or ops (or the client) was looking at it. `finalizeBooking` and the
+  internal-trip creation path now set `Trip.tripNumber` to the
+  quote's own `quoteNumber` directly instead of calling a separate
+  generator — one identifier for the whole lifecycle. `lib/trip-
+  server.ts` (`generateTripNumber`) deleted, now fully unused.
+- ~~**Removing crew didn't drop a trip back off "Crew Assigned" —
+  fixed**~~: `assignCrew` bumps `Trip.status` forward to
+  `"crew_assigned"`, but `unassignCrew` never moved it back — a trip
+  with zero crew left could still sit in the board's Crew Assigned
+  column looking staffed. `unassignCrew` now checks the remaining
+  assignment count after removal; if it hits zero and the trip is
+  still exactly at `"crew_assigned"` (not further along), it steps
+  back one stage in `TRIP_STAGES` (to `"ops_review"`) rather than
+  leaving a crewless trip stuck showing as staffed.
+- ~~**Aircraft Year of Manufacture / Year of Refurbishment — shipped**~~:
+  new optional `yearOfManufacture`/`yearOfRefurbishment` Int fields on
+  `Aircraft` (migration `20260818120000_aircraft_yom_yor`), added to
+  the Fleet add/edit forms alongside the other spec-sheet fields
+  (range, cruise speed). Not added to the Fleet list table (already
+  wide) or the client-facing quote page — scoped to "under fleet" as
+  asked; can surface elsewhere later if wanted.
+
+**Open, needs the user's input before proceeding:**
+- **Crew availability/qualifications/currency/addresses**: explicitly
+  out of scope when Crew roster shipped (matching the brief's own
+  deferral), and the user separately flagged Crew feedback as "larger
+  items... easier to work in later." Holding rather than guessing at
+  scope — availability/scheduling (a calendar of who's free when) is
+  a materially bigger feature than adding static fields
+  (qualifications, currency expiry dates, address) to `CrewMember`.
+- **Client email replies landing in spam**: `lib/email.ts`'s send
+  path looks correct (proper `Reply-To`, display name) — nothing
+  code-side jumps out. This sandbox has no network access to check
+  DNS (SPF/DKIM/DMARC) for the sending domain, and that's the most
+  common real-world cause of exactly this symptom. Asked the user to
+  check the sending domain's verification status in Resend's
+  dashboard, and which mailbox is actually seeing the spam flag.

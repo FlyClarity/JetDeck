@@ -98,6 +98,8 @@ model Aircraft {
   minHoursPerDay Float    @default(2.0)
   rangeNm        Int?
   cruiseSpeedKts Float? // true cruise airspeed — manufacturer spec, entered once per aircraft; drives flight-time estimation
+  yearOfManufacture   Int?
+  yearOfRefurbishment Int?
   status         String   @default("active")
   createdAt      DateTime @default(now())
 
@@ -380,7 +382,9 @@ model Trip {
   id         String   @id @default(cuid())
   operatorId String
   operator   Operator @relation(fields: [operatorId], references: [id])
-  tripNumber String // "T-2024-0018"
+  tripNumber String // mirrors Quote.quoteNumber (e.g. "Q-2026-0007") — one
+  // identifier for the whole lifecycle rather than a separate trip sequence,
+  // so sales, ops, and the client can all reference the same number
   quoteId    String   @unique
   quote      Quote    @relation(fields: [quoteId], references: [id])
 

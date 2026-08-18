@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
-import { STATUS_LABELS } from "@/lib/trip";
+import { STATUS_LABELS, TRIP_STAGES } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { Button } from "@/components/ui/button";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
@@ -99,6 +99,16 @@ async function unassignCrew(tripId: string, assignmentId: string) {
     where: { id: assignmentId, tripId, operatorId: scoped.operator.id },
   });
 
+  // Mirrors assignCrew's forward bump: removing the last crew member off a
+  // trip that's only at "crew_assigned" because crew was assigned (not
+  // further along in the pipeline) drops it back a stage on the board
+  // rather than leaving a crewless trip stuck showing as staffed.
+  const remaining = await prisma.tripCrewAssignment.count({ where: { tripId } });
+  if (remaining === 0 && scoped.trip.status === "crew_assigned") {
+    const idx = TRIP_STAGES.findIndex((s) => s === "crew_assigned");
+    await prisma.trip.update({ where: { id: tripId }, data: { status: TRIP_STAGES[idx - 1] } });
+  }
+
   revalidatePath(`/ops/trips/${tripId}`);
 }
 
@@ -181,8 +191,8 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
         {availableCrew.length > 0 ? (
           <form action={assignWithId} className="mt-3 flex items-center gap-2">
             <Select name="crewId">
-              <SelectTrigger className="w-64">
-                <SelectValue placeholder="Select crew member" />
+              <SelectTrigger className="w-64 overflow-hidden">
+                <SelectValue placeholder="Select crew member" className="min-w-0 flex-1 truncate" />
               </SelectTrigger>
               <SelectContent>
                 {availableCrew.map((c) => (
