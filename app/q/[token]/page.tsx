@@ -6,7 +6,7 @@ import { sendEmail } from "@/lib/email";
 import { formatCurrency, allocateProportionally } from "@/lib/quote";
 import { paxCount } from "@/lib/queue";
 import { getAppUrl } from "@/lib/url";
-import { findBookingConflict, finalizeBooking } from "@/lib/booking-server";
+import { findBookingConflict, finalizeBooking, startAchPayment } from "@/lib/booking-server";
 import { revenueLegsOf, legDate, legTimeLabel } from "@/lib/itinerary";
 import { amenityLabel } from "@/lib/aircraft";
 import { Button } from "@/components/ui/button";
@@ -110,7 +110,10 @@ async function acceptQuote(token: string, formData: FormData) {
   if (!acceptedByName) return;
 
   const paymentMethodRaw = String(formData.get("paymentMethod") ?? "");
-  const paymentMethod = paymentMethodRaw === "wire" || paymentMethodRaw === "credit_card" ? paymentMethodRaw : null;
+  const paymentMethod =
+    paymentMethodRaw === "wire" || paymentMethodRaw === "credit_card" || paymentMethodRaw === "ach"
+      ? paymentMethodRaw
+      : null;
   const waivesCardHold = quote.contact?.paymentTerms === "cash_on_account";
   const needsPaymentMethod = !waivesCardHold && !!quote.selectedOption.depositAmount && quote.selectedOption.depositAmount > 0;
   if (needsPaymentMethod && !paymentMethod) return;
@@ -188,6 +191,22 @@ async function acceptQuote(token: string, formData: FormData) {
   }
 
   redirect(`/q/${token}`);
+}
+
+// The client's second Stripe redirect — the card hold happens immediately
+// on signing (see acceptQuote below); this is a separate manual step once
+// they're back, since one Checkout Session can't collect both a card hold
+// and an ACH debit at once.
+async function startAch(token: string) {
+  "use server";
+
+  const quote = await getQuoteByToken(token);
+  if (!quote) return;
+
+  const { achPaymentUrl } = await startAchPayment(quote.id);
+  if (achPaymentUrl) {
+    redirect(achPaymentUrl);
+  }
 }
 
 async function declineQuote(token: string) {
@@ -346,6 +365,7 @@ export default async function ClientQuotePage({
   const acceptQuoteWithToken = acceptQuote.bind(null, token);
   const declineQuoteWithToken = declineQuote.bind(null, token);
   const requestChangesWithToken = requestChanges.bind(null, token);
+  const startAchWithToken = startAch.bind(null, token);
 
   const aircraftLabel = aircraftLabelFor(option);
 
@@ -588,10 +608,28 @@ export default async function ClientQuotePage({
                     : "Please complete checkout to authorize your card hold — your confirmation email with the charter agreement will follow once that's done. If you closed the checkout page before finishing, contact us and we'll send a new link."
                   : quote.cardHoldStatus === "authorized" && quote.paymentMethod === "wire"
                     ? "Your backup card hold is authorized. A confirmation email with your charter agreement and wire instructions is on its way."
-                    : quote.cardHoldStatus === "authorized"
-                      ? "Your payment is confirmed. A confirmation email with your charter agreement is on its way."
-                      : "A confirmation email with your charter agreement is on its way."}
+                    : quote.cardHoldStatus === "authorized" && quote.paymentMethod === "ach"
+                      ? quote.achConfirmedAt
+                        ? "Your ACH payment is confirmed."
+                        : quote.achPaymentStatus === "processing"
+                          ? "Your backup card hold is authorized and your ACH payment is processing — bank transfers typically take a few business days to clear."
+                          : quote.achPaymentStatus === "failed"
+                            ? "Your backup card hold is authorized, but your ACH payment didn't go through. Please try again below."
+                            : "Your backup card hold is authorized. A confirmation email with your charter agreement is on its way — next, complete your ACH bank payment below."
+                      : quote.cardHoldStatus === "authorized"
+                        ? "Your payment is confirmed. A confirmation email with your charter agreement is on its way."
+                        : "A confirmation email with your charter agreement is on its way."}
               </p>
+              {quote.paymentMethod === "ach" &&
+                quote.cardHoldStatus === "authorized" &&
+                !quote.achConfirmedAt &&
+                quote.achPaymentStatus !== "processing" && (
+                  <form action={startAchWithToken} className="mt-3">
+                    <Button type="submit" size="sm">
+                      {quote.achPaymentStatus === "failed" ? "Retry ACH Payment" : "Pay via ACH"}
+                    </Button>
+                  </form>
+                )}
             </div>
           ) : quote.status === "pending_confirmation" ? (
             <div className="mt-7 rounded-xl border border-accent/40 bg-accent/10 p-4 text-sm">

@@ -505,14 +505,19 @@ export default async function QuotePage({
             )}
             {quote.paymentMethod && (
               <p className="mt-1 text-xs text-muted-foreground capitalize">
-                Paying by: {quote.paymentMethod === "wire" ? "Wire transfer" : "Credit card"}
+                Paying by:{" "}
+                {quote.paymentMethod === "wire"
+                  ? "Wire transfer"
+                  : quote.paymentMethod === "ach"
+                    ? "Bank transfer (ACH)"
+                    : "Credit card"}
               </p>
             )}
             {quote.cardHoldStatus && (
               <p className="mt-1 text-xs text-muted-foreground capitalize">
                 Card hold: {quote.cardHoldStatus}
                 {quote.cardHoldAmount ? ` (${formatCurrency(quote.cardHoldAmount)})` : ""}
-                {quote.paymentMethod === "wire" ? " — backup" : ""}
+                {quote.paymentMethod === "wire" || quote.paymentMethod === "ach" ? " — backup" : ""}
               </p>
             )}
             {quote.paymentMethod === "wire" && (
@@ -528,6 +533,17 @@ export default async function QuotePage({
                   Mark Wire Received
                 </Button>
               </form>
+            )}
+            {quote.paymentMethod === "ach" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {quote.achConfirmedAt
+                  ? `ACH payment received ${quote.achConfirmedAt.toLocaleString()} — trip confirmed.`
+                  : quote.achPaymentStatus === "processing"
+                    ? "ACH payment processing (typically clears in a few business days)."
+                    : quote.achPaymentStatus === "failed"
+                      ? "ACH payment failed — client can retry from their quote page."
+                      : "Awaiting client to start their ACH payment."}
+              </p>
             )}
             {option.depositAmount &&
               option.depositAmount > 0 &&

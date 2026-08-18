@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { verifyStripeWebhook } from "@/lib/stripe";
-import { sendBookingConfirmationEmail } from "@/lib/booking-server";
+import { sendBookingConfirmationEmail, confirmAchPayment } from "@/lib/booking-server";
 
 const STATUS_BY_EVENT: Record<string, string> = {
   "payment_intent.amount_capturable_updated": "authorized",
@@ -41,9 +41,19 @@ export async function POST(req: NextRequest) {
         where: { stripePaymentIntentId: session.id },
         data: { stripePaymentIntentId: paymentIntentId },
       });
+      // Same session-id-as-placeholder upgrade, but for the ACH payment's
+      // separate PaymentIntent — a no-op updateMany for every session that
+      // isn't an ACH one (matches zero rows).
+      await prisma.quote.updateMany({
+        where: { achPaymentIntentId: session.id },
+        data: { achPaymentIntentId: paymentIntentId },
+      });
     }
     const quoteId = session.metadata?.quoteId;
     if (quoteId) {
+      // Idempotent (guarded by confirmationEmailSentAt) — this event fires
+      // for the ACH session completing too, which for an ACH payer happens
+      // after the card-hold session already triggered this once.
       await sendBookingConfirmationEmail(quoteId);
     }
   }
@@ -54,6 +64,29 @@ export async function POST(req: NextRequest) {
     await prisma.quote.updateMany({
       where: { stripePaymentIntentId: paymentIntent.id },
       data: { cardHoldStatus },
+    });
+  }
+
+  // ACH-specific lifecycle — a real direct debit, not an authorize-then-
+  // capture hold, so it gets its own event handling distinct from
+  // STATUS_BY_EVENT above (which only ever matches on stripePaymentIntentId,
+  // the card hold's PaymentIntent, never achPaymentIntentId).
+  if (event.type === "payment_intent.processing") {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    await prisma.quote.updateMany({
+      where: { achPaymentIntentId: paymentIntent.id },
+      data: { achPaymentStatus: "processing" },
+    });
+  }
+  if (event.type === "payment_intent.succeeded") {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    await confirmAchPayment(paymentIntent.id);
+  }
+  if (event.type === "payment_intent.payment_failed") {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    await prisma.quote.updateMany({
+      where: { achPaymentIntentId: paymentIntent.id },
+      data: { achPaymentStatus: "failed" },
     });
   }
 

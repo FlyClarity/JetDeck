@@ -272,10 +272,22 @@ model Quote {
   // Payment method — chosen by the client at the signature step, alongside
   // acceptedAt/acceptedByName. Independent of cardHoldStatus: a card hold is
   // authorized either way (unless the linked Contact is cash-on-account,
-  // which skips Stripe entirely) — "wire" just means the hold is a backup
-  // rather than how the flight actually gets paid for. See finalizeBooking
-  // and markWireReceived in lib/booking-server.ts.
-  paymentMethod String? // "wire" | "credit_card"
+  // which skips Stripe entirely) — "wire" and "ach" both just mean the hold
+  // is a backup rather than how the flight actually gets paid for. See
+  // finalizeBooking and markWireReceived in lib/booking-server.ts.
+  paymentMethod String? // "wire" | "credit_card" | "ach"
+
+  // ACH bank debit — a second, separate Stripe Checkout Session/PaymentIntent
+  // from the card hold above (ACH can't share a manual-capture hold session
+  // the way a card can; it's a real direct debit with its own multi-day
+  // settlement window). The client starts this from /q/[token] once the
+  // card hold is done — see startAchPayment in lib/booking-server.ts.
+  // Confirmed automatically via the payment_intent.succeeded webhook
+  // (app/api/webhooks/stripe/route.ts), unlike wire which has no bank feed
+  // and needs the operator to manually mark it received.
+  achPaymentIntentId String?
+  achPaymentStatus   String? // "pending" | "processing" | "succeeded" | "failed"
+  achConfirmedAt     DateTime?
 
   // The actual dollar amount held via Stripe — equals the option's
   // depositAmount for a wire payer, or depositAmount plus the operator's

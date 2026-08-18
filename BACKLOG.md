@@ -1949,3 +1949,57 @@ Follow-ups from testing the above:
   gap in the middle — `calc(50% - 0.375rem)`, not `calc(50% -
   0.25rem)`. Worked through the pixel math explicitly this time
   (documented in the component) rather than adjusting by feel.
+
+## ACH as a third payment option
+
+- ~~**ACH bank transfer, still requiring the backup card hold —
+  shipped**~~: user asked whether ACH was possible instead of wire;
+  discussed the tradeoff (ACH can't do an authorize-then-capture hold
+  the way a card does — it's a real direct debit with a multi-day
+  settlement window, so it can't reuse the same Checkout Session as
+  the hold) and landed on adding it as a third option alongside wire/
+  credit card, keeping the card hold requirement for all three.
+  - `Quote.paymentMethod` now accepts `"ach"`. New `achPaymentIntentId`/
+    `achPaymentStatus` ("pending"|"processing"|"succeeded"|"failed")/
+    `achConfirmedAt` fields (migration `20260818140000_quote_ach_
+    payment`) track the ACH payment as its own Stripe PaymentIntent,
+    entirely separate from the card hold's `stripePaymentIntentId`/
+    `cardHoldStatus`.
+  - `lib/stripe.ts`: new `createAchPaymentCheckoutSession` — plain
+    automatic-capture `mode: "payment"` Checkout Session with
+    `payment_method_types: ["us_bank_account"]`, no CC processing fee
+    (that only ever applies to an actual credit-card payment). Also
+    requests the `us_bank_account_ach_payments` capability when
+    creating a *new* Connect account — existing already-onboarded
+    operators won't get it retroactively and may need to redo
+    onboarding before ACH will actually work on their account; not
+    verified against a live Stripe account from here.
+  - Flow: signing still redirects straight into the card-hold
+    checkout immediately, same as today, for all three payment
+    methods — a Checkout Session can only ever resolve to one
+    PaymentIntent, so the ACH payment can't be bundled into that same
+    redirect. Once back on `/q/[token]` with the hold authorized, an
+    ACH payer sees a new "Pay via ACH" button (`startAchPayment` in
+    `lib/booking-server.ts`) that creates the second session and
+    redirects there — a manual second step, not automatic chaining.
+  - Confirmation is fully automatic via webhook
+    (`payment_intent.succeeded` → `confirmAchPayment`), unlike wire's
+    manual "Mark Wire Received" button — Stripe itself is the bank
+    feed here. Releases the backup hold and moves the Trip to
+    "confirmed", same as `markWireReceived` does for wire.
+    `payment_intent.processing` and `payment_intent.payment_failed`
+    drive the intermediate/failure states shown to both the client
+    and the operator.
+  - **Requires a Stripe Dashboard change**: the webhook endpoint needs
+    `payment_intent.processing` and `payment_intent.payment_failed`
+    added to its subscribed events (`payment_intent.succeeded` was
+    almost certainly already subscribed, so ACH confirmation itself
+    would still work without this — only the "processing"/"failed"
+    intermediate status displays would silently never update).
+  - Not built: no ACH-specific fee passthrough (Stripe's ACH fee is
+    small — 0.8%, capped at $5 — cheap enough that eating it seemed
+    reasonable, but easy to add a surcharge later if wanted), and no
+    resend mechanism if a client needs a fresh ACH link (unlike the
+    card hold's "Resend card hold link" button) — the client just
+    clicks "Pay via ACH" again from their own quote page, no
+    operator action needed.

@@ -92,6 +92,62 @@ export async function createCardHoldCheckoutSession(params: {
   return { url: session.url, paymentIntentId };
 }
 
+// The ACH payment itself — a separate Checkout Session/PaymentIntent from
+// the card hold above. ACH can't do manual-capture the way the hold does
+// (it's already a multi-day settlement process once submitted), so this is
+// a plain automatic-capture payment: Stripe moves it through
+// processing -> succeeded (or payment_failed) on its own, reported via
+// webhook (see app/api/webhooks/stripe/route.ts). No CC processing fee
+// surcharge — that only ever applies to an actual credit-card payment.
+export async function createAchPaymentCheckoutSession(params: {
+  quoteId: string;
+  quoteNumber: string;
+  amount: number;
+  appUrl: string;
+  token: string;
+  connectedAccountId?: string | null;
+}): Promise<{ url: string; paymentIntentId: string } | null> {
+  if (!stripe) {
+    console.warn("STRIPE_SECRET_KEY not set — skipping ACH payment checkout session");
+    return null;
+  }
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    payment_method_types: ["us_bank_account"],
+    payment_intent_data: {
+      metadata: { quoteId: params.quoteId },
+      ...(params.connectedAccountId
+        ? {
+            on_behalf_of: params.connectedAccountId,
+            transfer_data: { destination: params.connectedAccountId },
+          }
+        : {}),
+    },
+    line_items: [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: { name: `ACH payment — ${params.quoteNumber}` },
+          unit_amount: Math.round(params.amount * 100),
+        },
+        quantity: 1,
+      },
+    ],
+    success_url: `${params.appUrl}/q/${params.token}`,
+    cancel_url: `${params.appUrl}/q/${params.token}`,
+    metadata: { quoteId: params.quoteId },
+  });
+
+  if (!session.url) return null;
+
+  const paymentIntentId =
+    (typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id) ??
+    session.id;
+
+  return { url: session.url, paymentIntentId };
+}
+
 // Releases a manual-capture hold without ever charging it — used when a
 // wire payer's payment actually shows up, so the backup card hold placed at
 // signing no longer needs to sit there. Stripe rejects cancelling a
@@ -144,6 +200,7 @@ export async function createConnectedAccount(operator: {
       capabilities: {
         card_payments: { requested: true },
         transfers: { requested: true },
+        us_bank_account_ach_payments: { requested: true },
       },
     });
     return account.id;

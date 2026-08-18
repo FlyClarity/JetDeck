@@ -33,7 +33,7 @@ export function TermsAcceptGate({
 }) {
   const [name, setName] = useState("");
   const [scrolledToEnd, setScrolledToEnd] = useState(!termsText);
-  const [paymentMethod, setPaymentMethod] = useState<"wire" | "credit_card" | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<"wire" | "credit_card" | "ach" | null>(null);
   const checkedInitialOverflow = useRef(false);
 
   function checkScrolled(el: HTMLDivElement) {
@@ -78,9 +78,10 @@ export function TermsAcceptGate({
       {needsPaymentMethod && (
         <section className="flex flex-col gap-2">
           <Label>How would you like to pay for your flight?</Label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {(
               [
+                { value: "ach" as const, label: "Bank Transfer (ACH)" },
                 { value: "wire" as const, label: "Wire Transfer" },
                 { value: "credit_card" as const, label: "Credit Card" },
               ]
@@ -101,6 +102,8 @@ export function TermsAcceptGate({
             ))}
           </div>
           <p className="text-sm text-muted-foreground">
+            {paymentMethod === "ach" &&
+              `You'll pay ${formatCurrency(depositAmount ?? 0)} for your flight via ACH bank transfer — no wire fees, and you'll authorize it directly from your bank account after signing. A credit card hold of ${formatCurrency(depositAmount ?? 0)} is also authorized as backup security in case the ACH payment fails.`}
             {paymentMethod === "wire" &&
               `You'll pay ${formatCurrency(depositAmount ?? 0)} for your flight via wire (instructions will follow by email). A credit card hold of ${formatCurrency(depositAmount ?? 0)} is also authorized as backup security in case the wire isn't received.`}
             {paymentMethod === "credit_card" &&

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { formatCurrency } from "@/lib/quote";
 import { getAppUrl } from "@/lib/url";
-import { createCardHoldCheckoutSession, cancelCardHold } from "@/lib/stripe";
+import { createCardHoldCheckoutSession, createAchPaymentCheckoutSession, cancelCardHold } from "@/lib/stripe";
 import { createManifestForTrip } from "@/lib/manifest";
 import {
   revenueLegsOf,
@@ -105,6 +105,8 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
   // Stripe isn't configured," which still needs the old manual-follow-up
   // copy. A cash-on-account client (Contacts page) never gets a card hold
   // at all, regardless of the quote's payment amount — billed separately.
+  const appUrl = await getAppUrl();
+  const quoteLink = `${appUrl}/q/${quote.token}`;
   const paymentLine = !option.depositAmount
     ? ""
     : waivesCardHold
@@ -112,9 +114,11 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
       : quote.stripePaymentIntentId
         ? quote.paymentMethod === "wire"
           ? `<br/><strong>Payment for your flight:</strong> ${formatCurrency(option.depositAmount)} — pay via wire (instructions below). A credit card hold of ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} is authorized as backup security.`
-          : quote.paymentMethod === "credit_card"
-            ? `<br/><strong>Payment for your flight:</strong> ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} — charged to your card (includes card processing fee)`
-            : `<br/><strong>Payment for your flight:</strong> ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} — card hold authorized`
+          : quote.paymentMethod === "ach"
+            ? `<br/><strong>Payment for your flight:</strong> ${formatCurrency(option.depositAmount)} — pay via ACH bank transfer, <a href="${quoteLink}">complete that here</a>. A credit card hold of ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} is authorized as backup security.`
+            : quote.paymentMethod === "credit_card"
+              ? `<br/><strong>Payment for your flight:</strong> ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} — charged to your card (includes card processing fee)`
+              : `<br/><strong>Payment for your flight:</strong> ${formatCurrency(quote.cardHoldAmount ?? option.depositAmount)} — card hold authorized`
         : `<br/><strong>Payment due:</strong> ${formatCurrency(option.depositAmount)}`;
   const followUpLine =
     option.depositAmount && !quote.stripePaymentIntentId && !waivesCardHold
@@ -233,11 +237,12 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
   let cardHoldUrl: string | null = null;
   if (!waivesCardHold && option.depositAmount && option.depositAmount > 0) {
     // A card hold is authorized either way (unless cash-on-account, above)
-    // — the difference is what it's for. Paying by wire, the hold is just a
-    // backup for the plain flight-payment amount; paying by credit card,
-    // the hold IS the payment, so the operator's CC processing fee surcharge
-    // gets added on top. Snapshotted onto the quote so later displays/emails
-    // stay accurate even if the operator's fee % changes afterward.
+    // — the difference is what it's for. Paying by wire or ACH, the hold is
+    // just a backup for the plain flight-payment amount; paying by credit
+    // card, the hold IS the payment, so the operator's CC processing fee
+    // surcharge gets added on top. Snapshotted onto the quote so later
+    // displays/emails stay accurate even if the operator's fee % changes
+    // afterward.
     const holdAmount =
       quote.paymentMethod === "credit_card"
         ? option.depositAmount * (1 + quote.operator.ccProcessingFeePercent / 100)
@@ -364,6 +369,74 @@ export async function markWireReceived(operatorId: string, quoteId: string) {
   }
 
   return true;
+}
+
+// Called from a "Pay via ACH" button on /q/[token] once the client is back
+// from authorizing their (still-required) backup card hold — can't be
+// bundled into the same Checkout Session as the hold since a session
+// resolves to exactly one PaymentIntent. Public/token-driven like the rest
+// of the client-facing quote page, not operator-scoped.
+export async function startAchPayment(quoteId: string): Promise<{ achPaymentUrl: string | null }> {
+  const quote = await prisma.quote.findUniqueOrThrow({
+    where: { id: quoteId },
+    include: { operator: true, selectedOption: true },
+  });
+  if (
+    quote.status !== "accepted" ||
+    quote.paymentMethod !== "ach" ||
+    !quote.selectedOption?.depositAmount ||
+    ["processing", "succeeded"].includes(quote.achPaymentStatus ?? "")
+  ) {
+    return { achPaymentUrl: null };
+  }
+
+  const appUrl = await getAppUrl();
+  const session = await createAchPaymentCheckoutSession({
+    quoteId: quote.id,
+    quoteNumber: quote.quoteNumber,
+    amount: quote.selectedOption.depositAmount,
+    appUrl,
+    token: quote.token,
+    connectedAccountId: quote.operator.stripeChargesEnabled ? quote.operator.stripeAccountId : null,
+  });
+  if (!session) return { achPaymentUrl: null };
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { achPaymentIntentId: session.paymentIntentId, achPaymentStatus: "pending" },
+  });
+
+  return { achPaymentUrl: session.url };
+}
+
+// Called by the payment_intent.succeeded webhook once an ACH debit actually
+// clears (3-5 business days after the client submits it, unlike a card
+// hold's instant authorization) — fully automatic, unlike wire's manual
+// "Mark Wire Received" button, since Stripe itself is the bank feed here.
+// Releases the now-unneeded backup card hold and moves the Trip to
+// "confirmed", same as markWireReceived does for a wire payer.
+export async function confirmAchPayment(achPaymentIntentId: string) {
+  const quote = await prisma.quote.findFirst({
+    where: { achPaymentIntentId },
+    include: { trip: true },
+  });
+  if (!quote || quote.achConfirmedAt) return;
+
+  if (quote.stripePaymentIntentId && quote.cardHoldStatus && !["captured", "released"].includes(quote.cardHoldStatus)) {
+    const released = await cancelCardHold(quote.stripePaymentIntentId);
+    if (released) {
+      await prisma.quote.update({ where: { id: quote.id }, data: { cardHoldStatus: "released" } });
+    }
+  }
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { achConfirmedAt: new Date(), achPaymentStatus: "succeeded" },
+  });
+
+  if (quote.trip) {
+    await prisma.trip.update({ where: { id: quote.trip.id }, data: { status: "confirmed" } });
+  }
 }
 
 // Shared by both places a pending_confirmation request gets resolved: the
