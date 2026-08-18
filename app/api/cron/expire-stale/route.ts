@@ -13,5 +13,9 @@ export async function GET(req: NextRequest) {
   }
 
   const result = await expireStaleRequestsAndQuotes();
+  // Unconditional, not just on failure — same reasoning as the Postmark
+  // webhook's own always-log line: this is the only way to tell, from
+  // outside, whether the cron actually ran and what it found.
+  console.log(`[cron expire-stale] tripRequestsExpired=${result.tripRequestsExpired} quotesExpired=${result.quotesExpired}`);
   return Response.json(result);
 }

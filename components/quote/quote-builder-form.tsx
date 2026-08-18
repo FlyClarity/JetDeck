@@ -463,13 +463,20 @@ function QuoteOptionFields({
         if (leg.id !== id) return leg;
         const updated = { ...leg, ...patch };
         if ("dep" in patch || "arr" in patch) {
+          // A new departure/arrival airport makes this a materially
+          // different leg — any earlier manual ETE/ETA override was for the
+          // old routing and shouldn't silently keep blocking the recompute
+          // below (previously required an explicit Reset click even after
+          // changing the airports entirely).
+          updated.dirty = false;
+          updated.arrTimeDirty = false;
           const hrs = computeLegHours(
             updated.dep,
             updated.arr,
             selectedAircraft?.cruiseSpeedKts,
             defaultBlockTimeBufferHours
           );
-          if (!updated.dirty && hrs !== null) updated.flightHours = hrs.toFixed(1);
+          if (hrs !== null) updated.flightHours = hrs.toFixed(1);
         }
         if ("arrTime" in patch) {
           updated.arrTimeDirty = true;
@@ -587,8 +594,9 @@ function QuoteOptionFields({
   }
 
   // Subtle chevrons rather than full arrow icons/a drag handle, per direct
-  // feedback on both earlier attempts — sits at the left edge of the leg
-  // card, out of the way of the actual fields.
+  // feedback on earlier attempts — rendered outside the leg card's own
+  // border by the caller (a sibling, not a child, of the bordered div) so
+  // they read as controls on the leg rather than fields within it.
   function legMoveButtons(id: string, index: number) {
     return (
       <div className="flex flex-col">
@@ -790,46 +798,43 @@ function QuoteOptionFields({
 
             if (isRepositioning && leg.collapsed) {
               return (
-                <div
-                  key={leg.id}
-                  className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm"
-                >
+                <div key={leg.id} className="flex items-center gap-1.5">
                   {legMoveButtons(leg.id, i)}
-                  <button
-                    type="button"
-                    onClick={() => toggleCollapsed(leg.id)}
-                    className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
-                  >
-                    <ChevronRight className="size-3.5" />
-                    <span className="text-xs font-medium tracking-wide uppercase">Reposition</span>
-                  </button>
-                  <span className="text-muted-foreground">
-                    {leg.dep?.icao ?? "?"} → {leg.arr?.icao ?? "?"}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {leg.depTimeTBD ? "TBD" : leg.depTime || "TBD"}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {leg.flightHours ? `${leg.flightHours} hrs` : "— hrs"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => toggleCollapsed(leg.id)}
-                    className="ml-auto text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-                  >
-                    Edit
-                  </button>
+                  <div className="flex flex-1 items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(leg.id)}
+                      className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronRight className="size-3.5" />
+                      <span className="text-xs font-medium tracking-wide uppercase">Reposition</span>
+                    </button>
+                    <span className="text-muted-foreground">
+                      {leg.dep?.icao ?? "?"} → {leg.arr?.icao ?? "?"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {leg.depTimeTBD ? "TBD" : leg.depTime || "TBD"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {leg.flightHours ? `${leg.flightHours} hrs` : "— hrs"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(leg.id)}
+                      className="ml-auto text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                    >
+                      Edit
+                    </button>
+                  </div>
                 </div>
               );
             }
 
             return (
-              <div
-                key={leg.id}
-                className="flex flex-wrap items-end gap-3 rounded-md border border-border p-2.5"
-              >
+              <div key={leg.id} className="flex items-start gap-1.5">
+                <div className="flex h-9 items-center">{legMoveButtons(leg.id, i)}</div>
+                <div className="flex flex-1 flex-wrap items-end gap-3 rounded-md border border-border p-2.5">
                 <div className="flex h-9 items-center gap-2">
-                  {legMoveButtons(leg.id, i)}
                   {isRepositioning ? (
                     <button
                       type="button"
@@ -978,6 +983,7 @@ function QuoteOptionFields({
                 >
                   Remove
                 </button>
+                </div>
               </div>
             );
           })}

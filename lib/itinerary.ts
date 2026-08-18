@@ -43,13 +43,21 @@ export function legTimeLabel(leg: StoredLeg): string {
 // itinerary instead of live leg state — used to split a saved
 // Quote.overnightNights total back into its auto vs. manually-added-extra
 // portions on reload, since only the combined total gets persisted.
+//
+// Sums gaps in date order, not array order — matches the Quote Builder's own
+// live calculation. Editing an earlier leg's date (e.g. pushing departure
+// later) can leave the array out of chronological order without this sort;
+// iterating in array order would then hand nightsBetween a negative span for
+// that pair, which it silently clamps to 0 — under-counting the real total
+// on reload even though the live in-form total was already correct.
 export function autoNightsAwayOf(itinerary: unknown): number {
-  const legs = revenueLegsOf(itinerary);
+  const dates = revenueLegsOf(itinerary)
+    .map((l) => legDateIso(l))
+    .filter((d): d is string => Boolean(d))
+    .sort();
   let nights = 0;
-  for (let i = 0; i < legs.length - 1; i++) {
-    const start = legDateIso(legs[i]);
-    const end = legDateIso(legs[i + 1]);
-    if (start && end) nights += nightsBetween(start, end);
+  for (let i = 0; i < dates.length - 1; i++) {
+    nights += nightsBetween(dates[i], dates[i + 1]);
   }
   return nights;
 }

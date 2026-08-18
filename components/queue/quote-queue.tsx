@@ -16,6 +16,7 @@ import { formatCurrency, TRIP_PURPOSE_LABELS } from "@/lib/quote";
 import { categoryLabel } from "@/lib/aircraft";
 import { revenueLegsOf } from "@/lib/itinerary";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 type RawLeg = { depAirport?: string | null; arrAirport?: string | null; date?: string | null };
@@ -80,6 +81,33 @@ const STATUS_FILTERS = [
 type ViewKey = (typeof VIEWS)[number]["key"];
 type StatusFilterKey = (typeof STATUS_FILTERS)[number]["key"];
 
+function legAirports(legs: unknown): (string | null | undefined)[] {
+  const legArray = Array.isArray(legs) ? (legs as RawLeg[]) : [];
+  return legArray.flatMap((l) => [l.depAirport, l.arrAirport]);
+}
+
+// One searchable blob per row (name/company, quote #, airports) rather than
+// per-field matching — a query like "teb miami" should match across the
+// route even though depAirport/arrAirport are separate fields.
+function quoteSearchText(q: QuoteWithTripRequest): string {
+  return [
+    q.quoteNumber,
+    q.tripRequest?.requestorName,
+    q.tripRequest?.requestorCompany,
+    ...legAirports(q.tripRequest ? q.tripRequest.legs : q.selectedOption?.itinerary),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function tripRequestSearchText(t: TripRequest): string {
+  return [t.requestorName, t.requestorCompany, ...legAirports(t.legs)]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
 const QUOTE_VIEWS: ViewKey[] = ["draft", "sent", "accepted"];
 
 const QUOTE_ACTION_LABEL: Record<string, string> = {
@@ -137,6 +165,7 @@ export function QuoteQueue({
     openTrip?.status === "passed" ? "passed" : openTrip?.status === "expired" ? "expired" : "active"
   );
   const [selectedId, setSelectedId] = useState<string | null>(() => openTrip?.id ?? null);
+  const [searchQuery, setSearchQuery] = useState("");
   const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   // Keyboard nav (j/k) only ever moved the selection state — the list
@@ -191,30 +220,44 @@ export function QuoteQueue({
   const showingInactiveQuotes = activeView === "all" && statusFilter === "inactive";
   const isQuoteView = QUOTE_VIEWS.includes(activeView) || showingInactiveQuotes;
 
+  const query = searchQuery.trim().toLowerCase();
+
   const quoteList = useMemo(() => {
-    if (showingInactiveQuotes) return quotes.filter((q) => INACTIVE_QUOTE_STATUSES.includes(q.status));
-    // "approved" (operator confirmed availability, awaiting the client's
-    // signature) folds into the "Sent" tab — both are "out to the client,
-    // awaiting their action" from the operator's point of view, not
-    // distinct enough to warrant a separate tab.
-    if (activeView === "sent") return quotes.filter((q) => q.status === "sent" || q.status === "approved");
-    return quotes.filter((q) => q.status === activeView);
-  }, [quotes, activeView, showingInactiveQuotes]);
+    let list: QuoteWithTripRequest[];
+    if (showingInactiveQuotes) {
+      list = quotes.filter((q) => INACTIVE_QUOTE_STATUSES.includes(q.status));
+    } else if (activeView === "sent") {
+      // "approved" (operator confirmed availability, awaiting the client's
+      // signature) folds into the "Sent" tab — both are "out to the client,
+      // awaiting their action" from the operator's point of view, not
+      // distinct enough to warrant a separate tab.
+      list = quotes.filter((q) => q.status === "sent" || q.status === "approved");
+    } else {
+      list = quotes.filter((q) => q.status === activeView);
+    }
+    if (!query) return list;
+    return list.filter((q) => quoteSearchText(q).includes(query));
+  }, [quotes, activeView, showingInactiveQuotes, query]);
 
   const currentList = useMemo(() => {
     if (isQuoteView) return [];
-    if (activeView === "ready") return tripRequests.filter((t) => t.status === "ready");
-    // "Active" hides passed and expired requests, and also hides quoted
-    // ones — once a trip request has a quote, it's tracked via the
-    // Draft/Sent/Accepted tabs instead, so leaving it in "All Requests" too
-    // just double-lists the same lead in two places.
-    if (statusFilter === "active") {
-      return tripRequests.filter(
+    let list: TripRequest[];
+    if (activeView === "ready") {
+      list = tripRequests.filter((t) => t.status === "ready");
+    } else if (statusFilter === "active") {
+      // "Active" hides passed and expired requests, and also hides quoted
+      // ones — once a trip request has a quote, it's tracked via the
+      // Draft/Sent/Accepted tabs instead, so leaving it in "All Requests" too
+      // just double-lists the same lead in two places.
+      list = tripRequests.filter(
         (t) => t.status !== "passed" && t.status !== "quoted" && t.status !== "expired"
       );
+    } else {
+      list = tripRequests.filter((t) => t.status === statusFilter);
     }
-    return tripRequests.filter((t) => t.status === statusFilter);
-  }, [isQuoteView, activeView, statusFilter, tripRequests]);
+    if (!query) return list;
+    return list.filter((t) => tripRequestSearchText(t).includes(query));
+  }, [isQuoteView, activeView, statusFilter, tripRequests, query]);
 
   const selectedTripRequest = !isQuoteView
     ? (currentList.find((t) => t.id === selectedId) ?? null)
@@ -346,6 +389,15 @@ export function QuoteQueue({
               <Link href="/quotes/new">+ New Quote</Link>
             </Button>
           </div>
+        </div>
+
+        <div className="border-b border-border px-4 py-2">
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by name, company, quote #, or airport…"
+            className="h-8"
+          />
         </div>
 
         <div className="flex-1 overflow-y-auto">

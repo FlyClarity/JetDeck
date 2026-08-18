@@ -2003,3 +2003,65 @@ Follow-ups from testing the above:
     card hold's "Resend card hold link" button) — the client just
     clicks "Pay via ACH" again from their own quote page, no
     operator action needed.
+
+## Round of quick fixes + one open diagnostic
+
+- ~~**YOM/YOR shown to the client — shipped**~~: `/q/[token]` now
+  shows "YOM 20XX"/"YOR 20XX" next to the aircraft description
+  (spurred by an actual client emailing to ask, per the spam-triage
+  investigation earlier) — reuses `Aircraft.yearOfManufacture`/
+  `yearOfRefurbishment` from the Fleet fields shipped a few rounds
+  ago, no schema change needed.
+- ~~**Quote Builder: changing an airport left ETE/ETA stuck on the old
+  manual override — fixed**~~: `updateLeg`'s dirty-flag system (an
+  intentional design — once someone manually overrides ETE or arrival
+  time, further edits stop silently clobbering it, so tweaking a date
+  doesn't blow away a real ATC-delay adjustment) never cleared on a
+  dep/arr airport change specifically. Changing the airport makes it a
+  materially different leg, so any override from the old routing
+  shouldn't keep blocking the recompute — now `dirty`/`arrTimeDirty`
+  both clear when either airport changes, no "Reset" click needed.
+  Date/time edits still respect an existing override, by design —
+  flagged this distinction back to the user since their report also
+  mentioned "departure times," which this fix doesn't touch; asked for
+  a concrete repro if that's still happening after this fix before
+  changing the time-edit behavior too (which risks defeating the
+  override entirely).
+- ~~**Overnight nights not updating when an earlier leg's date changes
+  — fixed**~~: two separate implementations of the same "nights away"
+  calculation existed — the Quote Builder's own live one (sorts leg
+  dates before summing consecutive gaps, specifically to handle a leg
+  edited out of chronological order) and `autoNightsAwayOf` in
+  `lib/itinerary.ts` (used only to split a *saved* quote's persisted
+  total back into its auto/extra portions on reload), which iterated
+  legs in raw array order with no sort. Editing an earlier leg's date
+  can leave the array chronologically out of order without affecting
+  which element is array-first; the unsorted version then handed
+  `nightsBetween` a negative span for that pair, which it silently
+  clamps to 0 — under-counting on reload even though the in-form total
+  was already right when it was saved. Ported the same sort into
+  `autoNightsAwayOf`.
+- ~~**Leg reorder arrows moved outside the leg's border — shipped**~~:
+  were the first child inside each leg card's own bordered box;
+  restructured so `legMoveButtons` renders as a sibling of the
+  bordered div instead of a child of it, in both the expanded and
+  collapsed (repositioning-leg) leg layouts.
+- ~~**Search added to the request/quote queue — shipped**~~: a text
+  box (name, company, quote #, or airport) now filters whichever
+  list/tab is currently showing — applies everywhere, not just
+  "Sent," since the same need (find one thing in a long list) applies
+  to every tab.
+- **Stale "Sent" quotes past their departure date — open,
+  investigating**: the cron this describes
+  (`expireStaleRequestsAndQuotes`) already covers exactly this case —
+  draft/sent/pending_confirmation/approved quotes past their last leg
+  date get marked "expired," which the "Sent" tab already excludes.
+  Nothing wrong found in the logic on review. Added an unconditional
+  log line to `/api/cron/expire-stale` (same pattern as the Postmark
+  webhook's own always-log line) so a future check of Vercel's
+  function logs can show whether it's actually running and what it's
+  finding — no visibility existed before this. Couldn't verify further
+  from this sandbox (no access to production logs or the DB); asked
+  the user to check the Vercel dashboard's Cron Jobs tab (can be
+  manually triggered from there) or share a concrete example (which
+  quote, what departure date) to narrow down further.

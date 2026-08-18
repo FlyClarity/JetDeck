@@ -506,6 +506,8 @@ export default async function ClientQuotePage({
             <p className="mt-3 text-sm text-muted-foreground">
               {aircraftLabel}
               {pax !== null && ` · ${pax} passengers`}
+              {option.aircraft?.yearOfManufacture && ` · YOM ${option.aircraft.yearOfManufacture}`}
+              {option.aircraft?.yearOfRefurbishment && ` · YOR ${option.aircraft.yearOfRefurbishment}`}
             </p>
           </section>
 
