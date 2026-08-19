@@ -2107,3 +2107,43 @@ Follow-ups from testing the above:
     clearing `results` synchronously, since the render already shows
     "Keep typing…" from query length alone without needing `results`
     itself cleared.
+
+## Quote tool round: follow-ups, overnight fix, stale-quote self-heal
+
+- ~~**Send a follow-up/custom message after a quote's been sent —
+  shipped**~~: `app/(app)/quotes/[id]/page.tsx` gets a new "Send a
+  follow-up message" collapsible with a plain textarea, available for
+  any non-draft, non-dead-end status (sent/approved/
+  pending_confirmation/accepted — not draft, and not declined/
+  cancelled/expired, where following up doesn't mean anything).
+  Emails the requestor directly with the operator's text plus a link
+  back to the quote; distinct from resending the quote itself or the
+  legal cancellation notice, both of which already existed.
+- ~~**Overnight fee missed repositioning-leg dates — fixed**~~: both
+  nights-away calculations (`autoNightsAway` in the Quote Builder,
+  `autoNightsAwayOf` in `lib/itinerary.ts`) summed gaps between
+  *revenue*-leg dates only — a repositioning leg's own date never fed
+  into the calculation at all. Reported case: positioning the aircraft
+  out the evening before an early-morning revenue departure (editing
+  the repositioning leg's date to the day before) didn't add the
+  overnight it obviously creates, since that leg's date was invisible
+  to the calc entirely. Both functions now sum gaps across every leg's
+  date (still sorted chronologically, per the earlier reload-order
+  fix), not just revenue legs. "Returns to base between each leg"
+  still zeroes the whole total regardless, unaffected by this change.
+- ~~**Stale "Sent" quotes past departure — made self-healing**~~: user
+  reported this a second time with a concrete case (quotes from Aug
+  17 still showing Aug 19) after the logging-only fix from the
+  previous round. Re-reviewed the cron logic again and still found
+  nothing wrong in it, so rather than keep asking the user to check
+  Vercel logs I can't see myself, made the whole thing self-healing:
+  `expireStaleRequestsAndQuotes` now takes an optional `operatorId` to
+  scope both queries (cron usage stays unscoped — sweeps every
+  operator in one daily pass); the dashboard page now calls it,
+  scoped to the current operator, before every load. A stale quote
+  now disappears the moment anyone actually opens the dashboard —
+  including via the existing 2-minute poll — regardless of whether
+  the separate Vercel cron is firing on schedule or not. Doesn't
+  explain *why* the cron itself seemed to be missing this, but no
+  longer depends on answering that question for the operator's actual
+  visible experience to be correct.

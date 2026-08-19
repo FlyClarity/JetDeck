@@ -647,14 +647,21 @@ function QuoteOptionFields({
   // of chronological sequence (e.g. via "Add leg", or reordering) would
   // otherwise silently compute a 0-or-negative gap for that pair instead of
   // the real one, since nightsBetween clamps negative spans to 0.
+  //
+  // Uses every leg's date, not just revenue legs — a repositioning leg (e.g.
+  // flying out the evening before an early-morning revenue departure) is a
+  // real overnight the aircraft sits through, and previously wasn't counted
+  // at all since only revenue-leg dates fed this sum. "Returns to base
+  // between each leg" still zeroes the whole total out below regardless
+  // (that toggle's own all-or-nothing behavior, unrelated to this change).
   const autoNightsAway = useMemo(() => {
-    const dates = revenueLegs.map((l) => l.date).filter(Boolean).sort();
+    const dates = legs.map((l) => l.date).filter(Boolean).sort();
     let nights = 0;
     for (let i = 0; i < dates.length - 1; i++) {
       nights += nightsBetween(dates[i], dates[i + 1]);
     }
     return nights;
-  }, [revenueLegs]);
+  }, [legs]);
 
   const totalNightsAway = returnsToHomeBase ? 0 : autoNightsAway + (Number(extraNightsAway) || 0);
   const overnightFee = totalNightsAway * defaultOvernightFee;

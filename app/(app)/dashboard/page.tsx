@@ -3,6 +3,7 @@ import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
 import { QuoteQueue } from "@/components/queue/quote-queue";
+import { expireStaleRequestsAndQuotes } from "@/lib/expire-stale";
 
 async function passTripRequest(id: string) {
   "use server";
@@ -92,6 +93,11 @@ export default async function DashboardPage() {
   // revisit with real pagination if an operator's active (non-passed,
   // non-terminal) volume ever approaches it.
   const RECENT_LIMIT = 500;
+
+  // Self-heals regardless of whether the daily cron actually ran — scoped to
+  // this operator alone so it stays cheap on every page load/poll, rather
+  // than re-scanning every operator the way the cron's own sweep does.
+  await expireStaleRequestsAndQuotes(operator.id);
 
   const tripRequests = await prisma.tripRequest.findMany({
     where: { operatorId: operator.id },

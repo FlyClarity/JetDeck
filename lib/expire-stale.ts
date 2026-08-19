@@ -15,13 +15,21 @@ function lastLegDateIso(legs: unknown): string | null {
   return null;
 }
 
-// Run daily (see app/api/cron/expire-stale/route.ts) to flag trip requests
-// and quotes nobody ever acted on before the flight itself happened —
-// otherwise they sit in "Ready to Quote"/"Draft"/"Sent" forever, cluttering
-// the operator's queue with leads that can no longer actually be booked.
-// Marks status only; nothing is ever deleted, so the record (and any
-// reporting value in it) stays intact.
-export async function expireStaleRequestsAndQuotes(): Promise<{
+// Run daily by the cron (see app/api/cron/expire-stale/route.ts), and also
+// inline — scoped to just that operator — on every dashboard load (see
+// app/(app)/dashboard/page.tsx), so a stale quote disappears the moment
+// anyone actually looks rather than depending entirely on cron timing.
+// Flags trip requests and quotes nobody ever acted on before the flight
+// itself happened — otherwise they sit in "Ready to Quote"/"Draft"/"Sent"
+// forever, cluttering the operator's queue with leads that can no longer
+// actually be booked. Marks status only; nothing is ever deleted, so the
+// record (and any reporting value in it) stays intact.
+//
+// operatorId scopes both queries when called from the dashboard — omitted
+// (the cron's usage) sweeps every operator in one pass, which the
+// dashboard's per-request call must not do (it would re-scan every other
+// operator's data on every single page view).
+export async function expireStaleRequestsAndQuotes(operatorId?: string): Promise<{
   tripRequestsExpired: number;
   quotesExpired: number;
 }> {
@@ -31,7 +39,7 @@ export async function expireStaleRequestsAndQuotes(): Promise<{
   // Quote, its fate is tracked through that Quote instead (see below), so
   // expiring the request itself here would be redundant.
   const candidateRequests = await prisma.tripRequest.findMany({
-    where: { status: { in: ["new", "ready"] } },
+    where: { status: { in: ["new", "ready"] }, ...(operatorId ? { operatorId } : {}) },
     select: { id: true, legs: true },
   });
   const expiredRequestIds = candidateRequests
@@ -51,7 +59,10 @@ export async function expireStaleRequestsAndQuotes(): Promise<{
   // Every non-terminal quote status — still awaiting either the operator
   // sending it, the client deciding, or the client signing.
   const candidateQuotes = await prisma.quote.findMany({
-    where: { status: { in: ["draft", "sent", "pending_confirmation", "approved"] } },
+    where: {
+      status: { in: ["draft", "sent", "pending_confirmation", "approved"] },
+      ...(operatorId ? { operatorId } : {}),
+    },
     include: { selectedOption: { select: { itinerary: true } } },
   });
   const expiredQuoteIds = candidateQuotes

@@ -38,8 +38,8 @@ export function legTimeLabel(leg: StoredLeg): string {
   return leg.arrTime ? `Departs ${dep} · Arrives ${leg.arrTime}` : `Departs ${dep}`;
 }
 
-// Same gap-between-consecutive-revenue-legs math the Quote Builder uses live
-// (see autoNightsAway in quote-builder-form.tsx), but computed from a saved
+// Same gap-between-consecutive-legs math the Quote Builder uses live (see
+// autoNightsAway in quote-builder-form.tsx), but computed from a saved
 // itinerary instead of live leg state — used to split a saved
 // Quote.overnightNights total back into its auto vs. manually-added-extra
 // portions on reload, since only the combined total gets persisted.
@@ -50,8 +50,13 @@ export function legTimeLabel(leg: StoredLeg): string {
 // iterating in array order would then hand nightsBetween a negative span for
 // that pair, which it silently clamps to 0 — under-counting the real total
 // on reload even though the live in-form total was already correct.
+//
+// Uses every leg's date, not just revenue legs — a repositioning leg (flying
+// out the evening before an early-morning revenue departure, say) is a real
+// overnight, and using revenueLegsOf here missed it entirely.
 export function autoNightsAwayOf(itinerary: unknown): number {
-  const dates = revenueLegsOf(itinerary)
+  const legs = (itinerary as StoredLeg[]) ?? [];
+  const dates = legs
     .map((l) => legDateIso(l))
     .filter((d): d is string => Boolean(d))
     .sort();

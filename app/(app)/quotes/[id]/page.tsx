@@ -175,6 +175,38 @@ async function cancelBooking(id: string, formData: FormData) {
   redirect(`/quotes/${quote.id}`);
 }
 
+// A plain follow-up/custom note to the client or broker — distinct from
+// resending the quote itself or the legal cancellation notice above.
+// Available any time after the quote has actually gone out (not draft) and
+// hasn't reached a dead end (declined/cancelled/expired) where following up
+// doesn't mean anything anymore.
+async function sendFollowUpMessage(id: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedQuote(id);
+  if (!scoped) return;
+  const { quote, operator } = scoped;
+  if (["draft", "declined", "cancelled", "expired"].includes(quote.status)) return;
+
+  const message = String(formData.get("message") ?? "").trim();
+  const requestorEmail = quote.tripRequest?.requestorEmail;
+  if (!message || !requestorEmail) return;
+
+  const appUrl = await getAppUrl();
+  const quoteLink = `${appUrl}/q/${quote.token}`;
+
+  await sendEmail({
+    to: requestorEmail,
+    subject: `Update on your quote — ${quote.quoteNumber}`,
+    html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p style="white-space:pre-wrap">${message}</p><p><a href="${quoteLink}">View Quote</a></p><p>— ${operator.name}</p>`,
+    replyTo: operator.replyToEmail ?? undefined,
+    from: operator.fromEmail,
+    fromName: operator.name,
+  });
+
+  redirect(`/quotes/${quote.id}`);
+}
+
 async function confirmPendingBooking(id: string) {
   "use server";
 
@@ -358,6 +390,7 @@ export default async function QuotePage({
   const declinePendingBookingWithId = declinePendingBooking.bind(null, quote.id);
   const resendCardHoldWithId = resendCardHold.bind(null, quote.id);
   const markWireReceivedWithId = markWireReceivedAction.bind(null, quote.id);
+  const sendFollowUpMessageWithId = sendFollowUpMessage.bind(null, quote.id);
   const clientLink = `${await getAppUrl()}/q/${quote.token}`;
 
   return (
@@ -414,6 +447,24 @@ export default async function QuotePage({
           <CopyLinkButton link={clientLink} />
         </div>
       )}
+
+      {!["draft", "declined", "cancelled", "expired"].includes(quote.status) &&
+        quote.tripRequest?.requestorEmail && (
+          <details className="mt-4 text-sm">
+            <summary className="cursor-pointer text-muted-foreground">Send a follow-up message</summary>
+            <form action={sendFollowUpMessageWithId} className="mt-3 flex flex-col gap-2">
+              <Textarea
+                name="message"
+                rows={3}
+                placeholder="e.g. Just checking in — happy to answer any questions on this quote."
+                required
+              />
+              <Button type="submit" variant="outline" size="sm" className="self-start">
+                Send
+              </Button>
+            </form>
+          </details>
+        )}
 
       {quote.status === "pending_confirmation" && (
         <div className="mt-4 flex flex-col gap-3">
