@@ -2258,3 +2258,32 @@ optimization would both need, useful for Sales and Ops both.
   see what was really going on. Both now list every leg's route and
   date inline, using the same itinerary data the link already pointed
   at — no new query, just surfacing what was already being fetched.
+
+## Ops tool round: crew delete, manual manifest for internal trips
+
+- ~~**Delete a crew member — shipped**~~: `/ops/crew/[id]` gets a
+  delete action, gated behind a disclosure (same soft-confirmation
+  pattern as "Cancel Booking"'s reason field). Only allowed when the
+  crew member has never actually been assigned to a trip —
+  `TripCrewAssignment` is real flight history, not something to
+  silently cascade away; someone who's flown gets told to mark
+  Inactive instead, with a clear error banner rather than a raw FK
+  constraint failure.
+- ~~**Internal trips had no way to start manifest collection, and ops
+  had no way to add a passenger directly — shipped**~~: internal trips
+  (owner/maintenance/repositioning) skip manifest collection
+  automatically by design — no client checkout to trigger it from,
+  and usually no passengers in the traditional sense. But some still
+  need a real manifest (a booking that came in by phone/text outside
+  the usual flow), and there was no way to start one. `createManifestForTrip`
+  (`lib/manifest.ts`) now always creates the lead `Passenger` row
+  regardless of whether there's an email to send it to — previously
+  it bailed out entirely before creating anything if no
+  Contact/TripRequest email could be resolved, which is exactly the
+  internal-trip case. `/ops/trips/[id]` gets a "Start Manifest
+  Collection" button (shown when no manifest exists yet) and an
+  "+ Add Passenger" button (once one does) that creates a blank row
+  the operator can fill in themselves or forward — mirrors the
+  self-service page's own "Add Another Passenger" action, just
+  triggered by the operator instead of requiring them to open the
+  lead's own manifest link first.

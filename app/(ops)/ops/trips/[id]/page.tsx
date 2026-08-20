@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
 import { STATUS_LABELS, TRIP_STAGES } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
+import { createManifestForTrip } from "@/lib/manifest";
 import { Button } from "@/components/ui/button";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import {
@@ -71,6 +72,42 @@ async function verifyPassenger(tripId: string, passengerId: string) {
   await prisma.passenger.update({
     where: { id: passengerId },
     data: passenger.verifiedAt ? { verifiedAt: null, verifiedBy: null } : { verifiedAt: new Date(), verifiedBy: userId },
+  });
+
+  revalidatePath(`/ops/trips/${tripId}`);
+}
+
+// Ops-side entry point for a trip that never got a manifest automatically
+// (internal trips — owner/maintenance/repositioning — skip this in
+// finalizeBooking by design) but still needs one, e.g. a booking that came
+// in by phone/text outside the usual client checkout.
+async function startManifest(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped || scoped.trip.passengers.length > 0) return;
+
+  await createManifestForTrip(tripId);
+  revalidatePath(`/ops/trips/${tripId}`);
+}
+
+// Mirrors the self-service /manifest/[token] "+ Add Another Passenger"
+// action, but triggered by the operator directly — for a passenger whose
+// info was collected some other way (phone, email) rather than through the
+// link, so there's no need to make the operator go open the lead's own
+// manifest link just to add a blank row for them to fill in.
+async function addPassengerOps(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+  const { trip, operator } = scoped;
+
+  const seatCap = trip.quote.selectedOption?.aircraft?.seats ?? trip.quote.selectedOption?.brokeredAircraft?.seats ?? null;
+  if (seatCap !== null && trip.passengers.length >= seatCap) return;
+
+  await prisma.passenger.create({
+    data: { operatorId: operator.id, tripId },
   });
 
   revalidatePath(`/ops/trips/${tripId}`);
@@ -238,18 +275,34 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
             </span>
           )}
         </h2>
-        {trip.passengers.length > 0 && (
-          <Button size="sm" variant="outline" asChild>
-            <Link href={`/ops/trips/${trip.id}/manifest-print`} target="_blank">
-              Print Manifest
-            </Link>
-          </Button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {trip.passengers.length > 0 ? (
+            <>
+              <form action={addPassengerOps.bind(null, trip.id)}>
+                <Button type="submit" size="sm" variant="outline">
+                  + Add Passenger
+                </Button>
+              </form>
+              <Button size="sm" variant="outline" asChild>
+                <Link href={`/ops/trips/${trip.id}/manifest-print`} target="_blank">
+                  Print Manifest
+                </Link>
+              </Button>
+            </>
+          ) : (
+            <form action={startManifest.bind(null, trip.id)}>
+              <Button type="submit" size="sm" variant="outline">
+                Start Manifest Collection
+              </Button>
+            </form>
+          )}
+        </div>
       </div>
 
       {trip.passengers.length === 0 ? (
         <p className="mt-2 text-sm text-muted-foreground">
-          No manifest was generated for this trip (internal/non-client trips don&apos;t collect one).
+          No manifest yet — internal/non-client trips don&apos;t collect one automatically, but you can
+          start one manually above if this trip needs it.
         </p>
       ) : (
         <div className="mt-2 flex flex-col gap-2">

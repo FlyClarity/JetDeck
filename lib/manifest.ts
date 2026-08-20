@@ -10,11 +10,17 @@ import { departureInstantUtc } from "@/lib/time";
 // yet, and starting collection as early as possible is strictly better for
 // the actual goal (getting manifest data in before departure) regardless.
 //
-// Only ever called for a Trip with a real client behind it (a linked
-// Contact or TripRequest) — internal trips (owner flights, maintenance,
-// repositioning — see quotes/internal/new) are created directly by the
-// operator, who already knows exactly who's aboard; the "stop chasing
-// people by email" problem this module solves doesn't apply there.
+// Called automatically for a Trip with a real client behind it (a linked
+// Contact or TripRequest) — see finalizeBooking. Also callable manually
+// (a "Start Manifest Collection" button on /ops/trips/[id]) for a Trip
+// that didn't get one automatically — an internal trip (owner flight,
+// maintenance, repositioning — see quotes/internal/new) normally skips this
+// since the operator already knows who's aboard, but sometimes still needs
+// a real manifest (e.g. a booking that came in by phone/text outside the
+// usual checkout). The lead Passenger row is always created regardless of
+// whether there's an email to send it to — internal trips have no
+// Contact/TripRequest to pull one from, so the operator fills it in (or
+// shares the link) themselves instead.
 export async function createManifestForTrip(tripId: string): Promise<void> {
   const trip = await prisma.trip.findUniqueOrThrow({
     where: { id: tripId },
@@ -31,9 +37,9 @@ export async function createManifestForTrip(tripId: string): Promise<void> {
   });
 
   const { quote } = trip;
-  const leadEmail = quote.contact?.email ?? quote.tripRequest?.requestorEmail;
-  if (!leadEmail || !quote.selectedOption) return;
+  if (!quote.selectedOption) return;
 
+  const leadEmail = quote.contact?.email ?? quote.tripRequest?.requestorEmail;
   const leadFirstName = quote.contact?.firstName ?? quote.tripRequest?.requestorName?.split(" ")[0] ?? "";
   const leadLastName =
     quote.contact?.lastName ??
@@ -49,6 +55,8 @@ export async function createManifestForTrip(tripId: string): Promise<void> {
       lastName: leadLastName || null,
     },
   });
+
+  if (!leadEmail) return;
 
   const legs = revenueLegsOf(quote.selectedOption.itinerary);
   const firstLeg = legs[0];
