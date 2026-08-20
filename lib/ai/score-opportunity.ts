@@ -2,6 +2,12 @@ import { prisma } from "@/lib/prisma";
 import type { Aircraft, TripRequest } from "@/lib/generated/prisma/client";
 import { greatCircleDistanceNm, estimateFlightHours } from "@/lib/geo";
 import { resolveAirportCodesToIcao } from "@/lib/airport-server";
+import {
+  buildGapsForAircraft,
+  findFittingGap,
+  getActiveLegsByAircraft,
+  type Gap,
+} from "@/lib/aircraft-schedule";
 
 export type OpportunityScoreResult = {
   opportunityScore: "high" | "medium" | "low" | "pass";
@@ -12,13 +18,6 @@ export type OpportunityScoreResult = {
 };
 
 type Leg = { depAirport?: string; arrAirport?: string; date?: string };
-type ItineraryLeg = {
-  depAirport?: string | null;
-  arrAirport?: string | null;
-  date?: string | null;
-  depDt?: string | null;
-};
-type AircraftLeg = { depAirport: string; arrAirport: string; date: string };
 
 // Repositioning-time tiers, in estimated flight hours (no block-time buffer
 // added — this is a rough scoring heuristic, not a billing calculation).
@@ -27,76 +26,6 @@ type AircraftLeg = { depAirport: string; arrAirport: string; date: string };
 // threshold, the trip auto-passes instead of scoring low (see below).
 const REPO_HIGH_HOURS = 0.75;
 const REPO_MEDIUM_HOURS = 2;
-
-// A window of free time in an aircraft's schedule — between two confirmed
-// commitments, before the first, or after the last. "Free" doesn't mean
-// "at home doing nothing": an aircraft sitting at an away airport for days
-// between two legs of the same trip (waiting for a return flight) is just
-// as much a gap as one sitting idle at home — the whole point is that a
-// gap is an opportunity to fill, not a reason to treat the aircraft as
-// unavailable. startAnchor is where the aircraft arrives from (the start
-// of the gap); endAnchor is where it needs to depart from next — either
-// the next confirmed leg's departure airport, or home base if nothing
-// else is booked. Null dates mean unbounded (open now / nothing booked
-// after).
-type Gap = {
-  startAnchor: string;
-  startDate: string | null;
-  endAnchor: string;
-  endDate: string | null;
-};
-
-function legDateIso(leg: { date?: string | null; depDt?: string | null }): string | null {
-  return leg.date ?? (leg.depDt ? leg.depDt.slice(0, 10) : null);
-}
-
-// Every confirmed leg (revenue or repositioning — both are real scheduled
-// commitments) across every active trip on this tail, sorted
-// chronologically, turned into the sequence of gaps between them.
-function buildGapsForAircraft(
-  legs: AircraftLeg[],
-  currentBase: string,
-  homeBase: string
-): Gap[] {
-  const sorted = [...legs].sort((a, b) => a.date.localeCompare(b.date));
-  if (sorted.length === 0) {
-    return [{ startAnchor: currentBase, startDate: null, endAnchor: homeBase, endDate: null }];
-  }
-
-  const gaps: Gap[] = [
-    { startAnchor: currentBase, startDate: null, endAnchor: sorted[0].depAirport, endDate: sorted[0].date },
-  ];
-  for (let i = 0; i < sorted.length - 1; i++) {
-    gaps.push({
-      startAnchor: sorted[i].arrAirport,
-      startDate: sorted[i].date,
-      endAnchor: sorted[i + 1].depAirport,
-      endDate: sorted[i + 1].date,
-    });
-  }
-  gaps.push({
-    startAnchor: sorted[sorted.length - 1].arrAirport,
-    startDate: sorted[sorted.length - 1].date,
-    endAnchor: homeBase,
-    endDate: null,
-  });
-  return gaps;
-}
-
-// The gap this request's own date range fits cleanly inside, if any. A
-// request that starts in one gap but would still be in the air past that
-// gap's end date doesn't fit anywhere — fulfilling it would mean bumping
-// whatever's already confirmed next, which this function (deliberately)
-// doesn't offer as an option.
-function findFittingGap(gaps: Gap[], requestStart: string, requestEnd: string): Gap | null {
-  return (
-    gaps.find(
-      (g) =>
-        (g.startDate === null || g.startDate <= requestStart) &&
-        (g.endDate === null || requestEnd <= g.endDate)
-    ) ?? null
-  );
-}
 
 function repoLabel(hours: number): string {
   const minutes = Math.round(hours * 60);
@@ -208,35 +137,10 @@ export async function scoreOpportunity(
   // timeline below. Grouped by aircraft rather than checked one date at a
   // time, so a multi-day trip's "sitting" period between two of its own
   // legs is visible as free time, not lumped in as a blanket conflict.
-  const activeTrips = await prisma.trip.findMany({
-    where: {
-      operatorId: tripRequest.operatorId,
-      // Same cancelled-trip leak fixed elsewhere (Board/Trips/Calendar) —
-      // a cancelled trip's itinerary isn't a real scheduling commitment,
-      // but without this it still counted as one here, making the
-      // aircraft look booked/out-of-position for dates it's actually free.
-      status: { notIn: ["closed", "invoiced", "cancelled", "cancelled_by_operator"] },
-      quote: {
-        status: { not: "cancelled" },
-        selectedOption: { aircraftId: { in: reachable.map((a) => a.id) } },
-      },
-    },
-    include: { quote: { include: { selectedOption: true } } },
-  });
-
-  const legsByAircraft = new Map<string, AircraftLeg[]>();
-  for (const trip of activeTrips) {
-    const aircraftId = trip.quote.selectedOption?.aircraftId;
-    if (!aircraftId) continue;
-    const itinerary = (trip.quote.selectedOption?.itinerary as ItineraryLeg[] | null) ?? [];
-    const legList = legsByAircraft.get(aircraftId) ?? [];
-    for (const leg of itinerary) {
-      const date = legDateIso(leg);
-      if (!leg.depAirport || !leg.arrAirport || !date) continue;
-      legList.push({ depAirport: leg.depAirport, arrAirport: leg.arrAirport, date });
-    }
-    legsByAircraft.set(aircraftId, legList);
-  }
+  const legsByAircraft = await getActiveLegsByAircraft(
+    tripRequest.operatorId,
+    reachable.map((a) => a.id)
+  );
 
   // For each reachable aircraft, find whichever gap in its schedule (if
   // any) cleanly contains this request's whole date range. An aircraft

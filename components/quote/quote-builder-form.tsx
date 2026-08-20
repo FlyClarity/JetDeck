@@ -196,9 +196,18 @@ function makeRepoLeg(
 // leg is unconditional, same as the leading one. Whether it also comes home
 // *between* legs (instead of sitting overnight) is a separate, later choice
 // (see toggleReturnsToHomeBase) that a brand-new quote never starts with.
+//
+// The leading leg starts from startingPosition rather than homeBase — an
+// aircraft can be away on another trip when this one begins (e.g. sitting at
+// an away airport between two legs of an earlier booking), so "where it
+// actually is on this trip's first date" and "its permanent home base" are
+// often different airports. Falls back to homeBase when no schedule-derived
+// position is known (e.g. nothing else booked, so the aircraft really is at
+// home).
 function buildInitialLegs(
   requestedLegs: QuoteLegInput[],
   cruiseSpeedKts: number | null | undefined,
+  startingPosition: LegAirport | null,
   homeBase: LegAirport | null,
   blockTimeBufferHours: number
 ): LegRow[] {
@@ -206,9 +215,9 @@ function buildInitialLegs(
   const firstLeg = requestedLegs[0];
   const lastLeg = requestedLegs[requestedLegs.length - 1];
 
-  if (homeBase && firstLeg?.dep && needsRepositioning(homeBase, firstLeg.dep)) {
+  if (startingPosition && firstLeg?.dep && needsRepositioning(startingPosition, firstLeg.dep)) {
     rows.push(
-      makeRepoLeg(homeBase, firstLeg.dep, firstLeg.date, "dep", false, cruiseSpeedKts, blockTimeBufferHours)
+      makeRepoLeg(startingPosition, firstLeg.dep, firstLeg.date, "dep", false, cruiseSpeedKts, blockTimeBufferHours)
     );
   }
 
@@ -259,6 +268,7 @@ function QuoteOptionFields({
   namePrefix,
   aircraftList,
   airportsByIcao,
+  positionByAircraftId,
   existingBookings,
   initialValues,
   priceSuggestionPromise,
@@ -270,6 +280,13 @@ function QuoteOptionFields({
   namePrefix: string;
   aircraftList: Aircraft[];
   airportsByIcao: Record<string, AirportOption>;
+  // Where each aircraft is actually expected to be on this trip's first
+  // date, derived server-side from its own schedule (see
+  // lib/aircraft-schedule.ts) — not always the same as its permanent home
+  // base if it's away on another trip when this one starts. Missing entry
+  // (or no data at all) falls back to home base, same as before this
+  // existed.
+  positionByAircraftId?: Record<string, string>;
   existingBookings: ConflictCandidate[];
   initialValues: QuoteOptionValues;
   priceSuggestionPromise?: Promise<PriceSuggestion>;
@@ -298,6 +315,10 @@ function QuoteOptionFields({
   const homeBaseAirport: LegAirport | null = selectedAircraft
     ? airportsByIcao[selectedAircraft.homeBase] ?? { icao: selectedAircraft.homeBase }
     : null;
+  const expectedPositionIcao = selectedAircraft ? positionByAircraftId?.[selectedAircraft.id] : undefined;
+  const startingPositionAirport: LegAirport | null = expectedPositionIcao
+    ? airportsByIcao[expectedPositionIcao] ?? { icao: expectedPositionIcao }
+    : homeBaseAirport;
 
   const [legs, setLegs] = useState<LegRow[]>(() => {
     if (initialValues.legs && initialValues.legs.length > 0) {
@@ -354,6 +375,7 @@ function QuoteOptionFields({
     return buildInitialLegs(
       initialValues.requestedLegs,
       selectedAircraft?.cruiseSpeedKts,
+      startingPositionAirport,
       homeBaseAirport,
       defaultBlockTimeBufferHours
     );
@@ -364,6 +386,10 @@ function QuoteOptionFields({
   // aircraft changes. homeSide says which endpoint is home for a given
   // repositioning leg, since there can now be several of them (leading,
   // trailing, and any "between legs" pairs) rather than just one at index 0.
+  // The leading leg (betweenLegs: false, homeSide: "dep") resyncs to the new
+  // aircraft's expected starting position, not always its permanent home
+  // base — same reasoning as buildInitialLegs above. Every other repositioning
+  // leg (trailing, or a "between legs" pair) still resyncs to true home base.
   const [syncedAircraftId, setSyncedAircraftId] = useState(aircraftId);
   if (aircraftId !== syncedAircraftId) {
     setSyncedAircraftId(aircraftId);
@@ -373,7 +399,12 @@ function QuoteOptionFields({
           let dep = leg.dep;
           let arr = leg.arr;
           if (leg.auto && leg.billAs === "repositioning" && leg.homeSide) {
-            dep = leg.homeSide === "dep" ? homeBaseAirport : leg.dep;
+            dep =
+              leg.homeSide === "dep"
+                ? !leg.betweenLegs
+                  ? startingPositionAirport
+                  : homeBaseAirport
+                : leg.dep;
             arr = leg.homeSide === "arr" ? homeBaseAirport : leg.arr;
           }
           if (leg.dirty) return { ...leg, dep, arr };
@@ -1239,6 +1270,7 @@ export function QuoteBuilderForm({
   requestorLine,
   aircraftList,
   airportsByIcao,
+  positionByAircraftId,
   existingBookings,
   initialOptions,
   priceSuggestionPromise,
@@ -1255,6 +1287,10 @@ export function QuoteBuilderForm({
   requestorLine: string;
   aircraftList: Aircraft[];
   airportsByIcao: Record<string, AirportOption>;
+  // Where each aircraft is actually expected to be on this trip's first
+  // date (see lib/aircraft-schedule.ts) — falls back to home base per
+  // aircraft when omitted or when an aircraft has no entry.
+  positionByAircraftId?: Record<string, string>;
   // Other operator bookings already accepted or awaiting confirmation — fed
   // into a live, purely client-side overlap check (see
   // findConflictingBooking) so a double-booking surfaces the moment the
@@ -1431,6 +1467,7 @@ export function QuoteBuilderForm({
             namePrefix={`option_${i}_`}
             aircraftList={aircraftList}
             airportsByIcao={airportsByIcao}
+            positionByAircraftId={positionByAircraftId}
             existingBookings={existingBookings}
             initialValues={opt.initialValues}
             priceSuggestionPromise={i === 0 ? priceSuggestionPromise : undefined}

@@ -14,6 +14,7 @@ import {
 import { parseOptionFromFormData, parseOptionCount } from "@/lib/quote-option-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { revenueLegsOf, legDate, autoNightsAwayOf } from "@/lib/itinerary";
+import { buildGapsForAircraft, findAnchorForDate, getActiveLegsByAircraft } from "@/lib/aircraft-schedule";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { OriginalRequestPanel } from "@/components/quote/original-request-panel";
@@ -338,11 +339,38 @@ export default async function QuotePage({
     arrTime?: string | null;
   };
   const optionsStoredLegs = allOptions.map((o) => (o.itinerary as StoredLeg[]) ?? []);
+
+  // Where each aircraft is actually expected to be on this trip's first
+  // date — same schedule-derived positioning used on the New Quote page
+  // (see lib/aircraft-schedule.ts), so switching aircraft on an existing
+  // quote resyncs the leading repositioning leg to reality instead of
+  // always assuming the aircraft is sitting at its permanent home base.
+  const requestStartDate = revenueLegsOf(option.itinerary)[0]
+    ? legDate(revenueLegsOf(option.itinerary)[0])
+    : null;
+  const positionByAircraftId: Record<string, string> = {};
+  if (requestStartDate) {
+    const legsByAircraft = await getActiveLegsByAircraft(
+      operator.id,
+      aircraftList.map((a) => a.id)
+    );
+    for (const aircraft of aircraftList) {
+      const gaps = buildGapsForAircraft(
+        legsByAircraft.get(aircraft.id) ?? [],
+        aircraft.currentBase ?? aircraft.homeBase,
+        aircraft.homeBase
+      );
+      const anchor = findAnchorForDate(gaps, requestStartDate);
+      if (anchor) positionByAircraftId[aircraft.id] = anchor;
+    }
+  }
+
   const icaosToResolve = [
     ...optionsStoredLegs.flatMap((legs) =>
       legs.flatMap((l) => [l.depAirport, l.arrAirport].filter(Boolean) as string[])
     ),
     ...aircraftList.map((a) => a.homeBase),
+    ...Object.values(positionByAircraftId),
   ];
   const resolvedAirports = await getAirportsByIcao(icaosToResolve);
   // Keyed by both ICAO and IATA so a leg that stored the 3-letter code
@@ -708,6 +736,7 @@ export default async function QuotePage({
           requestorLine={requestorLine}
           aircraftList={aircraftList}
           airportsByIcao={airportsByIcao}
+          positionByAircraftId={positionByAircraftId}
           existingBookings={existingBookings}
           initialOptions={initialOptions}
           internalNotes={quote.internalNotes ?? ""}

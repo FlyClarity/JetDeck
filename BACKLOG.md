@@ -2368,3 +2368,50 @@ belongs in the Needs Review queue.
   everything, not just active bookings), and the manifest-print page
   looks up one specific trip by id for direct printing, not a list of
   "active" ones, so there's no leak to guard against.
+
+## Quote Builder's auto repositioning leg ignored an aircraft's real position
+
+User reported a live example: N243BA recommended for a new KCVO→KBPG
+trip on Aug 22, with a genuine conflict banner showing it's already
+away Aug 20–23 flying KSNA→KMYL→KSNA. Despite that, the auto-generated
+leading repositioning leg still started from KSNA — the aircraft's
+permanent home base — when the aircraft is actually sitting at KMYL
+that whole window. The Quote Builder had never accounted for an
+aircraft being mid-trip elsewhere; `buildInitialLegs` in
+`quote-builder-form.tsx` always repositioned from `Aircraft.homeBase`,
+a static field, with no notion of "where is this tail actually
+expected to be on this trip's first date."
+
+- ~~**Shared gap-schedule logic extracted — shipped**~~: the AI
+  opportunity scorer (`lib/ai/score-opportunity.ts`) already solved
+  this exact problem for its own positioning math —
+  `buildGapsForAircraft` turns every active trip's legs on a tail into
+  a sequence of gaps (where it's sitting between commitments, home
+  base before/after everything). Pulled that, `findFittingGap`, and
+  the active-trips-by-aircraft query out into a new
+  `lib/aircraft-schedule.ts` so both the scorer and the Quote Builder
+  read from one definition instead of two independent (and now,
+  provably out of sync) copies. Added `findAnchorForDate`: which gap a
+  single date falls inside, returning that gap's `startAnchor` — this
+  is the new piece, since scoring only ever needed "does the whole
+  request fit in one gap," not "where is the plane on this one date,"
+  including when the answer is a real conflict (as in the reported
+  case) rather than a clean fit.
+- ~~**Quote Builder resolves each aircraft's real starting position —
+  shipped**~~: `quotes/new/page.tsx` and `quotes/[id]/page.tsx` both
+  now compute a `positionByAircraftId` map (per active aircraft, the
+  `findAnchorForDate` result for the trip's first leg date) and pass
+  it down to `QuoteBuilderForm`. `buildInitialLegs` takes a new
+  `startingPosition` param, used only for the *leading* repositioning
+  leg — the trailing leg and any "between legs" pair still resolve to
+  true `homeBase`, since by the end of the trip (or between two of its
+  own revenue legs) the plane really is expected home, just not
+  necessarily *before* it. The aircraft-change resync effect (picking
+  a different aircraft from the dropdown mid-build) got the same
+  split: only the leg with `homeSide === "dep" && !betweenLegs`
+  (the true leading leg) resyncs to the new aircraft's expected
+  position; everything else still resyncs to home base as before.
+  Falls back to home base whenever no schedule data says otherwise
+  (nothing else booked, or genuinely just sitting at home) — this
+  never removes information, only replaces a wrong static guess with
+  a real one where the schedule has an answer.
