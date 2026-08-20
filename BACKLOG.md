@@ -2200,3 +2200,20 @@ availability) and Ops (what's the fleet doing).
     scoring/ranking side surfaces on the calendar itself — it's purely
     a read of confirmed reality, not yet where a ranked-aircraft
     suggestion would eventually show up.
+- ~~**Cancelled trip still showing on the Fleet Calendar, and stale on
+  its own detail page — fixed**~~: caught immediately on first real
+  use — a cancelled test trip (Quote genuinely cancelled) still
+  rendered as a booked block on the calendar, and its own `/ops/
+  trips/[id]` page still showed "Awaiting Payment." The calendar's
+  trips query never got the `quote.status !== "cancelled"` belt-and-
+  suspenders filter `/ops/trips` and `/ops/board` already carry —
+  added it. But that filter only ever hides a stale row from *list*
+  views; the Trip's own detail page doesn't filter, it just displays
+  whatever's in the row, so a Trip cancelled before the original
+  cascade fix existed (this test trip predates it) kept showing the
+  wrong status forever, on every direct visit. Fixed for real instead
+  of just hidden: `getScopedTrip` now self-heals on read — if the
+  linked Quote is cancelled but the Trip row isn't yet marked
+  `cancelled_by_operator`, it corrects the row right there before
+  rendering, the same write-on-read pattern the dashboard's stale-
+  quote self-heal already uses.

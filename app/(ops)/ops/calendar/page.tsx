@@ -57,6 +57,10 @@ export default async function FleetCalendarPage({
     where: {
       operatorId: operator.id,
       status: { notIn: ["closed", "invoiced", "cancelled_by_operator", "cancelled"] },
+      // Belt-and-suspenders, same as /ops/trips and /ops/board: a Trip row
+      // can be stuck on a stale pre-cancellation status if it was cancelled
+      // before the cascade fix existed, so also check the Quote directly.
+      quote: { status: { not: "cancelled" } },
     },
     include: { quote: { include: { selectedOption: true } } },
   });

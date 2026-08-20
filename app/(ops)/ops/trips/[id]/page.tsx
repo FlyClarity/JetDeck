@@ -43,6 +43,18 @@ async function getScopedTrip(id: string) {
     },
   });
   if (!trip) return null;
+
+  // Self-heal: a Trip row can be stuck on a stale pre-cancellation status
+  // (e.g. cancelled before the cascade fix existed) even though its Quote
+  // is unambiguously cancelled — this is the one place that display bug
+  // was still visible after the belt-and-suspenders list filters shipped,
+  // since a direct detail-page visit doesn't go through those. Fixed for
+  // real here instead of just hidden, so it stays fixed everywhere.
+  if (trip.quote.status === "cancelled" && trip.status !== "cancelled_by_operator") {
+    await prisma.trip.update({ where: { id: trip.id }, data: { status: "cancelled_by_operator" } });
+    trip.status = "cancelled_by_operator";
+  }
+
   return { trip, operator };
 }
 
