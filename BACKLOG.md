@@ -2287,3 +2287,50 @@ optimization would both need, useful for Sales and Ops both.
   self-service page's own "Add Another Passenger" action, just
   triggered by the operator instead of requiring them to open the
   lead's own manifest link first.
+
+## Trip lifecycle rework: Send to Ops, payment leaves the pipeline, stepper
+
+User flagged the sales/ops boundary was blurry, proposed a "Send to
+Ops" handoff, confirmed two specifics before this shipped: payment
+should gate a future "released" action (not built yet — "we have not
+gotten that far yet... but that's where the hold up would be", so this
+is documented intent, not an enforced gate today) and "Send to Ops"
+belongs in the Needs Review queue.
+
+- ~~**"Send to Ops" handoff — shipped**~~: new `Trip.sentToOps`
+  boolean (migration `20260819100000_trip_send_to_ops`), default
+  `false`. A Trip is created the moment the client signs and the hold
+  is placed, exactly as before — but it's no longer visible on the
+  Ops Board/Trips list/Calendar until this flips. `/inbox/review` gets
+  a new "Ready for ops" section (trip #, client, route, a link back to
+  the quote, a "Send to Ops" button) — the real sales→ops handoff
+  moment now, not Trip creation. Counts toward the "Needs Review" nav
+  badge too. Internal trips (`quotes/internal/new`) are created with
+  `sentToOps: true` directly — the operator created it themselves,
+  there's no sales review step to hand off from. Existing Trip rows
+  were backfilled to `true` by the migration so nothing already
+  visible in Ops disappeared — only new trips need the explicit click.
+- ~~**"Awaiting Payment" removed as a pipeline stage — shipped**~~:
+  `TRIP_STAGES` (`lib/trip.ts`) drops it; the board's first column is
+  now "Confirmed." `finalizeBooking` creates every Trip as
+  `"confirmed"` now regardless of `waivesCardHold` (that variable
+  still drives the actual hold-amount/session logic, just not the
+  initial status anymore). The migration folds any existing Trip still
+  sitting at `awaiting_payment` into `confirmed`.
+- ~~**Derived "Paid" indicator — shipped**~~: new `isTripPaid()` in
+  `lib/trip.ts`, computed from what's already tracked per payment
+  method (captured card hold / confirmed wire / confirmed ACH / cash-
+  on-account) rather than a new field to keep in sync by hand. Shown
+  as a Paid/Not Paid badge on `/ops/trips/[id]`. Not enforced as a
+  gate anywhere yet — there's no "released" action to gate, so nothing
+  to block. Documented in `Trip.status`'s schema comment and here so
+  the requirement isn't lost before "released" gets built for real.
+- ~~**Stage-progress stepper on the trip detail page — shipped**~~:
+  circles connected by lines, one per `TRIP_STAGES` entry, filled for
+  completed stages, outlined for the current one, muted for what's
+  ahead — built directly against the now-settled stage list rather
+  than the old one, so it isn't redone once "Awaiting Payment" moved
+  out. Reuses the same `STATUS_SHORT_LABELS` single-letter map from
+  the Fleet Calendar's tiles. Hidden entirely for a trip whose status
+  isn't one of the board's stages (cancelled, invoiced, closed) rather
+  than rendering a stepper that doesn't mean anything for those.

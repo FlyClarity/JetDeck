@@ -15,6 +15,9 @@ export default async function TripsPage() {
       // "cancelled" value pre-existing rows may still carry from before
       // cancelBooking started writing "cancelled_by_operator".
       status: { notIn: ["invoiced", "closed", "cancelled", "cancelled_by_operator"] },
+      // Not visible in Ops until sales sends it — see the Needs Review
+      // queue's "Ready for Ops" section.
+      sentToOps: true,
       // Belt-and-suspenders: cancelBooking cascades Quote cancellation to
       // Trip.status now, but this also self-heals any Trip rows left over
       // from before that cascade existed.

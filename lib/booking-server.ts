@@ -207,20 +207,25 @@ export async function finalizeBooking(quoteId: string): Promise<{ cardHoldUrl: s
   // sequence — one identifier for sales, ops, and the client to reference
   // through the whole lifecycle instead of two different numbers for the
   // same booking.
+  // "awaiting_payment" used to be a separate initial status here — payment
+  // is no longer a pipeline stage (see Trip.status's schema comment), so
+  // every Trip starts at "confirmed" regardless of waivesCardHold now.
+  // sentToOps defaults to false: this Trip isn't visible in Ops yet — sales
+  // reviews it from the Needs Review queue and sends it explicitly (see
+  // app/(app)/inbox/review/page.tsx), which is the real sales→ops handoff.
   const trip = await prisma.trip.create({
     data: {
       operatorId: quote.operatorId,
       tripNumber: quote.quoteNumber,
       quoteId: quote.id,
-      status: waivesCardHold ? "confirmed" : "awaiting_payment",
+      status: "confirmed",
     },
   });
 
-  // Sales→ops handoff: kick off passenger manifest collection immediately
-  // rather than waiting on a crew-assignment step that doesn't exist yet
-  // (see lib/manifest.ts) — starting collection as early as possible only
-  // helps. Best-effort: a failure here (e.g. email provider down) shouldn't
-  // break booking finalization, which is already in progress by this point.
+  // Manifest collection starts immediately rather than waiting on Send to
+  // Ops or crew assignment — starting as early as possible only helps (see
+  // lib/manifest.ts). Best-effort: a failure here (e.g. email provider
+  // down) shouldn't break booking finalization, already in progress here.
   try {
     await createManifestForTrip(trip.id);
   } catch (err) {

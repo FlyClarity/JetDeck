@@ -97,6 +97,10 @@ async function createInternalTrip(
       tripNumber: quoteNumber,
       quoteId: quote.id,
       status: "confirmed",
+      // No client/sales review step to hand off from — the operator just
+      // created this themselves, so there's nothing "Send to Ops" would
+      // meaningfully gate here.
+      sentToOps: true,
     },
   });
 

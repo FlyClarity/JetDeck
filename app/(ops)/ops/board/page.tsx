@@ -41,6 +41,9 @@ export default async function OpsBoardPage() {
     where: {
       operatorId: operator.id,
       status: { in: [...TRIP_STAGES] },
+      // Not visible in Ops until sales sends it — see the Needs Review
+      // queue's "Ready for Ops" section.
+      sentToOps: true,
       // Belt-and-suspenders, same as /ops/trips: a cancelled Quote should
       // never show as a live card here even if something failed to cascade
       // cancellation onto the Trip row itself.

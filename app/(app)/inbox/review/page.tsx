@@ -9,6 +9,7 @@ import {
   declinePendingBookingForOperator,
 } from "@/lib/booking-server";
 import { TRIP_PURPOSE_LABELS } from "@/lib/quote";
+import { revenueLegsOf } from "@/lib/itinerary";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -91,6 +92,18 @@ async function attachToQuoteAction(id: string, formData: FormData) {
   revalidatePath("/inbox/review");
 }
 
+async function sendToOpsAction(id: string) {
+  "use server";
+  const operator = await getCurrentOperator();
+  if (!operator) return;
+
+  await prisma.trip.updateMany({
+    where: { id, operatorId: operator.id },
+    data: { sentToOps: true },
+  });
+  revalidatePath("/inbox/review");
+}
+
 async function confirmPendingBookingAction(id: string) {
   "use server";
   const operator = await getCurrentOperator();
@@ -114,7 +127,7 @@ export default async function NeedsReviewPage() {
   const operator = await getCurrentOperator();
   if (!operator) return null;
 
-  const [emails, pendingQuotes] = await Promise.all([
+  const [emails, pendingQuotes, readyForOps] = await Promise.all([
     prisma.inboundEmail.findMany({
       where: { operatorId: operator.id, status: "needs_review" },
       orderBy: { receivedAt: "desc" },
@@ -124,20 +137,74 @@ export default async function NeedsReviewPage() {
       include: { tripRequest: true },
       orderBy: { acceptedAt: "desc" },
     }),
+    prisma.trip.findMany({
+      where: {
+        operatorId: operator.id,
+        sentToOps: false,
+        status: { notIn: ["cancelled", "cancelled_by_operator"] },
+      },
+      include: { quote: { include: { tripRequest: true, selectedOption: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
   ]);
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Needs Review</h1>
       <p className="mt-1 text-muted-foreground">
-        Emails the AI couldn&apos;t confidently triage, and bookings waiting on your
-        confirmation. Goal: keep this at zero.
+        Emails the AI couldn&apos;t confidently triage, bookings waiting on your
+        confirmation, and confirmed trips ready to hand off to ops. Goal: keep this at zero.
       </p>
 
-      {emails.length === 0 && pendingQuotes.length === 0 ? (
+      {emails.length === 0 && pendingQuotes.length === 0 && readyForOps.length === 0 ? (
         <p className="mt-8 text-muted-foreground">Nothing waiting — you&apos;re caught up.</p>
       ) : (
         <>
+          {readyForOps.length > 0 && (
+            <div className="mt-8 flex flex-col gap-6">
+              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Ready for ops
+              </h2>
+              {readyForOps.map((trip) => {
+                const sendAction = sendToOpsAction.bind(null, trip.id);
+                const legs = revenueLegsOf(trip.quote.selectedOption?.itinerary);
+                const firstLeg = legs[0];
+                const lastLeg = legs[legs.length - 1];
+                const route = firstLeg
+                  ? `${firstLeg.depAirport ?? "?"} → ${lastLeg?.arrAirport ?? "?"}`
+                  : "Route unknown";
+                const clientName = trip.quote.tripRequest?.requestorName;
+
+                return (
+                  <div key={trip.id} className="rounded-md border border-border p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="font-medium">
+                          {trip.tripNumber}
+                          {clientName && (
+                            <span className="font-normal text-muted-foreground"> · {clientName}</span>
+                          )}
+                        </p>
+                        <p className="text-sm text-muted-foreground">{route}</p>
+                      </div>
+                      <Link
+                        href={`/quotes/${trip.quote.id}`}
+                        className="shrink-0 text-sm text-foreground underline underline-offset-4"
+                      >
+                        View quote
+                      </Link>
+                    </div>
+                    <form action={sendAction} className="mt-4">
+                      <Button type="submit" size="sm">
+                        Send to Ops
+                      </Button>
+                    </form>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {pendingQuotes.length > 0 && (
             <div className="mt-8 flex flex-col gap-6">
               <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -215,7 +282,7 @@ export default async function NeedsReviewPage() {
 
           {emails.length > 0 && (
             <div className="mt-8 flex flex-col gap-6">
-              {pendingQuotes.length > 0 && (
+              {(readyForOps.length > 0 || pendingQuotes.length > 0) && (
                 <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                   Emails
                 </h2>

@@ -401,15 +401,27 @@ model Trip {
   quote      Quote    @relation(fields: [quoteId], references: [id])
 
   status String @default("confirmed")
-  // "confirmed" | "awaiting_payment" | "ops_review" | "crew_assigned"
-  // | "pre_flight" | "in_flight" | "completed" | "invoiced" | "closed"
-  // | "cancelled_by_operator" (cascaded from Quote.status when an operator
-  // cancels an already-accepted booking — "cancelled_by_client" and
-  // "cancelled_weather" are reserved for when those flows exist, nothing
-  // sets them yet) | "manifest_pending" | "manifest_complete" | "released"
-  // (reserved — the Ops Build Brief's proposed flow, not wired to any
-  // transition yet; "crew_assigned" is the only one of this group actually
-  // set today, by assignCrew in ops/trips/[id])
+  // "confirmed" | "ops_review" | "crew_assigned" | "pre_flight" | "in_flight"
+  // | "completed" | "invoiced" | "closed" | "cancelled_by_operator"
+  // (cascaded from Quote.status when an operator cancels an already-accepted
+  // booking — "cancelled_by_client" and "cancelled_weather" are reserved for
+  // when those flows exist, nothing sets them yet) | "manifest_pending" |
+  // "manifest_complete" | "released" (reserved — the Ops Build Brief's
+  // proposed flow, not wired to any transition yet; "crew_assigned" is the
+  // only one of this group actually set today, by assignCrew in
+  // ops/trips/[id]). "awaiting_payment" USED to be the first stage here —
+  // removed: payment is no longer a pipeline stage, it's tracked separately
+  // (derived from the linked Quote, see lib/trip.ts's isTripPaid) and will
+  // gate the not-yet-built "released" action once that exists, rather than
+  // gating entry into Ops at all.
+
+  // Gates visibility on the Ops Board/Trips list/Calendar — a Trip exists
+  // the moment the client signs and the hold is placed (same as always),
+  // but Ops doesn't see it until sales reviews it from the Needs Review
+  // queue and clicks "Send to Ops". Existing trips were backfilled to true
+  // by the migration that added this column, so nothing already visible in
+  // Ops disappeared — only new trips require the explicit handoff.
+  sentToOps Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

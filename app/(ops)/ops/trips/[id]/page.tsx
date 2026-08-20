@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
-import { STATUS_LABELS, TRIP_STAGES } from "@/lib/trip";
+import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { createManifestForTrip } from "@/lib/manifest";
 import { Button } from "@/components/ui/button";
@@ -17,11 +17,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getAppUrl } from "@/lib/url";
+import { cn } from "@/lib/utils";
 
 // Crew assignment only ever moves a trip forward out of the pre-crew
 // statuses — never regresses a trip that's already further along (e.g.
 // re-assigning crew on an in-flight trip shouldn't knock it back a stage).
-const PRE_CREW_STATUSES = ["confirmed", "awaiting_payment", "ops_review"];
+const PRE_CREW_STATUSES = ["confirmed", "ops_review"];
 
 async function getScopedTrip(id: string) {
   const { clerkOrgId } = await getTenantContext();
@@ -185,6 +186,8 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
     orderBy: { name: "asc" },
   });
   const assignWithId = assignCrew.bind(null, trip.id);
+  const paid = isTripPaid(trip.quote);
+  const stageIndex = TRIP_STAGES.findIndex((s) => s === trip.status);
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
@@ -195,10 +198,58 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
             {requestorName} · {aircraftLabel}
           </p>
         </div>
-        <span className="rounded-full bg-muted px-2.5 py-1 text-sm font-medium text-muted-foreground">
-          {STATUS_LABELS[trip.status] ?? trip.status}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span
+            className={cn(
+              "rounded-full px-2.5 py-1 text-sm font-medium",
+              paid ? "bg-accent/10 text-accent" : "bg-muted text-muted-foreground"
+            )}
+          >
+            {paid ? "Paid" : "Not Paid"}
+          </span>
+          <span className="rounded-full bg-muted px-2.5 py-1 text-sm font-medium text-muted-foreground">
+            {STATUS_LABELS[trip.status] ?? trip.status}
+          </span>
+        </div>
       </div>
+
+      {stageIndex !== -1 && (
+        <div className="mt-6 flex items-start">
+          {TRIP_STAGES.map((stage, i) => {
+            const isDone = stageIndex > i;
+            const isCurrent = stageIndex === i;
+            return (
+              <div key={stage} className="flex flex-1 items-center last:flex-none">
+                <div className="flex flex-col items-center gap-1">
+                  <div
+                    className={cn(
+                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-medium",
+                      isDone
+                        ? "bg-primary text-primary-foreground"
+                        : isCurrent
+                          ? "border-2 border-primary text-primary"
+                          : "border border-border text-muted-foreground"
+                    )}
+                  >
+                    {isDone ? "✓" : STATUS_SHORT_LABELS[stage]}
+                  </div>
+                  <span
+                    className={cn(
+                      "w-16 text-center text-[10px]",
+                      isCurrent ? "font-medium text-foreground" : "text-muted-foreground"
+                    )}
+                  >
+                    {STATUS_LABELS[stage]}
+                  </span>
+                </div>
+                {i < TRIP_STAGES.length - 1 && (
+                  <div className={cn("mb-4 h-px flex-1", isDone ? "bg-primary" : "bg-border")} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="mt-6 rounded-md border border-border p-4">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>

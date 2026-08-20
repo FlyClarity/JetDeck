@@ -42,7 +42,17 @@ export default async function AppLayout({
         prisma.quote.count({
           where: { operatorId: operator.id, status: "pending_confirmation" },
         }),
-      ]).then(([emailCount, pendingBookingCount]) => emailCount + pendingBookingCount)
+        prisma.trip.count({
+          where: {
+            operatorId: operator.id,
+            sentToOps: false,
+            status: { notIn: ["cancelled", "cancelled_by_operator"] },
+          },
+        }),
+      ]).then(
+        ([emailCount, pendingBookingCount, readyForOpsCount]) =>
+          emailCount + pendingBookingCount + readyForOpsCount
+      )
     : 0;
 
   if (!operator) {
