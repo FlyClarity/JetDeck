@@ -8,7 +8,8 @@ import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib
 import { addHoursAcrossTimezones, type TimeWithDayOffset } from "@/lib/time";
 import {
   findConflictingBooking,
-  routeAndDateText,
+  revenueLegsOf,
+  legDate,
   formatIsoDate,
   type ConflictCandidate,
 } from "@/lib/itinerary";
@@ -763,9 +764,23 @@ function QuoteOptionFields({
                 className="underline underline-offset-4"
               >
                 {conflict.booking.quoteNumber}
-              </a>{" "}
-              ({routeAndDateText(conflict.booking.itinerary).route}). Pick a different aircraft, or
-              adjust this trip&apos;s dates to avoid the overlap.
+              </a>
+              :
+            </p>
+            {/* Full leg-by-leg breakdown, not just the collapsed first-dep →
+                last-arr route — a multi-leg conflicting trip (e.g. KSNA →
+                KMYL → KSNA) previously collapsed to "KSNA → KSNA", hiding
+                exactly the detail needed to judge whether/how to adjust this
+                quote around it without clicking through. */}
+            <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
+              {revenueLegsOf(conflict.booking.itinerary).map((leg, i) => (
+                <span key={i}>
+                  {leg.depAirport} → {leg.arrAirport} — {legDate(leg)}
+                </span>
+              ))}
+            </div>
+            <p className="mt-2 text-sm">
+              Pick a different aircraft, or adjust this trip&apos;s dates to avoid the overlap.
             </p>
           </div>
         )}

@@ -2217,3 +2217,44 @@ availability) and Ops (what's the fleet doing).
   `cancelled_by_operator`, it corrects the row right there before
   rendering, the same write-on-read pattern the dashboard's stale-
   quote self-heal already uses.
+
+## Fleet Calendar v2: per-day legs, tile content, conflict detail
+
+Follow-up round on the Fleet Calendar right after v1 shipped, plus a
+long-running product-direction conversation (user: JetDeck's quoting
+needs to be genuinely competitive with Hamilton.ai's — instant aircraft
+matching, live fleet availability, dynamic pricing — not just triage +
+one portal; shared Hamilton's feature list for reference). Landed on
+building this out incrementally starting with the Fleet Calendar,
+since it's the shared foundation multi-aircraft matching and schedule
+optimization would both need, useful for Sales and Ops both.
+
+- ~~**Calendar showed one flat "busy" block per trip instead of actual
+  legs — fixed**~~: a 4-day trip (KSNA→KMYL 8/20, sits, KMYL→KSNA 8/23)
+  showed the same trip-number tile on every day in between, with no
+  way to tell flying days from sitting-there days. Rewrote the day
+  computation: within each of `awayWindows()`'s away segments, a day
+  with a leg departing shows that leg's route; a day with no leg
+  shows a lighter "Transient <ICAO>" tag naming wherever the aircraft
+  last landed (walking the sorted leg list forward to find it) — not
+  just the trip number repeated.
+- ~~**Tiles now show client name, leg/transient info, and a stage
+  badge — shipped**~~: each tile is a small card (client name +
+  1-letter stage badge on top, route or "Transient X" below) instead
+  of a bare trip-number pill. New `STATUS_SHORT_LABELS` in
+  `lib/trip.ts` (A/C/O/W/P/I/D) — deliberately kept to one small,
+  easy-to-edit map rather than baked into the calendar itself, since
+  the user is still actively reworking the trip lifecycle's stage
+  names/definitions and this will need to change again once that
+  settles. Scope stayed Trips-only (confirmed bookings) per the
+  user's steer — not pulling in not-yet-accepted Quotes as tentative
+  tiles, at least not yet.
+- ~~**Conflict warnings now show leg-by-leg detail instead of a bare
+  link — shipped**~~: both the Quote Builder's live double-booking
+  banner and the persisted/emailed `conflictWarning` text collapsed a
+  multi-leg conflicting trip to its first-dep → last-arr span (e.g.
+  "KSNA → KSNA" for a KSNA→KMYL→KSNA trip, hiding the actual routing
+  entirely) and made the operator click through to `/quotes/[id]` to
+  see what was really going on. Both now list every leg's route and
+  date inline, using the same itinerary data the link already pointed
+  at — no new query, just surfacing what was already being fetched.

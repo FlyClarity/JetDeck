@@ -11,6 +11,21 @@ export const TRIP_STAGES = [
   "completed",
 ] as const;
 
+// One-letter stage badges for tight spaces (the Fleet Calendar's tiles).
+// Explicitly provisional — the user is still actively reworking the trip
+// lifecycle's stage names/definitions, so this is deliberately a single,
+// easy-to-edit map rather than baked into every place that shows a stage,
+// so it's a one-line change per stage once that taxonomy settles.
+export const STATUS_SHORT_LABELS: Record<string, string> = {
+  awaiting_payment: "A",
+  confirmed: "C",
+  ops_review: "O",
+  crew_assigned: "W", // creW — "C" already taken by Confirmed
+  pre_flight: "P",
+  in_flight: "I",
+  completed: "D", // Done
+};
+
 export const STATUS_LABELS: Record<string, string> = {
   confirmed: "Confirmed",
   awaiting_payment: "Awaiting Payment",

@@ -3,6 +3,8 @@ import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
 import { awayWindows } from "@/lib/itinerary";
 import { categoryLabel } from "@/lib/aircraft";
+import { STATUS_SHORT_LABELS } from "@/lib/trip";
+import { TRIP_PURPOSE_LABELS } from "@/lib/quote";
 import { cn } from "@/lib/utils";
 
 const WINDOW_DAYS = 14;
@@ -25,15 +27,42 @@ function formatShort(iso: string): { weekday: string; day: string } {
   };
 }
 
-type AwayBlock = { start: string; end: string; tripId: string; tripNumber: string };
+type StoredLegLike = { depAirport?: string | null; arrAirport?: string | null; date?: string | null };
+
+// Every leg on the date in question — a day can show more than one if a
+// repositioning leg and a revenue leg both fall on it.
+function legsForDate(legs: StoredLegLike[], date: string): { dep: string; arr: string }[] {
+  return legs
+    .filter((l) => l.date === date && l.depAirport && l.arrAirport)
+    .map((l) => ({ dep: l.depAirport as string, arr: l.arrAirport as string }));
+}
+
+// Where the aircraft is sitting on a day with no leg of its own — wherever
+// it last landed, at or before this date. legs must already be sorted
+// chronologically.
+function sittingAirportFor(legs: StoredLegLike[], date: string): string | null {
+  let airport: string | null = null;
+  for (const leg of legs) {
+    if (leg.date && leg.arrAirport && leg.date <= date) airport = leg.arrAirport;
+  }
+  return airport;
+}
+
+type Tile = {
+  tripId: string;
+  tripNumber: string;
+  clientName: string;
+  stage: string;
+} & ({ kind: "leg"; legs: { dep: string; arr: string }[] } | { kind: "transient"; airport: string });
 
 // The Fleet Calendar — where an aircraft is booked, day by day, across the
 // whole fleet at once. Reuses lib/itinerary.ts's awayWindows() exactly as
-// conflict-checking and the AI opportunity scorer already do, so "busy" here
-// means the same thing it means everywhere else in the app — not a
-// separate reimplementation that could quietly drift out of sync with
-// those. Confirmed Trips only for now; pending/unaccepted quotes (tentative
-// holds) aren't shown yet — a real but separate follow-up.
+// conflict-checking and the AI opportunity scorer already do, so "away"
+// here means the same thing it means everywhere else in the app. Within an
+// away window, each day is either a flying day (a leg actually departs)
+// or a transient day (sitting wherever the last leg landed) — not just one
+// flat "busy" block for the whole trip. Confirmed Trips only for now;
+// pending/unaccepted quotes (tentative holds) aren't shown yet.
 export default async function FleetCalendarPage({
   searchParams,
 }: {
@@ -62,27 +91,45 @@ export default async function FleetCalendarPage({
       // before the cascade fix existed, so also check the Quote directly.
       quote: { status: { not: "cancelled" } },
     },
-    include: { quote: { include: { selectedOption: true } } },
+    include: { quote: { include: { selectedOption: true, tripRequest: true, contact: true } } },
   });
 
-  const blocksByAircraft = new Map<string, AwayBlock[]>();
+  function clientNameFor(trip: (typeof trips)[number]): string {
+    const quote = trip.quote;
+    if (quote.contact) return `${quote.contact.firstName} ${quote.contact.lastName}`;
+    if (quote.tripRequest) return quote.tripRequest.requestorName;
+    if (quote.tripPurpose) return TRIP_PURPOSE_LABELS[quote.tripPurpose] ?? "Internal";
+    return "—";
+  }
+
+  const tilesByAircraft = new Map<string, Map<string, Tile>>();
   for (const trip of trips) {
     const option = trip.quote.selectedOption;
     const aircraftId = option?.aircraftId;
     if (!aircraftId) continue;
-    for (const [blockStart, blockEnd] of awayWindows(option.itinerary)) {
-      // Skip anything entirely outside the visible window — no point
-      // carrying it into the per-day lookup below.
-      if (blockEnd < startIso || blockStart > endIso) continue;
-      const list = blocksByAircraft.get(aircraftId) ?? [];
-      list.push({ start: blockStart, end: blockEnd, tripId: trip.id, tripNumber: trip.tripNumber });
-      blocksByAircraft.set(aircraftId, list);
-    }
-  }
 
-  function blockFor(aircraftId: string, date: string): AwayBlock | null {
-    const blocks = blocksByAircraft.get(aircraftId) ?? [];
-    return blocks.find((b) => b.start <= date && date <= b.end) ?? null;
+    const allLegs = ((option.itinerary as StoredLegLike[]) ?? [])
+      .filter((l) => l.date && l.depAirport && l.arrAirport)
+      .sort((a, b) => (a.date as string).localeCompare(b.date as string));
+    const clientName = clientNameFor(trip);
+    const stage = STATUS_SHORT_LABELS[trip.status] ?? "?";
+    const aircraftMap = tilesByAircraft.get(aircraftId) ?? new Map<string, Tile>();
+
+    for (const [blockStart, blockEnd] of awayWindows(option.itinerary)) {
+      if (blockEnd < startIso || blockStart > endIso) continue;
+      for (const date of dates) {
+        if (date < blockStart || date > blockEnd) continue;
+        const legsToday = legsForDate(allLegs, date);
+        if (legsToday.length > 0) {
+          aircraftMap.set(date, { tripId: trip.id, tripNumber: trip.tripNumber, clientName, stage, kind: "leg", legs: legsToday });
+          continue;
+        }
+        const airport = sittingAirportFor(allLegs, date);
+        if (!airport) continue;
+        aircraftMap.set(date, { tripId: trip.id, tripNumber: trip.tripNumber, clientName, stage, kind: "transient", airport });
+      }
+    }
+    tilesByAircraft.set(aircraftId, aircraftMap);
   }
 
   return (
@@ -132,7 +179,7 @@ export default async function FleetCalendarPage({
                     <th
                       key={date}
                       className={cn(
-                        "min-w-16 border-l border-border px-1 py-2 text-center text-xs font-medium text-muted-foreground",
+                        "min-w-32 border-l border-border px-1 py-2 text-center text-xs font-medium text-muted-foreground",
                         date === todayIso && "bg-accent/10"
                       )}
                     >
@@ -153,25 +200,45 @@ export default async function FleetCalendarPage({
                     </p>
                   </td>
                   {dates.map((date) => {
-                    const block = blockFor(a.id, date);
+                    const tile = tilesByAircraft.get(a.id)?.get(date);
                     return (
                       <td
                         key={date}
                         className={cn(
-                          "min-w-16 border-l border-border px-1 py-2 text-center align-middle",
+                          "min-w-32 border-l border-border p-1 align-middle",
                           date === todayIso && "bg-accent/10"
                         )}
                       >
-                        {block ? (
+                        {tile ? (
                           <Link
-                            href={`/ops/trips/${block.tripId}`}
-                            title={block.tripNumber}
-                            className="block rounded bg-primary px-1 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+                            href={`/ops/trips/${tile.tripId}`}
+                            title={`${tile.tripNumber} — ${tile.clientName}`}
+                            className={cn(
+                              "block rounded px-1.5 py-1 text-left text-xs leading-tight hover:opacity-90",
+                              tile.kind === "leg"
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground"
+                            )}
                           >
-                            {block.tripNumber}
+                            <div className="flex items-center gap-1 font-medium">
+                              <span
+                                className={cn(
+                                  "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-[9px]",
+                                  tile.kind === "leg" ? "bg-primary-foreground/25" : "bg-foreground/10"
+                                )}
+                              >
+                                {tile.stage}
+                              </span>
+                              <span className="truncate">{tile.clientName}</span>
+                            </div>
+                            <div className="mt-0.5 truncate opacity-80">
+                              {tile.kind === "leg"
+                                ? tile.legs.map((l) => `${l.dep}→${l.arr}`).join(", ")
+                                : `Transient ${tile.airport}`}
+                            </div>
                           </Link>
                         ) : (
-                          <span className="block rounded bg-muted/40 px-1 py-1 text-xs text-muted-foreground">
+                          <span className="block rounded bg-muted/40 px-1.5 py-1 text-center text-xs text-muted-foreground">
                             Open
                           </span>
                         )}

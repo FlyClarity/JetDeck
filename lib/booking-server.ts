@@ -59,7 +59,14 @@ export async function findBookingConflict(quote: {
     conflict.startDate === conflict.endDate
       ? formatIsoDate(conflict.startDate)
       : `${formatIsoDate(conflict.startDate)} – ${formatIsoDate(conflict.endDate)}`;
-  return `Also booked on this aircraft ${label} via quote ${conflict.booking.quoteNumber}.`;
+  // Full leg-by-leg breakdown rather than the collapsed first-dep → last-arr
+  // route — same reasoning as the Quote Builder's live conflict banner: a
+  // multi-leg conflicting trip otherwise reads as a single flat span with no
+  // way to tell what it's actually doing without opening it.
+  const legsText = revenueLegsOf(conflict.booking.itinerary)
+    .map((leg) => `${leg.depAirport} → ${leg.arrAirport} (${legDate(leg)})`)
+    .join(", ");
+  return `Also booked on this aircraft ${label} via quote ${conflict.booking.quoteNumber}: ${legsText}.`;
 }
 
 // Sends the client's "you're confirmed" email (routing, wire instructions,
