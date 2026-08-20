@@ -211,8 +211,15 @@ export async function scoreOpportunity(
   const activeTrips = await prisma.trip.findMany({
     where: {
       operatorId: tripRequest.operatorId,
-      status: { notIn: ["closed", "invoiced"] },
-      quote: { selectedOption: { aircraftId: { in: reachable.map((a) => a.id) } } },
+      // Same cancelled-trip leak fixed elsewhere (Board/Trips/Calendar) —
+      // a cancelled trip's itinerary isn't a real scheduling commitment,
+      // but without this it still counted as one here, making the
+      // aircraft look booked/out-of-position for dates it's actually free.
+      status: { notIn: ["closed", "invoiced", "cancelled", "cancelled_by_operator"] },
+      quote: {
+        status: { not: "cancelled" },
+        selectedOption: { aircraftId: { in: reachable.map((a) => a.id) } },
+      },
     },
     include: { quote: { include: { selectedOption: true } } },
   });

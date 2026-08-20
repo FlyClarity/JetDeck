@@ -2334,3 +2334,37 @@ belongs in the Needs Review queue.
   the Fleet Calendar's tiles. Hidden entirely for a trip whose status
   isn't one of the board's stages (cancelled, invoiced, closed) rather
   than rendering a stepper that doesn't mean anything for those.
+
+- ~~**Cancelled trips still counted as real commitments in AI
+  opportunity scoring — fixed**~~: the same leak fixed on `/ops/trips`,
+  `/ops/board`, and the Fleet Calendar earlier this file, found a
+  fourth time — user reported a new trip request being scored against
+  a cancelled trip's itinerary (a cancelled KAMA departure was still
+  showing up in the reasoning as a real repositioning constraint on
+  N243BA). `scoreOpportunity`'s `activeTrips` query
+  (`lib/ai/score-opportunity.ts`), which feeds `buildGapsForAircraft`
+  for every aircraft's gap-fit/positioning math, had `status: {
+  notIn: ["closed", "invoiced"] }` with no cancellation exclusion at
+  all — no `cancelled`/`cancelled_by_operator` in the list, and no
+  `quote.status !== "cancelled"` belt-and-suspenders check either, so
+  it was the one query site that had never gotten either half of the
+  fix. Added both: `status: { notIn: ["closed", "invoiced",
+  "cancelled", "cancelled_by_operator"] }` plus `quote: { status: {
+  not: "cancelled" }, ... }`. A cancelled trip's legs no longer factor
+  into an aircraft's repositioning time or gap availability when
+  scoring new requests. Four instances of this exact bug class in one
+  file this session prompted a deliberate sweep of every remaining
+  `prisma.trip.findMany`/`findFirst` call site rather than waiting for
+  the next one to surface by accident — turned up a fifth, worse one:
+  `sendManifestReminders` (`lib/manifest.ts`, run by the daily
+  manifest-reminders cron) had the same bare `status: { notIn:
+  ["completed", "invoiced", "closed"] }` with no cancellation
+  exclusion, meaning a cancelled trip with an incomplete manifest
+  would keep emailing the client "your flight is coming up, please
+  complete your passenger information" — actively wrong, not just a
+  stale UI row. Fixed the same way. Checked the other two remaining
+  `Trip` query sites and left them alone on purpose: `/api/search`
+  intentionally returns cancelled trips too (a lookup tool should find
+  everything, not just active bookings), and the manifest-print page
+  looks up one specific trip by id for direct printing, not a list of
+  "active" ones, so there's no leak to guard against.

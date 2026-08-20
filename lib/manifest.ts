@@ -91,7 +91,10 @@ const REMINDER_THRESHOLDS: { type: string; hours: number }[] = [
 // hours-until-departure rather than assuming how recently it last ran.
 export async function sendManifestReminders(): Promise<{ sent: number }> {
   const trips = await prisma.trip.findMany({
-    where: { status: { notIn: ["completed", "invoiced", "closed"] } },
+    where: {
+      status: { notIn: ["completed", "invoiced", "closed", "cancelled", "cancelled_by_operator"] },
+      quote: { status: { not: "cancelled" } },
+    },
     include: {
       operator: true,
       passengers: true,
