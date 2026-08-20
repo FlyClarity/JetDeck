@@ -19,7 +19,7 @@ export default async function OpsLayout({
   return (
     <div className="flex flex-1 flex-col">
       <EscapeToBack />
-      <AppHeader />
+      <AppHeader showFleet={operator.operatorType !== "broker"} />
       <main className="flex flex-1 flex-col">{children}</main>
     </div>
   );

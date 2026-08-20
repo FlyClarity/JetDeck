@@ -2147,3 +2147,56 @@ Follow-ups from testing the above:
   explain *why* the cron itself seemed to be missing this, but no
   longer depends on answering that question for the operator's actual
   visible experience to be correct.
+
+## Fleet Calendar (v1)
+
+User pushed on the quoting engine feeling "too simple" compared to a
+competitor (Hamilton AI), pasting their marketing copy. Investigated
+what already existed before reacting: `lib/ai/score-opportunity.ts`
+already does real cross-fleet gap analysis on every inbound request —
+builds each aircraft's actual schedule from every confirmed leg,
+excludes aircraft that can't physically make the trip or have no
+open slot, ranks by *productive* repositioning (lands well-placed for
+its next job, not just cheapest to grab), and names a specific
+recommended tail number with reasoning. That's already comparable to
+(arguably more nuanced in the ranking than) Hamilton's "instant
+aircraft matching." The real, honest gaps: no visual fleet calendar,
+only one aircraft ever surfaced per request (not a ranked shortlist),
+static (not calendar/demand-based) pricing, no quote history/
+collaboration. Recommended starting with the calendar, since the
+other two — ranked multi-aircraft suggestions, demand-based pricing —
+would build on top of having the schedule visible as a real surface
+rather than only existing as a headless calculation. User agreed, and
+specifically wants it useful from both Sales (quoting against
+availability) and Ops (what's the fleet doing).
+
+- ~~**`/ops/calendar` — shipped**~~: one row per active aircraft, one
+  column per day (14-day window, Prev/Next/Today navigation via a
+  `?start=` param), a cell showing the trip number when that aircraft
+  is booked that day or "Open" when it isn't — click a booked cell to
+  jump straight to that trip.
+  - Reuses `awayWindows()` from `lib/itinerary.ts` (newly exported)
+    for the day-by-day "is this aircraft busy" check — the exact same
+    away-window logic conflict-checking and the AI opportunity scorer
+    already rely on, rather than a second implementation of "when is
+    an aircraft away" that could quietly drift from those over time.
+  - Confirmed Trips only for v1 — a sent-but-not-yet-accepted quote
+    doesn't show as a tentative hold. Real gap, but a separate one:
+    that's closer to the existing (currently invisible-to-the-
+    operator) conflict-warning system than to "what's actually
+    booked."
+  - Added to both the Sales and Ops nav (same page either way — the
+    Sales/Ops switcher just reflects landing on an `/ops`-prefixed
+    page, same as any other cross-mode link already does), gated on
+    `showFleet` the same as the Fleet link itself (a broker has no
+    owned aircraft to show a calendar for). `(ops)/layout.tsx` didn't
+    previously pass `operatorType` through to `AppHeader` at all — now
+    does, matching how `(app)/layout.tsx` already gates its own Fleet
+    link.
+  - Not built yet: pending-quote tentative holds, a month view (14
+    days only), any visual distinction between "flying that day" vs.
+    "sitting away between two legs of the same trip" (both just read
+    as one plain "booked" block for now), and nothing from the
+    scoring/ranking side surfaces on the calendar itself — it's purely
+    a read of confirmed reality, not yet where a ranked-aircraft
+    suggestion would eventually show up.

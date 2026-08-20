@@ -106,7 +106,12 @@ export type BookingConflict = {
 // Quote Builder), so its presence between two revenue legs, chronologically,
 // is a reliable signal that the gap was bridged rather than sat through —
 // no need to know the aircraft's home base to tell the two cases apart.
-function awayWindows(itinerary: unknown): [string, string][] {
+// Exported for the Fleet Calendar (app/(ops)/ops/calendar/page.tsx), which
+// reuses this exact away-window concept to mark an aircraft busy on a given
+// calendar day — the same "away the whole gap unless bridged by a
+// returns-to-base repositioning leg" logic conflict-checking already relies
+// on, not a separate reimplementation.
+export function awayWindows(itinerary: unknown): [string, string][] {
   const legs = (itinerary as StoredLeg[]) ?? [];
   const dated = legs
     .map((l) => ({ billAs: l.billAs, iso: legDateIso(l) }))

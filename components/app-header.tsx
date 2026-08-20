@@ -24,12 +24,14 @@ export function AppHeader({
   const salesItems: { href: string; label: string; badge?: number }[] = [
     { href: "/dashboard", label: "Dashboard" },
     ...(showFleet ? [{ href: "/fleet", label: "Fleet" }] : []),
+    ...(showFleet ? [{ href: "/ops/calendar", label: "Calendar" }] : []),
     { href: "/contacts", label: "Contacts" },
     { href: "/inbox/review", label: "Needs Review", badge: needsReviewCount },
     { href: "/settings", label: "Settings" },
   ];
   const opsItems: { href: string; label: string; badge?: number }[] = [
     { href: "/ops/board", label: "Board" },
+    ...(showFleet ? [{ href: "/ops/calendar", label: "Calendar" }] : []),
     { href: "/ops/trips", label: "Trips" },
     { href: "/ops/crew", label: "Crew" },
   ];
