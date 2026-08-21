@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { nightsBetween } from "@/lib/geo";
 
 export type AircraftLeg = { depAirport: string; arrAirport: string; date: string };
 
@@ -76,11 +77,40 @@ export function findFittingGap(gaps: Gap[], requestStart: string, requestEnd: st
 // return null there — a real conflict the operator still needs to resolve,
 // but the repositioning leg should still start from where the plane actually
 // is instead of always defaulting to its permanent home base).
-export function findAnchorForDate(gaps: Gap[], date: string): string | null {
-  const gap = gaps.find(
-    (g) => (g.startDate === null || g.startDate <= date) && (g.endDate === null || date <= g.endDate)
+export function findGapForDate(gaps: Gap[], date: string): Gap | null {
+  return (
+    gaps.find(
+      (g) => (g.startDate === null || g.startDate <= date) && (g.endDate === null || date <= g.endDate)
+    ) ?? null
   );
-  return gap?.startAnchor ?? null;
+}
+
+export function findAnchorForDate(gaps: Gap[], date: string): string | null {
+  return findGapForDate(gaps, date)?.startAnchor ?? null;
+}
+
+// Beyond this many idle days, repositioning the aircraft to wherever its
+// next confirmed commitment happens to depart from stops being worth it —
+// holding position for a day or two to be ready for a nearby next booking is
+// normal, but sitting away from home for the better part of a week waiting
+// on something a week out is not. Past this threshold the trailing leg
+// defaults to home base instead, same as when there's no next commitment at
+// all — that next trip's own leading repositioning leg (findAnchorForDate)
+// will pick the aircraft back up from wherever it actually is when the time
+// comes.
+export const MAX_PRODUCTIVE_IDLE_DAYS = 3;
+
+// Where the aircraft should reposition to right after finishing a trip that
+// ends on `date`: the departure airport of whatever's confirmed next on this
+// tail, but only when that commitment is close enough to be worth holding
+// position for (see MAX_PRODUCTIVE_IDLE_DAYS). Returns null when there's no
+// next commitment, or it's too far out — the caller falls back to home base
+// either way, same as findAnchorForDate.
+export function findTrailingAnchorForDate(gaps: Gap[], date: string): string | null {
+  const gap = findGapForDate(gaps, date);
+  if (!gap || gap.endDate === null) return null;
+  if (nightsBetween(date, gap.endDate) > MAX_PRODUCTIVE_IDLE_DAYS) return null;
+  return gap.endAnchor;
 }
 
 // Every active trip's legs on this operator's fleet, grouped by aircraft —

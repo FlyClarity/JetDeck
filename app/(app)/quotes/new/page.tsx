@@ -9,7 +9,12 @@ import { scoreOpportunity } from "@/lib/ai/score-opportunity";
 import { routeSummary } from "@/lib/queue";
 import { parseOptionFromFormData, parseOptionCount } from "@/lib/quote-option-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
-import { buildGapsForAircraft, findAnchorForDate, getActiveLegsByAircraft } from "@/lib/aircraft-schedule";
+import {
+  buildGapsForAircraft,
+  findAnchorForDate,
+  findTrailingAnchorForDate,
+  getActiveLegsByAircraft,
+} from "@/lib/aircraft-schedule";
 import { normalizeTimeString } from "@/lib/time";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { NewLeadForm } from "@/components/quote/new-lead-form";
@@ -283,15 +288,21 @@ export default async function NewQuotePage({
     }[]) ?? [];
 
   // Where each aircraft is actually expected to be on this trip's first
-  // date — an aircraft can be away on another trip when this one starts
-  // (e.g. sitting at an away airport between two legs of an earlier
-  // booking), so this isn't always the same as its permanent home base.
-  // Reuses the same gap logic the AI opportunity scorer uses for
-  // positioning, so the Quote Builder's auto-generated leading
-  // repositioning leg reflects the same reality the AI already reasoned
-  // about when it recommended this aircraft.
+  // (leading leg) and last (trailing leg) dates — an aircraft can be away
+  // on another trip when this one starts, or have another one confirmed
+  // right after this one ends, so neither position is always the same as
+  // its permanent home base. Reuses the same gap logic the AI opportunity
+  // scorer uses for positioning, so the Quote Builder's auto-generated
+  // repositioning legs reflect the same reality the AI already reasoned
+  // about when it recommended this aircraft. The trailing side only uses
+  // the next commitment's airport when it's close enough to be worth
+  // holding position for (see MAX_PRODUCTIVE_IDLE_DAYS) — otherwise it
+  // falls back to home base rather than leaving the aircraft to sit away
+  // for days waiting on something further out.
   const requestStartDate = tripLegs[0]?.date ?? null;
+  const requestEndDate = tripLegs[tripLegs.length - 1]?.date ?? null;
   const positionByAircraftId: Record<string, string> = {};
+  const trailingPositionByAircraftId: Record<string, string> = {};
   if (requestStartDate) {
     const legsByAircraft = await getActiveLegsByAircraft(
       operator.id,
@@ -305,6 +316,8 @@ export default async function NewQuotePage({
       );
       const anchor = findAnchorForDate(gaps, requestStartDate);
       if (anchor) positionByAircraftId[aircraft.id] = anchor;
+      const trailingAnchor = findTrailingAnchorForDate(gaps, requestEndDate ?? requestStartDate);
+      if (trailingAnchor) trailingPositionByAircraftId[aircraft.id] = trailingAnchor;
     }
   }
 
@@ -312,6 +325,7 @@ export default async function NewQuotePage({
     ...tripLegs.flatMap((l) => [l.depAirport, l.arrAirport].filter(Boolean) as string[]),
     ...aircraftList.map((a) => a.homeBase),
     ...Object.values(positionByAircraftId),
+    ...Object.values(trailingPositionByAircraftId),
   ];
   const resolvedAirports = await getAirportsByIcao(icaosToResolve);
   // Keyed by both ICAO and IATA so a leg that stored the 3-letter code
@@ -388,6 +402,7 @@ export default async function NewQuotePage({
           aircraftList={aircraftList}
           airportsByIcao={airportsByIcao}
           positionByAircraftId={positionByAircraftId}
+          trailingPositionByAircraftId={trailingPositionByAircraftId}
           existingBookings={existingBookings}
           initialOptions={[
             {

@@ -2415,3 +2415,33 @@ expected to be on this trip's first date."
   (nothing else booked, or genuinely just sitting at home) — this
   never removes information, only replaces a wrong static guess with
   a real one where the schedule has an answer.
+
+Follow-up on the same trip, from the user re-testing the fix above: the
+leading leg now correctly read KMYL → KCOE, but the *trailing* leg still
+went KSJC → KSNA (home base) even though the AI's own positioning note
+said the aircraft needs to be at KMYL by 2026-08-23 for its next
+confirmed leg. Plus a design note for the general case: if the next
+commitment were a week out instead of the next day, sending the
+aircraft to sit at that airport for a week waiting isn't realistic —
+better to send it home and let that trip's own leading leg (now fixed
+above) pick it back up from there when the time comes.
+
+- ~~**Trailing repositioning leg now targets the next real commitment
+  (within a productive window) — shipped**~~: added
+  `findTrailingAnchorForDate` and a `MAX_PRODUCTIVE_IDLE_DAYS = 3`
+  threshold to `lib/aircraft-schedule.ts`. Given the date this trip
+  ends, it looks at the same gap the leading leg reads from — if the
+  next confirmed commitment on that tail departs within 3 days, the
+  trailing leg targets *that* airport instead of home base (matching
+  the leading-leg fix's reasoning: the plane is actually needed
+  elsewhere, not idle). Beyond 3 days it falls back to home base
+  rather than parking the aircraft away for the better part of a
+  week — the threshold is a named constant with the reasoning
+  documented next to it, easy to retune if 3 days turns out wrong in
+  practice. `buildInitialLegs` takes this as a second position param
+  (`endingPosition`, parallel to the leading leg's `startingPosition`)
+  and the aircraft-change resync effect got the matching split: the
+  true trailing leg (`homeSide === "arr" && !betweenLegs`) resyncs to
+  this computed position, while a "between legs" pair's arrival-home
+  leg (same trip, different concept — see the code comment) still
+  resyncs to true home base, unaffected.

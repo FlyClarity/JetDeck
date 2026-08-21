@@ -14,7 +14,12 @@ import {
 import { parseOptionFromFormData, parseOptionCount } from "@/lib/quote-option-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { revenueLegsOf, legDate, autoNightsAwayOf } from "@/lib/itinerary";
-import { buildGapsForAircraft, findAnchorForDate, getActiveLegsByAircraft } from "@/lib/aircraft-schedule";
+import {
+  buildGapsForAircraft,
+  findAnchorForDate,
+  findTrailingAnchorForDate,
+  getActiveLegsByAircraft,
+} from "@/lib/aircraft-schedule";
 import { QuoteBuilderForm } from "@/components/quote/quote-builder-form";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { OriginalRequestPanel } from "@/components/quote/original-request-panel";
@@ -341,14 +346,17 @@ export default async function QuotePage({
   const optionsStoredLegs = allOptions.map((o) => (o.itinerary as StoredLeg[]) ?? []);
 
   // Where each aircraft is actually expected to be on this trip's first
-  // date — same schedule-derived positioning used on the New Quote page
-  // (see lib/aircraft-schedule.ts), so switching aircraft on an existing
-  // quote resyncs the leading repositioning leg to reality instead of
-  // always assuming the aircraft is sitting at its permanent home base.
-  const requestStartDate = revenueLegsOf(option.itinerary)[0]
-    ? legDate(revenueLegsOf(option.itinerary)[0])
+  // (leading leg) and last (trailing leg) dates — same schedule-derived
+  // positioning used on the New Quote page (see lib/aircraft-schedule.ts),
+  // so switching aircraft on an existing quote resyncs both repositioning
+  // legs to reality instead of always assuming home base.
+  const optionRevenueLegs = revenueLegsOf(option.itinerary);
+  const requestStartDate = optionRevenueLegs[0] ? legDate(optionRevenueLegs[0]) : null;
+  const requestEndDate = optionRevenueLegs[optionRevenueLegs.length - 1]
+    ? legDate(optionRevenueLegs[optionRevenueLegs.length - 1])
     : null;
   const positionByAircraftId: Record<string, string> = {};
+  const trailingPositionByAircraftId: Record<string, string> = {};
   if (requestStartDate) {
     const legsByAircraft = await getActiveLegsByAircraft(
       operator.id,
@@ -362,6 +370,8 @@ export default async function QuotePage({
       );
       const anchor = findAnchorForDate(gaps, requestStartDate);
       if (anchor) positionByAircraftId[aircraft.id] = anchor;
+      const trailingAnchor = findTrailingAnchorForDate(gaps, requestEndDate ?? requestStartDate);
+      if (trailingAnchor) trailingPositionByAircraftId[aircraft.id] = trailingAnchor;
     }
   }
 
@@ -371,6 +381,7 @@ export default async function QuotePage({
     ),
     ...aircraftList.map((a) => a.homeBase),
     ...Object.values(positionByAircraftId),
+    ...Object.values(trailingPositionByAircraftId),
   ];
   const resolvedAirports = await getAirportsByIcao(icaosToResolve);
   // Keyed by both ICAO and IATA so a leg that stored the 3-letter code
@@ -737,6 +748,7 @@ export default async function QuotePage({
           aircraftList={aircraftList}
           airportsByIcao={airportsByIcao}
           positionByAircraftId={positionByAircraftId}
+          trailingPositionByAircraftId={trailingPositionByAircraftId}
           existingBookings={existingBookings}
           initialOptions={initialOptions}
           internalNotes={quote.internalNotes ?? ""}
