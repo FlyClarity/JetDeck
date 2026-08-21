@@ -2576,3 +2576,51 @@ every outbound send, per a quick scope check.
   adding the six new template fields — same single server action,
   same single Save button (kept outside every tab panel so it's
   always visible regardless of which tab is active).
+
+## Broker sales — Phase 1: Preferred Operators directory
+
+User wants JetDeck to work well for both full-time brokers (no fleet at
+all) and part135/hybrid operators who occasionally need to source an
+off-fleet tail — explicitly framed as a real SaaS product, so it needs
+to be genuinely polished for either kind of account, not a bolted-on
+afterthought. The data model for this (`PreferredOperator`,
+`BrokeredAircraft`, `QuoteOption.fleetSource`/`wholesaleCost`/
+`brokerMargin`) has existed since the earliest schema pass but never had
+any UI built on it — `/fleet` already tells a broker "you source
+aircraft from your preferred operators instead," pointing at a feature
+that didn't exist yet. Scoped as a multi-round build:
+
+1. **Preferred Operators directory** (this round)
+2. Brokered aircraft per preferred operator
+3. Quote Builder integration — source a brokered tail, price it off an
+   all-in wholesale cost instead of hourly-rate math (matches what's
+   already in the schema — a broker knows what a third-party operator
+   quoted them, not that operator's real hourly cost)
+4. Downstream polish — client quote page, Ops/Trips reading the
+   aircraft from the right place, AI scoring staying owned-fleet-only
+
+- ~~**`/sourcing` — list, add, edit, delete — shipped**~~: new route
+  group mirroring the established Contacts/Fleet CRUD pattern (list +
+  `/sourcing/new` create + `/sourcing/[id]` edit). Every operator type
+  sees it, not just brokers — a part135 shop sourcing off-fleet
+  occasionally needs this exactly as much as a full-time broker does,
+  just less often. Fields: company name, contact name/email/phone,
+  notes, active/inactive. Delete is blocked (redirect + friendly
+  banner, same pattern as crew delete) once any `BrokeredAircraft`
+  references the operator — mark Inactive instead to keep history
+  intact for past quotes, rather than an FK error or a silent
+  cascade-delete of quote history.
+- ~~**Nav + route protection — shipped**~~: added to `AppHeader`'s
+  Sales nav (next to Contacts, unconditional — not gated behind
+  `showFleet` like Fleet/Calendar are, since this is relevant
+  regardless of whether an operator has their own fleet). Also added
+  `/sourcing(.*)` to `middleware.ts`'s protected-route matcher —
+  noticed `/contacts` itself was never added there (page-level auth
+  checks still protect it, just without the proper redirect-to-sign-in
+  a missing route gets), left as a pre-existing gap out of scope here
+  rather than fixed as a drive-by.
+
+Not built yet: adding/managing the actual aircraft under a preferred
+operator (Phase 2), and nothing references this from the Quote Builder
+yet (Phase 3) — `wholesaleCost`/`brokerMargin` are still unused columns
+until then.

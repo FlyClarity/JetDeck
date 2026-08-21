@@ -26,6 +26,7 @@ export function AppHeader({
     ...(showFleet ? [{ href: "/fleet", label: "Fleet" }] : []),
     ...(showFleet ? [{ href: "/ops/calendar", label: "Calendar" }] : []),
     { href: "/contacts", label: "Contacts" },
+    { href: "/sourcing", label: "Sourcing" },
     { href: "/inbox/review", label: "Needs Review", badge: needsReviewCount },
     { href: "/settings", label: "Settings" },
   ];
