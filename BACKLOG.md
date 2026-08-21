@@ -2472,3 +2472,35 @@ this app to flag it.
   typo/garbage-extraction case. The "Review before sending" step on a
   still-draft quote already reads live from `TripRequest`, so a fix
   made here shows up there immediately without any separate wiring.
+
+## Automatic BCC to the operator on client-facing emails
+
+User asked for an automatic BCC to the operator's reply-to address on
+outbound emails, so there's proof in their own inbox that a client
+email actually went out — the only prior record was whatever Resend's
+own dashboard showed, which isn't somewhere an operator would think to
+check when a client says "I never got that."
+
+- ~~**`sendEmail` gets a `bcc` param — shipped**~~: `lib/email.ts`
+  passes it straight through to Resend alongside the existing
+  `replyTo`. Not inferred from `replyTo` automatically — several
+  *internal* notification emails (an operator alert about a new
+  booking request, a decline, a change request) set `replyTo` to the
+  *client's* address instead, specifically so the operator can hit
+  reply and land in the client's inbox. BCC-ing those to the same
+  address the email already went to would be a no-op at best.
+- ~~**Every client-facing send now BCCs `operator.replyToEmail` —
+  shipped**~~: added `bcc: operator.replyToEmail ?? undefined`
+  alongside each call site's existing `replyTo: operator.replyToEmail
+  ?? undefined` (the two were already a reliable marker of "this one
+  actually goes to the client," found by auditing all 11 `sendEmail`
+  call sites) — the quote itself, follow-ups, cancellation notices,
+  the card-hold-link resend, the "your aircraft is available"
+  nudge, the "unable to confirm" notice, manifest collection
+  requests and reminders, and the public intake page's "request
+  received" auto-reply. The reverse pattern (an internal alert
+  `to: operator.notifyEmail`) was left untouched — the operator's
+  already the primary recipient there, nothing to confirm. No BCC
+  goes out when `Operator.replyToEmail` isn't set, same graceful
+  fallback the existing `replyTo` already has — nothing to configure
+  beyond the reply-to address already in Settings.

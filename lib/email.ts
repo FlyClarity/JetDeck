@@ -22,6 +22,15 @@ export async function sendEmail(params: {
   subject: string;
   html: string;
   replyTo?: string;
+  // Silent copy to the operator on a client-facing send, so they have proof
+  // in their own inbox that it actually went out — without this, the only
+  // record was whatever Resend's own dashboard showed, which an operator
+  // wouldn't think to check when a client says "I never got it." Callers
+  // pass this explicitly per send (not inferred from replyTo) since some
+  // "client-facing" sends set replyTo to the *client's* address instead
+  // (an internal notification the operator can reply straight to them
+  // from) — bcc-ing that back to the client would be wrong.
+  bcc?: string;
   from?: string | null;
   fromName?: string | null;
 }) {
@@ -43,5 +52,6 @@ export async function sendEmail(params: {
     subject: params.subject,
     html: params.html,
     ...(params.replyTo ? { replyTo: params.replyTo } : {}),
+    ...(params.bcc ? { bcc: params.bcc } : {}),
   });
 }

@@ -163,6 +163,7 @@ async function acceptQuote(token: string, formData: FormData) {
         subject: `Confirming availability — ${quote.quoteNumber}`,
         html: `<p>Hi ${requestorName},</p><p>Thanks for signing quote ${quote.quoteNumber} — we're re-confirming aircraft availability for your dates and will follow up shortly with final confirmation.</p><p>— ${quote.operator.name}</p>`,
         replyTo: quote.operator.replyToEmail ?? undefined,
+        bcc: quote.operator.replyToEmail ?? undefined,
         from: quote.operator.fromEmail,
         fromName: quote.operator.name,
       });

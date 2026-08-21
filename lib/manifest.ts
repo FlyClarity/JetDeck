@@ -71,6 +71,7 @@ export async function createManifestForTrip(tripId: string): Promise<void> {
     subject: `Passenger info needed — ${routeText}${dateText ? ` on ${dateText}` : ""}`,
     html: `<p>Hi ${leadFirstName || "there"},</p><p>Your charter flight ${routeText}${dateText ? ` on ${dateText}` : ""} is confirmed. Please complete your passenger information at the link below — this is required for your flight. If you have additional passengers, you can add them yourself or forward this link to them.</p><p><a href="${manifestUrl}">Complete Passenger Information</a></p><p>— ${trip.operator.name}</p>`,
     replyTo: trip.operator.replyToEmail ?? undefined,
+    bcc: trip.operator.replyToEmail ?? undefined,
     from: trip.operator.fromEmail,
     fromName: trip.operator.name,
   });
@@ -160,6 +161,7 @@ export async function sendManifestReminders(): Promise<{ sent: number }> {
         subject: `Reminder: passenger info needed for your upcoming flight`,
         html: `<p>Hi ${lead.firstName || "there"},</p><p>Your flight is coming up and we're still missing passenger information for ${missing} passenger${missing === 1 ? "" : "s"}. Please complete it as soon as you can: <a href="${manifestUrl}">Complete Passenger Information</a></p><p>— ${trip.operator.name}</p>`,
         replyTo: trip.operator.replyToEmail ?? undefined,
+        bcc: trip.operator.replyToEmail ?? undefined,
         from: trip.operator.fromEmail,
         fromName: trip.operator.name,
       });

@@ -137,6 +137,7 @@ async function sendQuote(id: string) {
     subject: `Your Charter Quote — ${quote.quoteNumber}`,
     html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">View Quote</a></p><p>${pricingLine} Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
     replyTo: operator.replyToEmail ?? undefined,
+    bcc: operator.replyToEmail ?? undefined,
     from: operator.fromEmail,
     fromName: operator.name,
   });
@@ -202,6 +203,7 @@ async function cancelBooking(id: string, formData: FormData) {
       subject: `Important update — ${quote.quoteNumber}`,
       html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>We're sorry to let you know your booking (${quote.quoteNumber}) has been cancelled: ${note}</p><p>Please contact us so we can help find another solution.</p><p>— ${operator.name}</p>`,
       replyTo: operator.replyToEmail ?? undefined,
+      bcc: operator.replyToEmail ?? undefined,
       from: operator.fromEmail,
       fromName: operator.name,
     });
@@ -235,6 +237,7 @@ async function sendFollowUpMessage(id: string, formData: FormData) {
     subject: `Update on your quote — ${quote.quoteNumber}`,
     html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p style="white-space:pre-wrap">${message}</p><p><a href="${quoteLink}">View Quote</a></p><p>— ${operator.name}</p>`,
     replyTo: operator.replyToEmail ?? undefined,
+    bcc: operator.replyToEmail ?? undefined,
     from: operator.fromEmail,
     fromName: operator.name,
   });

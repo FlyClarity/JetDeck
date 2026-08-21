@@ -152,6 +152,7 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
         <p>— ${quote.operator.name}</p>
       `,
       replyTo: quote.operator.replyToEmail ?? undefined,
+      bcc: quote.operator.replyToEmail ?? undefined,
       from: quote.operator.fromEmail,
       fromName: quote.operator.name,
     });
@@ -341,6 +342,7 @@ export async function resendCardHoldLink(operatorId: string, quoteId: string) {
       subject: `New card hold link — ${quote.quoteNumber}`,
       html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>Your previous card authorization link expired. Please use this new link to authorize your card hold — no charge is made, this only places a hold: <a href="${session.url}">Authorize Card Hold</a></p><p>— ${quote.operator.name}</p>`,
       replyTo: quote.operator.replyToEmail ?? undefined,
+      bcc: quote.operator.replyToEmail ?? undefined,
       from: quote.operator.fromEmail,
       fromName: quote.operator.name,
     });
@@ -483,6 +485,7 @@ export async function confirmPendingBookingForOperator(operatorId: string, quote
       subject: `Good news — ${quote.quoteNumber} is available!`,
       html: `<p>Hi ${quote.tripRequest?.requestorName ?? "there"},</p><p>We can confirm ${quote.operator.name} has your aircraft available for this trip. Please finalize your booking — review the charter terms and complete payment: <a href="${appUrl}/q/${quote.token}">Finalize Your Booking</a></p><p>— ${quote.operator.name}</p>`,
       replyTo: quote.operator.replyToEmail ?? undefined,
+      bcc: quote.operator.replyToEmail ?? undefined,
       from: quote.operator.fromEmail,
       fromName: quote.operator.name,
     });
@@ -516,6 +519,7 @@ export async function declinePendingBookingForOperator(
       subject: `Unable to confirm — ${quote.quoteNumber}`,
       html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>We're sorry — we're unable to confirm your booking (${quote.quoteNumber}): ${note}</p><p>Please contact us so we can help find another solution.</p><p>— ${quote.operator.name}</p>`,
       replyTo: quote.operator.replyToEmail ?? undefined,
+      bcc: quote.operator.replyToEmail ?? undefined,
       from: quote.operator.fromEmail,
       fromName: quote.operator.name,
     });
