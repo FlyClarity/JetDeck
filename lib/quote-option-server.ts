@@ -60,10 +60,12 @@ export function parseOptionFromFormData(
     discount,
     flatRate: isBrokered,
   });
-  // Reported to the operator only — never shown to the client, and not part
-  // of the total charged above. Matches QuoteOption.brokerMargin's own
-  // documented meaning (total minus what the third-party operator charged).
-  const brokerMargin = isBrokered && wholesaleCost !== null ? total - wholesaleCost : null;
+  // Reported to the operator only — never shown to the client. Deliberately
+  // hourlyRate (the flat flight price the client's charged) minus
+  // wholesaleCost, not `total` minus wholesaleCost — `total` includes FET,
+  // which is collected on the client's behalf and remitted, not money the
+  // operator keeps, so it must never inflate the margin figure.
+  const brokerMargin = isBrokered && wholesaleCost !== null ? hourlyRate - wholesaleCost : null;
 
   let legsJson: unknown[] = [];
   try {

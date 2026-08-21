@@ -342,6 +342,18 @@ function QuoteOptionFields({
     initialValues.brokeredAircraftId ?? ""
   );
   const [wholesaleCost, setWholesaleCost] = useState(String(initialValues.wholesaleCost || ""));
+  // Reload default: back out a flat-dollar margin from the two saved
+  // numbers (hourlyRate holds the flat client price for a brokered option —
+  // see the flatRate mode below) rather than persisting which entry mode
+  // the operator originally typed in. The dollar amount is exact either
+  // way; only "% vs $" is forgotten across a reload, which doesn't change
+  // what gets charged.
+  const [marginType, setMarginType] = useState<"flat" | "percent">("flat");
+  const [marginValue, setMarginValue] = useState(
+    String(
+      Math.max(0, (initialValues.hourlyRate || 0) - (initialValues.wholesaleCost || 0)) || ""
+    )
+  );
   const [hourlyRate, setHourlyRate] = useState(String(initialValues.hourlyRate || ""));
   const [repoRate, setRepoRate] = useState(String(initialValues.repoRate || ""));
   const [returnsToHomeBase, setReturnsToHomeBase] = useState(initialValues.returnsToHomeBase);
@@ -748,6 +760,7 @@ function QuoteOptionFields({
     } else {
       setBrokeredAircraftId("");
       setWholesaleCost("");
+      setMarginValue("");
     }
   }
 
@@ -799,11 +812,26 @@ function QuoteOptionFields({
     }))
   );
 
+  // Margin is computed purely from wholesale cost + markup — deliberately
+  // never touches fees, discount, or FET, since none of those are money the
+  // operator actually keeps (FET in particular is collected on the
+  // client's behalf and remitted, not revenue). Percent mode marks up the
+  // wholesale cost itself ("15% over cost"), not the sell price.
+  const wholesaleCostNum = Number(wholesaleCost) || 0;
+  const marginAmount =
+    marginType === "percent" ? wholesaleCostNum * ((Number(marginValue) || 0) / 100) : Number(marginValue) || 0;
+  const marginPercent = wholesaleCostNum > 0 ? (marginAmount / wholesaleCostNum) * 100 : 0;
+  // What the client is actually charged for the flight itself — wholesale
+  // cost plus that markup — fed into calculateQuoteTotals's flatRate mode
+  // exactly like a directly-typed price would be. Fees/discount/tax below
+  // still apply on top of this, same as an owned-fleet option.
+  const brokeredFlightPrice = wholesaleCostNum + marginAmount;
+
   const totals = useMemo(
     () =>
       calculateQuoteTotals({
         flightHours,
-        hourlyRate: Number(hourlyRate) || 0,
+        hourlyRate: isBrokered ? brokeredFlightPrice : Number(hourlyRate) || 0,
         repoHours,
         repoRate: Number(repoRate) || 0,
         overnightFee,
@@ -814,9 +842,21 @@ function QuoteOptionFields({
         discount: Number(discount) || 0,
         flatRate: isBrokered,
       }),
-    [flightHours, hourlyRate, repoHours, repoRate, overnightFee, landingFees, handlingFees, additionalFees, fetTax, discount, isBrokered]
+    [
+      flightHours,
+      isBrokered,
+      brokeredFlightPrice,
+      hourlyRate,
+      repoHours,
+      repoRate,
+      overnightFee,
+      landingFees,
+      handlingFees,
+      additionalFees,
+      fetTax,
+      discount,
+    ]
   );
-  const brokerMargin = isBrokered ? totals.total - (Number(wholesaleCost) || 0) : null;
 
   // Own-fleet only — checking a brokered tail against JetDeck's own
   // schedule of accepted bookings doesn't mean anything, since it isn't a
@@ -903,7 +943,7 @@ function QuoteOptionFields({
             {brokeredAircraftList.length === 0 && (
               <p className="text-sm text-muted-foreground">
                 No brokered aircraft on file yet —{" "}
-                <a href="/sourcing" target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
+                <a href="/settings?tab=sourcing" target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
                   add a preferred operator and their tails
                 </a>{" "}
                 first.
@@ -967,49 +1007,89 @@ function QuoteOptionFields({
         )}
 
         {isBrokered ? (
-          <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`${namePrefix}wholesaleCost`}>Wholesale cost ($)</Label>
-                <Input
-                  id={`${namePrefix}wholesaleCost`}
-                  name={`${namePrefix}wholesaleCost`}
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={wholesaleCost}
-                  onChange={(e) => setWholesaleCost(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  What {selectedBrokeredAircraft?.preferredOperator.name ?? "the source operator"}{" "}
-                  quoted you — never shown to the client, tracked for your own margin only.
-                </p>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`${namePrefix}hourlyRate`}>Your price to client ($)</Label>
-                <Input
-                  id={`${namePrefix}hourlyRate`}
-                  name={`${namePrefix}hourlyRate`}
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={hourlyRate}
-                  onChange={(e) => setHourlyRate(e.target.value)}
-                  required
-                />
-                <p className="text-xs text-muted-foreground">
-                  A flat price for the flight itself — fees/discount/tax below still apply on top.
-                </p>
-              </div>
-            </div>
-            {Number(wholesaleCost) > 0 && (
-              <p className="text-sm">
-                Margin:{" "}
-                <span className={brokerMargin !== null && brokerMargin < 0 ? "text-destructive" : "font-medium"}>
-                  {formatCurrency(brokerMargin ?? 0)}
-                </span>
+          <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}wholesaleCost`}>Wholesale cost ($)</Label>
+              <Input
+                id={`${namePrefix}wholesaleCost`}
+                name={`${namePrefix}wholesaleCost`}
+                type="number"
+                min={0}
+                step="0.01"
+                value={wholesaleCost}
+                onChange={(e) => setWholesaleCost(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                What {selectedBrokeredAircraft?.preferredOperator.name ?? "the source operator"}{" "}
+                quoted you — never shown to the client, tracked for your own margin only.
               </p>
-            )}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}marginValue`}>Margin</Label>
+              <div className="flex gap-2">
+                <Input
+                  id={`${namePrefix}marginValue`}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={marginValue}
+                  onChange={(e) => setMarginValue(e.target.value)}
+                  className="flex-1"
+                />
+                <div className="flex gap-1 rounded-md bg-muted p-1 text-sm">
+                  <button
+                    type="button"
+                    onClick={() => setMarginType("percent")}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 font-medium transition-colors",
+                      marginType === "percent"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    %
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMarginType("flat")}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 font-medium transition-colors",
+                      marginType === "flat"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    $
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {marginType === "percent"
+                  ? "Applied on top of wholesale cost."
+                  : "A flat dollar amount added on top of wholesale cost."}{" "}
+                Fees/discount/tax below still apply on top of the resulting price — margin itself
+                never includes them, so it isn&apos;t inflated by tax you&apos;re just collecting
+                and passing through.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-0.5 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Price to client (flight)</span>
+                <span className="font-medium">{formatCurrency(brokeredFlightPrice)}</span>
+              </div>
+              {wholesaleCostNum > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Margin</span>
+                  <span className={marginAmount < 0 ? "text-destructive" : undefined}>
+                    {formatCurrency(marginAmount)} ({marginPercent.toFixed(1)}%)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <input type="hidden" name={`${namePrefix}hourlyRate`} value={brokeredFlightPrice} />
             <input type="hidden" name={`${namePrefix}repoRate`} value="0" />
           </div>
         ) : (

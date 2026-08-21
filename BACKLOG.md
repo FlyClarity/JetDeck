@@ -2694,3 +2694,59 @@ Only real remaining gap (Phase 4): aircraft photos/amenities for a
 brokered tail on the client quote page — still just tail/make/model/
 category/seats, no visual section, same limitation the fleet-photos
 feature already flagged as out of scope for brokered aircraft.
+
+## Broker sales feedback: margin entry, FET bug, nav move, aircraft edit
+
+User tested the Phase 2/3 build and came back with four fixes: enter
+margin (as % or $) instead of typing a client price directly; move the
+Sourcing nav item under Settings; a way to edit an already-added
+brokered aircraft (only add/remove existed); and a real bug — the
+margin figure included FET, which isn't money the operator keeps.
+
+- ~~**Margin-driven brokered pricing — shipped**~~: replaced the direct
+  "Your price to client ($)" input with "Wholesale cost ($)" +
+  "Margin" (a value plus a %/$ toggle, `components/quote/
+  quote-builder-form.tsx`). Percent mode marks up the wholesale cost
+  itself (not the sell price). The client-facing flight price is now
+  computed (`wholesaleCost + marginAmount`) rather than typed, fed into
+  `calculateQuoteTotals`'s existing `flatRate` mode via a hidden input
+  — fees/discount/tax still layer on top exactly as before. Both the
+  computed price and the margin ($ and %) are shown live so the
+  operator can see the result of either entry mode. Reopening a saved
+  brokered option defaults to flat-$ mode with the exact saved margin
+  (back-derived from the two stored numbers) — only "which mode was
+  typed in" is forgotten across a reload, never the dollar amount.
+- ~~**Margin no longer includes FET — fixed**~~: was `total -
+  wholesaleCost`, and `total` includes federal excise tax — money the
+  operator collects and remits, not revenue. Now computed purely from
+  wholesale cost + markup (`lib/quote-option-server.ts`'s
+  `brokerMargin = hourlyRate - wholesaleCost`, where `hourlyRate` holds
+  the flat flight price for a brokered option) — never touches fees,
+  discount, or tax at all, by construction rather than by a subtraction
+  that happened to need tax removed.
+- ~~**Sourcing moved under Settings — shipped**~~: removed from
+  `AppHeader`'s top nav; `components/settings/settings-tabs.tsx` gained
+  a sixth "Sourcing" tab showing the same preferred-operators list
+  `/sourcing` used to show at the top level. `SettingsTabProvider` now
+  accepts an `initialTab` (read from `?tab=`), so `/sourcing` itself
+  became a one-line redirect to `/settings?tab=sourcing` (keeps old
+  links/bookmarks working) instead of just disappearing.
+  `/sourcing/new` and `/sourcing/[id]` stay as real routes — same
+  relationship Fleet has to `/fleet/new`/`/fleet/[id]`, a list-level nav
+  entry with add/edit as sub-pages, just relocated one level under
+  Settings now.
+- ~~**Edit an already-added brokered aircraft — shipped**~~: each
+  aircraft row on `/sourcing/[id]` is now a `<details>` disclosure —
+  collapsed shows the same summary line as before, expanded shows a
+  pre-filled edit form (new `updateBrokeredAircraft` server action)
+  plus the existing "Remove" action, instead of add/remove being the
+  only two options.
+
+Not built yet: bulk-importing a fleet list from a URL (an operator's
+public fleet page) — flagged as a "nice to have," not built this round.
+Real design questions before starting it: a plain server-side fetch
+won't render JS-heavy fleet pages (many are React/Vue-built), so some
+sites would come back empty; and whether extracted aircraft should be
+reviewed/edited before being added, or trusted and inserted directly
+the way AI-extracted trip requests already are. Worth a scoping pass
+before building rather than guessing at both.

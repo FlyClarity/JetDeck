@@ -69,7 +69,7 @@ async function deletePreferredOperator(id: string) {
   }
 
   await prisma.preferredOperator.delete({ where: { id } });
-  redirect("/sourcing");
+  redirect("/settings?tab=sourcing");
 }
 
 async function addBrokeredAircraft(preferredOperatorId: string, formData: FormData) {
@@ -90,6 +90,35 @@ async function addBrokeredAircraft(preferredOperatorId: string, formData: FormDa
     data: {
       operatorId,
       preferredOperatorId,
+      tailNumber,
+      make: String(formData.get("make") ?? "").trim() || null,
+      model: String(formData.get("model") ?? "").trim() || null,
+      category: String(formData.get("category") ?? "") || null,
+      seats: formData.get("seats") ? Number(formData.get("seats")) : null,
+      homeBase: String(formData.get("homeBase") ?? "").trim().toUpperCase() || null,
+    },
+  });
+
+  revalidatePath(`/sourcing/${preferredOperatorId}`);
+}
+
+async function updateBrokeredAircraft(preferredOperatorId: string, aircraftId: string, formData: FormData) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+
+  const existing = await prisma.brokeredAircraft.findFirst({
+    where: { id: aircraftId, operatorId, preferredOperatorId },
+  });
+  if (!existing) return;
+
+  const tailNumber = String(formData.get("tailNumber") ?? "").trim().toUpperCase();
+  if (!tailNumber) return;
+
+  await prisma.brokeredAircraft.update({
+    where: { id: aircraftId },
+    data: {
       tailNumber,
       make: String(formData.get("make") ?? "").trim() || null,
       model: String(formData.get("model") ?? "").trim() || null,
@@ -249,12 +278,10 @@ export default async function PreferredOperatorPage({
           <div className="mt-4 flex flex-col gap-2">
             {brokeredAircraft.map((a) => {
               const removeWithId = deleteBrokeredAircraft.bind(null, preferredOperator.id, a.id);
+              const updateWithAircraftId = updateBrokeredAircraft.bind(null, preferredOperator.id, a.id);
               return (
-                <div
-                  key={a.id}
-                  className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm"
-                >
-                  <div>
+                <details key={a.id} className="rounded-md border border-border text-sm">
+                  <summary className="cursor-pointer px-3 py-2">
                     <span className="font-medium">{a.tailNumber}</span>
                     <span className="text-muted-foreground">
                       {" — "}
@@ -263,16 +290,81 @@ export default async function PreferredOperatorPage({
                       {a.seats && ` · ${a.seats} seats`}
                       {a.homeBase && ` · ${a.homeBase}`}
                     </span>
+                  </summary>
+                  <div className="border-t border-border p-3">
+                    <form action={updateWithAircraftId} className="flex flex-col gap-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`tailNumber-${a.id}`}>Tail number</Label>
+                          <Input
+                            id={`tailNumber-${a.id}`}
+                            name="tailNumber"
+                            defaultValue={a.tailNumber}
+                            required
+                          />
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`category-${a.id}`}>Category</Label>
+                          <Select name="category" defaultValue={a.category ?? undefined}>
+                            <SelectTrigger id={`category-${a.id}`}>
+                              <SelectValue placeholder="Select category" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {AIRCRAFT_CATEGORIES.map((c) => (
+                                <SelectItem key={c.value} value={c.value}>
+                                  {c.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`make-${a.id}`}>Make</Label>
+                          <Input id={`make-${a.id}`} name="make" defaultValue={a.make ?? ""} />
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`model-${a.id}`}>Model</Label>
+                          <Input id={`model-${a.id}`} name="model" defaultValue={a.model ?? ""} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`seats-${a.id}`}>Seats</Label>
+                          <Input
+                            id={`seats-${a.id}`}
+                            name="seats"
+                            type="number"
+                            min={1}
+                            defaultValue={a.seats ?? ""}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`homeBase-${a.id}`}>Home base (ICAO)</Label>
+                          <Input
+                            id={`homeBase-${a.id}`}
+                            name="homeBase"
+                            defaultValue={a.homeBase ?? ""}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Button type="submit" size="sm">
+                          Save
+                        </Button>
+                      </div>
+                    </form>
+                    <form action={removeWithId} className="mt-3">
+                      <button
+                        type="submit"
+                        className="text-xs text-muted-foreground underline underline-offset-4 hover:text-destructive"
+                      >
+                        Remove this aircraft
+                      </button>
+                    </form>
                   </div>
-                  <form action={removeWithId}>
-                    <button
-                      type="submit"
-                      className="text-xs text-muted-foreground underline underline-offset-4 hover:text-destructive"
-                    >
-                      Remove
-                    </button>
-                  </form>
-                </div>
+                </details>
               );
             })}
           </div>

@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createHash } from "node:crypto";
 import { getCurrentOperator } from "@/lib/operator";
 import { getTenantContext } from "@/lib/auth";
@@ -116,10 +117,10 @@ async function updateSettings(formData: FormData) {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ saved?: string; stripe_error?: string }>;
+  searchParams: Promise<{ saved?: string; stripe_error?: string; tab?: string }>;
 }) {
   const operator = await getCurrentOperator();
-  const { saved, stripe_error: stripeError } = await searchParams;
+  const { saved, stripe_error: stripeError, tab } = await searchParams;
 
   if (!operator) {
     return null;
@@ -129,6 +130,12 @@ export default async function SettingsPage({
   const intakeUrl = `${appUrl}/intake/${operator.slug}`;
   const iframeEmbed = `<iframe src="${intakeUrl}" style="width:100%;max-width:640px;height:900px;border:0;" title="Request a Charter — ${operator.name}"></iframe>`;
   const linkEmbed = `<a href="${intakeUrl}" target="_blank" rel="noopener">Request a Quote</a>`;
+
+  const preferredOperators = await prisma.preferredOperator.findMany({
+    where: { operatorId: operator.id },
+    include: { _count: { select: { brokeredAircraft: true } } },
+    orderBy: { name: "asc" },
+  });
 
   const templateFieldNames: Record<EmailTemplateKey, { subject: string; body: string }> = {
     quote_sent: { subject: "quoteSentSubject", body: "quoteSentBody" },
@@ -153,7 +160,7 @@ export default async function SettingsPage({
       </div>
 
       <div className="mt-6">
-        <SettingsTabProvider>
+        <SettingsTabProvider initialTab={tab}>
           <SettingsTabPanel tabKey="branding">
             <div className="flex items-center gap-3 rounded-md border border-border p-3">
               {operator.logoUrl && (
@@ -264,6 +271,86 @@ export default async function SettingsPage({
                   width/height to fit your page.
                 </p>
               </div>
+            </div>
+          </SettingsTabPanel>
+
+          <SettingsTabPanel tabKey="sourcing">
+            <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Preferred Operators
+                  </h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Third-party operators you charter aircraft from when a trip needs an
+                    off-fleet tail — quoted at a wholesale cost you mark up, not your own
+                    fleet&apos;s rates.
+                  </p>
+                </div>
+                <Button asChild size="sm">
+                  <Link href="/sourcing/new">Add Preferred Operator</Link>
+                </Button>
+              </div>
+
+              {preferredOperators.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No preferred operators yet. Add one to start sourcing aircraft outside your own
+                  fleet.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-muted-foreground">
+                        <th className="py-2 pr-4 font-medium">Name</th>
+                        <th className="py-2 pr-4 font-medium">Contact</th>
+                        <th className="py-2 pr-4 font-medium">Email</th>
+                        <th className="py-2 pr-4 font-medium">Aircraft</th>
+                        <th className="py-2 pr-4 font-medium">Status</th>
+                        <th className="py-2 pr-4" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preferredOperators.map((po) => (
+                        <tr key={po.id} className="border-b border-border last:border-0">
+                          <td className="py-3 pr-4">
+                            <Link
+                              href={`/sourcing/${po.id}`}
+                              className="font-medium hover:underline hover:underline-offset-4"
+                            >
+                              {po.name}
+                            </Link>
+                          </td>
+                          <td className="py-3 pr-4 text-muted-foreground">
+                            {po.contactName ?? "—"}
+                          </td>
+                          <td className="py-3 pr-4 text-muted-foreground">{po.contactEmail}</td>
+                          <td className="py-3 pr-4 text-muted-foreground">
+                            {po._count.brokeredAircraft}
+                          </td>
+                          <td className="py-3 pr-4">
+                            {po.isActive ? (
+                              <span className="text-xs text-muted-foreground">Active</span>
+                            ) : (
+                              <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                                Inactive
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 pr-4 text-right">
+                            <Link
+                              href={`/sourcing/${po.id}`}
+                              className="text-sm font-medium text-primary underline underline-offset-4"
+                            >
+                              Edit
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </SettingsTabPanel>
 

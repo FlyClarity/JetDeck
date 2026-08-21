@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export type SettingsTabKey = "payments" | "email" | "branding" | "website" | "quoting";
+export type SettingsTabKey = "payments" | "email" | "branding" | "website" | "quoting" | "sourcing";
 
 const TABS: { key: SettingsTabKey; label: string }[] = [
   { key: "payments", label: "Payments" },
@@ -11,9 +11,14 @@ const TABS: { key: SettingsTabKey; label: string }[] = [
   { key: "branding", label: "Branding" },
   { key: "website", label: "Website" },
   { key: "quoting", label: "Quoting Defaults" },
+  { key: "sourcing", label: "Sourcing" },
 ];
 
 const ActiveTabContext = createContext<SettingsTabKey>("payments");
+
+function isTabKey(value: string | undefined): value is SettingsTabKey {
+  return TABS.some((t) => t.key === value);
+}
 
 // One tab bar controlling two separate DOM subtrees: some settings sections
 // have their own standalone forms (Stripe connect/dashboard) that can't
@@ -21,8 +26,16 @@ const ActiveTabContext = createContext<SettingsTabKey>("payments");
 // submit through — nested <form> elements aren't valid HTML. Sharing this
 // context lets a SettingsTabPanel for the same key show/hide in both places
 // in sync, without the two ever needing to be siblings in the DOM.
-export function SettingsTabProvider({ children }: { children: ReactNode }) {
-  const [active, setActive] = useState<SettingsTabKey>("payments");
+export function SettingsTabProvider({
+  initialTab,
+  children,
+}: {
+  // e.g. a "/sourcing" link that now redirects to "/settings?tab=sourcing"
+  // — lands on the right tab instead of always defaulting to Payments.
+  initialTab?: string;
+  children: ReactNode;
+}) {
+  const [active, setActive] = useState<SettingsTabKey>(isTabKey(initialTab) ? initialTab : "payments");
 
   return (
     <ActiveTabContext.Provider value={active}>
