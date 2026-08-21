@@ -2504,3 +2504,75 @@ check when a client says "I never got that."
   goes out when `Operator.replyToEmail` isn't set, same graceful
   fallback the existing `replyTo` already has — nothing to configure
   beyond the reply-to address already in Settings.
+
+## Editable email templates + Settings reorganized into tabs
+
+User asked for more information in the quote email (routing, a more
+descriptive subject line), whether the email content could be made
+editable from Settings, and — separately — for Settings itself to be
+reorganized into categories (payment, email, branding, website, etc.)
+instead of one long page. Scoped the template editor to the three core
+booking-lifecycle emails a client is most likely to actually read
+closely (quote sent, booking confirmed, booking cancelled) rather than
+every outbound send, per a quick scope check.
+
+- ~~**`lib/email-templates.ts` — shipped**~~: new module defining the
+  three templatable emails (`EMAIL_TEMPLATES`), each with a default
+  subject/body and a documented list of `{{variable}}` placeholders;
+  `renderTemplate()` does plain string substitution (no HTML
+  sanitization beyond what `wireInstructions`/`termsText` already
+  skip — same trust level, an operator's own words going to their own
+  clients); `routingVars()` builds the shared `{{routeShort}}`
+  (subject-safe) and `{{routing}}` (full per-leg breakdown, matching
+  the leg-by-leg detail pattern already used for conflict banners
+  rather than a collapsed first→last summary) variables from an
+  itinerary, replacing three near-duplicate inline builders.
+- ~~**Six new nullable `Operator` fields — shipped**~~: `quoteSentSubject`/
+  `Body`, `bookingConfirmedSubject`/`Body`, `bookingCancelledSubject`/
+  `Body` (migration `20260821090000_email_templates`). Null means "use
+  the built-in default," so no existing operator's emails change until
+  they actually customize one — same fallback pattern as leaving a
+  field blank on save.
+- ~~**Default templates now include full routing + a descriptive
+  subject — shipped**~~: the actual fix for what was reported. Quote
+  Sent's subject went from `Your Charter Quote — {{quoteNumber}}` to
+  `Your Charter Quote — {{routeShort}} ({{quoteNumber}})`, and its body
+  gained a `<strong>Routing:</strong>` block it never had before —
+  every operator gets this improvement automatically, not just ones
+  who go customize their template.
+- ~~**Booking Confirmed keeps its logic-dependent parts app-controlled —
+  shipped**~~: `sendBookingConfirmationEmail` (`lib/booking-server.ts`)
+  only templates the intro/reference/routing/total — wire instructions,
+  the card-authorization follow-up line, and the charter terms still
+  get appended after the templated body exactly as before, since those
+  reflect real payment-method/state logic (whether wire instructions
+  should show at all, for instance), not just wording an operator
+  should be free to rewrite.
+- ~~**Email Templates editor on the Settings page — shipped**~~: each
+  template is a `<details>` disclosure (subject `Input` + body
+  `Textarea`, pre-filled with the current custom value or the default)
+  with its variable list spelled out above the fields. Saving a blank
+  field stores `null`, falling back to the default rather than
+  persisting (and sending) an empty subject/body.
+- ~~**Settings reorganized into five tabs — shipped**~~: Payments,
+  Email, Branding, Website, Quoting Defaults — new
+  `components/settings/settings-tabs.tsx` (`SettingsTabProvider`/
+  `SettingsTabPanel`, same active-tab-via-CSS-class pattern already
+  used for the Quote Builder's Options tabs). One wrinkle: the Stripe
+  connect/dashboard actions and the Website widget/embed content have
+  their own standalone `<form>`s (or no form at all) and can't nest
+  inside the single big `updateSettings` form the rest of the fields
+  submit through — nested `<form>` elements aren't valid HTML. Solved
+  by sharing one active-tab context across two separate top-level
+  panel instances for the "Payments" tab (Stripe box outside the form,
+  deposit%/cc-fee/wire-instructions fields inside it) — both show/hide
+  in sync, and the split is invisible to the user since forms have no
+  visual chrome. Field-to-category mapping: Payments = deposit %, CC
+  fee, wire instructions, Stripe connect; Email = from/reply-to/notify/
+  inbound addresses + the new template editor; Branding = the existing
+  read-only org name/logo pointer; Website = the existing widget/embed
+  section; Quoting Defaults = charter terms, block time buffer,
+  overnight fee. Nothing about `updateSettings` itself changed beyond
+  adding the six new template fields — same single server action,
+  same single Save button (kept outside every tab panel so it's
+  always visible regardless of which tab is active).

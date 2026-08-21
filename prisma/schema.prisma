@@ -40,6 +40,20 @@ model Operator {
   defaultBlockTimeBufferHours Float @default(0.2) // added per leg on top of raw distance/cruise-speed time (climb/descent/taxi)
   defaultOvernightFee         Float @default(1500) // $/night when the aircraft doesn't return to home base after the trip
 
+  // Editable client-email templates — null means "use the built-in
+  // default" (see lib/email-templates.ts), so an operator who never
+  // touches these keeps getting the same email everyone always got.
+  // Subject/body are stored as-is with {{variable}} placeholders,
+  // substituted at send time — same trust level as wireInstructions/
+  // termsText above (an operator's own words sent to their own clients),
+  // not sanitized any differently.
+  quoteSentSubject        String?
+  quoteSentBody           String?
+  bookingConfirmedSubject String?
+  bookingConfirmedBody    String?
+  bookingCancelledSubject String?
+  bookingCancelledBody    String?
+
   // Operator type controls which modules and UI are shown
   operatorType String @default("part135")
   // "part135" -- owns/manages aircraft, full platform

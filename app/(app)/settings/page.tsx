@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
+import { SettingsTabProvider, SettingsTabPanel } from "@/components/settings/settings-tabs";
+import { EMAIL_TEMPLATES, type EmailTemplateKey } from "@/lib/email-templates";
 
 async function startStripeOnboarding() {
   "use server";
@@ -79,6 +81,12 @@ async function updateSettings(formData: FormData) {
   const ccProcessingFeePercentInput = Number(formData.get("ccProcessingFeePercent") ?? 3);
   const ccProcessingFeePercent = Math.min(Math.max(ccProcessingFeePercentInput, 0), 100);
 
+  // Blank means "go back to the built-in default" (see lib/email-templates.ts)
+  // rather than persisting an empty subject/body that would send a blank
+  // email — a field left untouched, or cleared out entirely, both fall back
+  // the same way.
+  const templateField = (name: string) => String(formData.get(name) ?? "").trim() || null;
+
   await prisma.operator.update({
     where: { clerkOrgId },
     data: {
@@ -93,6 +101,12 @@ async function updateSettings(formData: FormData) {
       defaultBlockTimeBufferHours,
       defaultOvernightFee,
       ccProcessingFeePercent,
+      quoteSentSubject: templateField("quoteSentSubject"),
+      quoteSentBody: templateField("quoteSentBody"),
+      bookingConfirmedSubject: templateField("bookingConfirmedSubject"),
+      bookingConfirmedBody: templateField("bookingConfirmedBody"),
+      bookingCancelledSubject: templateField("bookingCancelledSubject"),
+      bookingCancelledBody: templateField("bookingCancelledBody"),
     },
   });
 
@@ -116,6 +130,17 @@ export default async function SettingsPage({
   const iframeEmbed = `<iframe src="${intakeUrl}" style="width:100%;max-width:640px;height:900px;border:0;" title="Request a Charter — ${operator.name}"></iframe>`;
   const linkEmbed = `<a href="${intakeUrl}" target="_blank" rel="noopener">Request a Quote</a>`;
 
+  const templateFieldNames: Record<EmailTemplateKey, { subject: string; body: string }> = {
+    quote_sent: { subject: "quoteSentSubject", body: "quoteSentBody" },
+    booking_confirmed: { subject: "bookingConfirmedSubject", body: "bookingConfirmedBody" },
+    booking_cancelled: { subject: "bookingCancelledSubject", body: "bookingCancelledBody" },
+  };
+  const operatorTemplateValues: Record<EmailTemplateKey, { subject: string | null; body: string | null }> = {
+    quote_sent: { subject: operator.quoteSentSubject, body: operator.quoteSentBody },
+    booking_confirmed: { subject: operator.bookingConfirmedSubject, body: operator.bookingConfirmedBody },
+    booking_cancelled: { subject: operator.bookingCancelledSubject, body: operator.bookingCancelledBody },
+  };
+
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-10">
       <div className="flex items-center gap-3">
@@ -127,267 +152,338 @@ export default async function SettingsPage({
         )}
       </div>
 
-      <div className="mt-6 flex items-center gap-3 rounded-md border border-border p-3">
-        {operator.logoUrl && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={operator.logoUrl} alt={operator.name} className="h-8 w-auto" />
-        )}
-        <div>
-          <p className="text-sm font-medium">{operator.name}</p>
-          <p className="text-xs text-muted-foreground">
-            Name and logo shown to clients — managed in your organization
-            profile (the org switcher in the header, top right), not here.
-          </p>
-        </div>
+      <div className="mt-6">
+        <SettingsTabProvider>
+          <SettingsTabPanel tabKey="branding">
+            <div className="flex items-center gap-3 rounded-md border border-border p-3">
+              {operator.logoUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={operator.logoUrl} alt={operator.name} className="h-8 w-auto" />
+              )}
+              <div>
+                <p className="text-sm font-medium">{operator.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  Name and logo shown to clients — managed in your organization profile (the org
+                  switcher in the header, top right), not here.
+                </p>
+              </div>
+            </div>
+          </SettingsTabPanel>
+
+          <SettingsTabPanel tabKey="payments">
+            <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Stripe Connect
+              </h2>
+              {stripeError === "1" && (
+                <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+                  Couldn&apos;t reach Stripe to connect your account. Check that JetDeck&apos;s
+                  Stripe key is configured correctly and try again — contact support if it keeps
+                  happening.
+                </p>
+              )}
+              {operator.stripeChargesEnabled ? (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm">
+                    <span className="font-medium text-accent">✓ Stripe connected</span> — client
+                    card hold deposits go directly to your own Stripe account.
+                  </p>
+                  <form action={openStripeDashboard}>
+                    <Button type="submit" variant="outline" size="sm">
+                      Open Stripe Dashboard
+                    </Button>
+                  </form>
+                </div>
+              ) : operator.stripeAccountId ? (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-muted-foreground">
+                    Stripe onboarding started but not finished — until it&apos;s complete, card
+                    hold deposits fall back to JetDeck&apos;s account instead of yours.
+                  </p>
+                  <form action={startStripeOnboarding}>
+                    <Button type="submit" size="sm">
+                      Finish Stripe Onboarding
+                    </Button>
+                  </form>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-muted-foreground">
+                    Connect your own Stripe account so client card hold deposits go directly to
+                    you, not JetDeck.
+                  </p>
+                  <form action={startStripeOnboarding}>
+                    <Button type="submit" size="sm">
+                      Connect Stripe
+                    </Button>
+                  </form>
+                </div>
+              )}
+            </div>
+          </SettingsTabPanel>
+
+          <SettingsTabPanel tabKey="website">
+            <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Website Widget
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Add a &quot;Request a Charter&quot; form to your own website — clients submit trip
+                requests directly into JetDeck instead of emailing you.
+              </p>
+
+              <div className="flex flex-col gap-2">
+                <Label>Direct link</Label>
+                <div className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                  <code className="flex-1 truncate text-sm">{intakeUrl}</code>
+                  <CopyLinkButton link={intakeUrl} />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Simplest option — link a &quot;Request a Quote&quot; button on your site
+                  straight to this URL.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label>Embed as a button or text link</Label>
+                <div className="flex items-start gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                  <code className="flex-1 text-sm break-all">{linkEmbed}</code>
+                  <CopyLinkButton link={linkEmbed} className="shrink-0" />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label>Embed the form directly on the page (iframe)</Label>
+                <div className="flex items-start gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                  <code className="flex-1 text-sm break-all">{iframeEmbed}</code>
+                  <CopyLinkButton link={iframeEmbed} className="shrink-0" />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Paste this into an HTML/embed block on your site (works on WordPress,
+                  Squarespace, Wix, Webflow, or any platform that allows raw HTML). Adjust the
+                  width/height to fit your page.
+                </p>
+              </div>
+            </div>
+          </SettingsTabPanel>
+
+          <form action={updateSettings} className="flex flex-col gap-6">
+            <SettingsTabPanel tabKey="payments">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="depositPercent">Deposit percentage</Label>
+                <Input
+                  id="depositPercent"
+                  name="depositPercent"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  defaultValue={Math.round(operator.depositPercent * 100)}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="ccProcessingFeePercent">Credit card processing fee (%)</Label>
+                <Input
+                  id="ccProcessingFeePercent"
+                  name="ccProcessingFeePercent"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="0.1"
+                  defaultValue={operator.ccProcessingFeePercent}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Added to the deposit when a client chooses to pay by credit card instead of
+                  wire.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="wireInstructions">Wire instructions</Label>
+                <Textarea
+                  id="wireInstructions"
+                  name="wireInstructions"
+                  defaultValue={operator.wireInstructions ?? ""}
+                  placeholder="Shown to clients on confirmed bookings"
+                  rows={4}
+                />
+              </div>
+            </SettingsTabPanel>
+
+            <SettingsTabPanel tabKey="email">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="fromEmail">From address</Label>
+                <Input
+                  id="fromEmail"
+                  name="fromEmail"
+                  type="email"
+                  defaultValue={operator.fromEmail ?? ""}
+                  placeholder="quotes@outbound.youroperator.com"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Technical sending address — must be on a domain verified in Resend, or delivery
+                  will fail. Clients don&apos;t see this in practice: outbound email shows your
+                  operator name, and replies go to the Reply-to address below regardless of what
+                  this is set to. Leave blank to use the app default.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="replyToEmail">Reply-to address</Label>
+                <Input
+                  id="replyToEmail"
+                  name="replyToEmail"
+                  type="email"
+                  defaultValue={operator.replyToEmail ?? ""}
+                  placeholder="quotes@youroperator.com"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Your real charter inbox. When a client hits reply on a JetDeck email, it lands
+                  here — set this to the same mailbox you&apos;re forwarding to the inbound
+                  address below, so replies flow back into JetDeck automatically too. Also BCC&apos;d
+                  on every client-facing email, so you have proof in your own inbox that it went
+                  out.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="notifyEmail">Internal notification email</Label>
+                <Input
+                  id="notifyEmail"
+                  name="notifyEmail"
+                  type="email"
+                  defaultValue={operator.notifyEmail ?? ""}
+                  placeholder="ops@youroperator.com"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Where JetDeck sends alerts — quote accepted/declined, change requests, and
+                  general inquiries.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="inboundEmail">Inbound email address</Label>
+                <Input
+                  id="inboundEmail"
+                  name="inboundEmail"
+                  type="email"
+                  defaultValue={operator.inboundEmail ?? ""}
+                  placeholder="quotes@inbound.youroperator.com"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Set up an auto-forward rule in your real charter inbox (the Reply-to address
+                  above) pointing to this address — it&apos;s never given out to clients, just
+                  where your own inbox silently copies mail so JetDeck&apos;s AI triage pipeline
+                  can see it. Must exactly match the address Postmark delivers inbound mail to.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+                <div>
+                  <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Email Templates
+                  </h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Customize the subject and body of the emails your clients actually receive.
+                    Leave a field blank to use the built-in default. Insert a variable by typing
+                    it exactly as shown, including the double braces.
+                  </p>
+                </div>
+
+                {(Object.keys(EMAIL_TEMPLATES) as EmailTemplateKey[]).map((key) => {
+                  const def = EMAIL_TEMPLATES[key];
+                  const fields = templateFieldNames[key];
+                  const values = operatorTemplateValues[key];
+                  return (
+                    <details key={key} className="rounded-md border border-border p-3">
+                      <summary className="cursor-pointer text-sm font-medium">{def.label}</summary>
+                      <div className="mt-3 flex flex-col gap-3">
+                        <p className="text-xs text-muted-foreground">{def.description}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Variables:{" "}
+                          {def.variables.map((v, i) => (
+                            <span key={v.key}>
+                              <code className="rounded bg-muted px-1 py-0.5">{`{{${v.key}}}`}</code>{" "}
+                              <span>({v.description})</span>
+                              {i < def.variables.length - 1 ? ", " : ""}
+                            </span>
+                          ))}
+                        </p>
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={fields.subject}>Subject</Label>
+                          <Input
+                            id={fields.subject}
+                            name={fields.subject}
+                            defaultValue={values.subject ?? def.defaultSubject}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={fields.body}>Body (HTML)</Label>
+                          <Textarea
+                            id={fields.body}
+                            name={fields.body}
+                            defaultValue={values.body ?? def.defaultBody}
+                            rows={6}
+                          />
+                        </div>
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+            </SettingsTabPanel>
+
+            <SettingsTabPanel tabKey="quoting">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="termsText">Charter terms &amp; conditions</Label>
+                <Textarea
+                  id="termsText"
+                  name="termsText"
+                  defaultValue={operator.termsText ?? ""}
+                  placeholder="Shown on the client quote page above the accept button"
+                  rows={8}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="defaultBlockTimeBufferHours">Block time buffer (hrs/leg)</Label>
+                  <Input
+                    id="defaultBlockTimeBufferHours"
+                    name="defaultBlockTimeBufferHours"
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    defaultValue={operator.defaultBlockTimeBufferHours}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    Added to each leg&apos;s flight time for climb/descent/taxi.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="defaultOvernightFee">Overnight fee ($/night)</Label>
+                  <Input
+                    id="defaultOvernightFee"
+                    name="defaultOvernightFee"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    defaultValue={operator.defaultOvernightFee}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    Applied when the aircraft doesn&apos;t return to home base.
+                  </p>
+                </div>
+              </div>
+            </SettingsTabPanel>
+
+            <Button type="submit" className="self-start">
+              Save
+            </Button>
+          </form>
+        </SettingsTabProvider>
       </div>
-
-      <div className="mt-6 flex flex-col gap-3 rounded-md border border-border p-4">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Payments
-        </h2>
-        {stripeError === "1" && (
-          <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
-            Couldn&apos;t reach Stripe to connect your account. Check that JetDeck&apos;s Stripe
-            key is configured correctly and try again — contact support if it keeps happening.
-          </p>
-        )}
-        {operator.stripeChargesEnabled ? (
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm">
-              <span className="font-medium text-accent">✓ Stripe connected</span> — client card
-              hold deposits go directly to your own Stripe account.
-            </p>
-            <form action={openStripeDashboard}>
-              <Button type="submit" variant="outline" size="sm">
-                Open Stripe Dashboard
-              </Button>
-            </form>
-          </div>
-        ) : operator.stripeAccountId ? (
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              Stripe onboarding started but not finished — until it&apos;s complete, card hold
-              deposits fall back to JetDeck&apos;s account instead of yours.
-            </p>
-            <form action={startStripeOnboarding}>
-              <Button type="submit" size="sm">
-                Finish Stripe Onboarding
-              </Button>
-            </form>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              Connect your own Stripe account so client card hold deposits go directly to you,
-              not JetDeck.
-            </p>
-            <form action={startStripeOnboarding}>
-              <Button type="submit" size="sm">
-                Connect Stripe
-              </Button>
-            </form>
-          </div>
-        )}
-      </div>
-
-      <div className="mt-6 flex flex-col gap-3 rounded-md border border-border p-4">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Website Widget
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Add a &quot;Request a Charter&quot; form to your own website — clients submit trip
-          requests directly into JetDeck instead of emailing you.
-        </p>
-
-        <div className="flex flex-col gap-2">
-          <Label>Direct link</Label>
-          <div className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
-            <code className="flex-1 truncate text-sm">{intakeUrl}</code>
-            <CopyLinkButton link={intakeUrl} />
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Simplest option — link a &quot;Request a Quote&quot; button on your site straight to
-            this URL.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label>Embed as a button or text link</Label>
-          <div className="flex items-start gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
-            <code className="flex-1 text-sm break-all">{linkEmbed}</code>
-            <CopyLinkButton link={linkEmbed} className="shrink-0" />
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label>Embed the form directly on the page (iframe)</Label>
-          <div className="flex items-start gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
-            <code className="flex-1 text-sm break-all">{iframeEmbed}</code>
-            <CopyLinkButton link={iframeEmbed} className="shrink-0" />
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Paste this into an HTML/embed block on your site (works on WordPress, Squarespace,
-            Wix, Webflow, or any platform that allows raw HTML). Adjust the width/height to fit
-            your page.
-          </p>
-        </div>
-      </div>
-
-      <form action={updateSettings} className="mt-6 flex flex-col gap-6">
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="wireInstructions">Wire instructions</Label>
-          <Textarea
-            id="wireInstructions"
-            name="wireInstructions"
-            defaultValue={operator.wireInstructions ?? ""}
-            placeholder="Shown to clients on confirmed bookings"
-            rows={4}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="termsText">Charter terms & conditions</Label>
-          <Textarea
-            id="termsText"
-            name="termsText"
-            defaultValue={operator.termsText ?? ""}
-            placeholder="Shown on the client quote page above the accept button"
-            rows={8}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="depositPercent">Deposit percentage</Label>
-          <Input
-            id="depositPercent"
-            name="depositPercent"
-            type="number"
-            min={0}
-            max={100}
-            step={1}
-            defaultValue={Math.round(operator.depositPercent * 100)}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="ccProcessingFeePercent">Credit card processing fee (%)</Label>
-          <Input
-            id="ccProcessingFeePercent"
-            name="ccProcessingFeePercent"
-            type="number"
-            min={0}
-            max={100}
-            step="0.1"
-            defaultValue={operator.ccProcessingFeePercent}
-          />
-          <p className="text-sm text-muted-foreground">
-            Added to the deposit when a client chooses to pay by credit card instead of wire.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="fromEmail">From address</Label>
-          <Input
-            id="fromEmail"
-            name="fromEmail"
-            type="email"
-            defaultValue={operator.fromEmail ?? ""}
-            placeholder="quotes@outbound.youroperator.com"
-          />
-          <p className="text-sm text-muted-foreground">
-            Technical sending address — must be on a domain verified in
-            Resend, or delivery will fail. Clients don&apos;t see this in
-            practice: outbound email shows your operator name, and replies go
-            to the Reply-to address below regardless of what this is set to.
-            Leave blank to use the app default.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="replyToEmail">Reply-to address</Label>
-          <Input
-            id="replyToEmail"
-            name="replyToEmail"
-            type="email"
-            defaultValue={operator.replyToEmail ?? ""}
-            placeholder="quotes@youroperator.com"
-          />
-          <p className="text-sm text-muted-foreground">
-            Your real charter inbox. When a client hits reply on a JetDeck
-            email, it lands here — set this to the same mailbox you&apos;re
-            forwarding to the inbound address below, so replies flow back
-            into JetDeck automatically too.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="notifyEmail">Internal notification email</Label>
-          <Input
-            id="notifyEmail"
-            name="notifyEmail"
-            type="email"
-            defaultValue={operator.notifyEmail ?? ""}
-            placeholder="ops@youroperator.com"
-          />
-          <p className="text-sm text-muted-foreground">
-            Where JetDeck sends alerts — quote accepted/declined, change
-            requests, and general inquiries.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="defaultBlockTimeBufferHours">Block time buffer (hrs/leg)</Label>
-            <Input
-              id="defaultBlockTimeBufferHours"
-              name="defaultBlockTimeBufferHours"
-              type="number"
-              min={0}
-              step="0.1"
-              defaultValue={operator.defaultBlockTimeBufferHours}
-            />
-            <p className="text-sm text-muted-foreground">
-              Added to each leg&apos;s flight time for climb/descent/taxi.
-            </p>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="defaultOvernightFee">Overnight fee ($/night)</Label>
-            <Input
-              id="defaultOvernightFee"
-              name="defaultOvernightFee"
-              type="number"
-              min={0}
-              step="0.01"
-              defaultValue={operator.defaultOvernightFee}
-            />
-            <p className="text-sm text-muted-foreground">
-              Applied when the aircraft doesn&apos;t return to home base.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="inboundEmail">Inbound email address</Label>
-          <Input
-            id="inboundEmail"
-            name="inboundEmail"
-            type="email"
-            defaultValue={operator.inboundEmail ?? ""}
-            placeholder="quotes@inbound.youroperator.com"
-          />
-          <p className="text-sm text-muted-foreground">
-            Set up an auto-forward rule in your real charter inbox (the
-            Reply-to address above) pointing to this address — it&apos;s
-            never given out to clients, just where your own inbox silently
-            copies mail so JetDeck&apos;s AI triage pipeline can see it. Must
-            exactly match the address Postmark delivers inbound mail to.
-          </p>
-        </div>
-
-        <Button type="submit" className="self-start">
-          Save
-        </Button>
-      </form>
     </div>
   );
 }

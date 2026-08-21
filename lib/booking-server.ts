@@ -4,14 +4,8 @@ import { formatCurrency } from "@/lib/quote";
 import { getAppUrl } from "@/lib/url";
 import { createCardHoldCheckoutSession, createAchPaymentCheckoutSession, cancelCardHold } from "@/lib/stripe";
 import { createManifestForTrip } from "@/lib/manifest";
-import {
-  revenueLegsOf,
-  legDate,
-  legTimeLabel,
-  routeAndDateText,
-  findConflictingBooking,
-  formatIsoDate,
-} from "@/lib/itinerary";
+import { revenueLegsOf, legDate, findConflictingBooking, formatIsoDate } from "@/lib/itinerary";
+import { EMAIL_TEMPLATES, renderTemplate, routingVars } from "@/lib/email-templates";
 
 // Same-aircraft, overlapping-away-window conflicts against anything already
 // committed to that slot — "accepted" bookings, "approved" ones still
@@ -94,12 +88,8 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
 
   const requestorEmail = quote.tripRequest?.requestorEmail;
   const requestorName = quote.tripRequest?.requestorName ?? "there";
-  const revenueLegs = revenueLegsOf(option.itinerary);
-  const routingHtml = revenueLegs
-    .map((leg) => `${leg.depAirport} → ${leg.arrAirport} — ${legDate(leg)}, ${legTimeLabel(leg)}`)
-    .join("<br/>");
+  const { routeShort, routing, date } = routingVars(option.itinerary);
 
-  const { route, date } = routeAndDateText(option.itinerary);
   // What the client actually read and signed at send/accept time, not
   // whatever the operator's Settings page currently holds — same reasoning
   // as acceptedTermsHash in app/q/[token]/page.tsx.
@@ -133,15 +123,34 @@ export async function sendBookingConfirmationEmail(quoteId: string) {
       : "";
 
   if (requestorEmail) {
+    // The templated part is just the intro/reference/routing/total — wire
+    // instructions, the card-authorization follow-up line, and the charter
+    // terms all depend on real payment-method/state logic, not wording, so
+    // they stay app-controlled and get appended after it regardless of what
+    // the operator's template says.
+    const templateVars = {
+      clientName: requestorName,
+      operatorName: quote.operator.name,
+      quoteNumber: quote.quoteNumber,
+      routeShort,
+      date,
+      routing,
+      total: formatCurrency(option.total),
+      paymentLine,
+    };
+    const body = renderTemplate(
+      quote.operator.bookingConfirmedBody || EMAIL_TEMPLATES.booking_confirmed.defaultBody,
+      templateVars
+    );
+
     await sendEmail({
       to: requestorEmail,
-      subject: `Your Charter Agreement — ${route} on ${date}`,
+      subject: renderTemplate(
+        quote.operator.bookingConfirmedSubject || EMAIL_TEMPLATES.booking_confirmed.defaultSubject,
+        templateVars
+      ),
       html: `
-        <p>Hi ${requestorName},</p>
-        <p>Thank you for booking with ${quote.operator.name}. Your charter agreement is confirmed.</p>
-        <p><strong>Reference:</strong> ${quote.quoteNumber}</p>
-        <p><strong>Routing:</strong><br/>${routingHtml}</p>
-        <p><strong>Total:</strong> ${formatCurrency(option.total)}${paymentLine}</p>
+        ${body}
         ${quote.operator.wireInstructions && (waivesCardHold || quote.paymentMethod === "wire") ? `<p><strong>Wire instructions:</strong><br/>${quote.operator.wireInstructions.replace(/\n/g, "<br/>")}</p>` : ""}
         ${followUpLine}
         ${

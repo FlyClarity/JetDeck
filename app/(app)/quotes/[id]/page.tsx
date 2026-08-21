@@ -14,6 +14,7 @@ import {
 import { parseOptionFromFormData, parseOptionCount } from "@/lib/quote-option-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
 import { revenueLegsOf, legDate, autoNightsAwayOf } from "@/lib/itinerary";
+import { EMAIL_TEMPLATES, renderTemplate, routingVars } from "@/lib/email-templates";
 import {
   buildGapsForAircraft,
   findAnchorForDate,
@@ -132,10 +133,25 @@ async function sendQuote(id: string) {
       ? `${optionCount} pricing options to choose from.`
       : `Total: ${formatCurrency(option.total)}.`;
 
+  const { routeShort, routing } = routingVars(option.itinerary);
+  const templateVars = {
+    clientName: quote.tripRequest.requestorName,
+    quoteNumber: quote.quoteNumber,
+    routeShort,
+    routing,
+    pricingLine,
+    validUntil: quote.validUntil.toLocaleDateString(),
+    quoteLink,
+    operatorName: operator.name,
+  };
+
   await sendEmail({
     to: quote.tripRequest.requestorEmail,
-    subject: `Your Charter Quote — ${quote.quoteNumber}`,
-    html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>Your quote is ready: <a href="${quoteLink}">View Quote</a></p><p>${pricingLine} Valid until ${quote.validUntil.toLocaleDateString()}.</p><p>— ${operator.name}</p>`,
+    subject: renderTemplate(
+      operator.quoteSentSubject || EMAIL_TEMPLATES.quote_sent.defaultSubject,
+      templateVars
+    ),
+    html: renderTemplate(operator.quoteSentBody || EMAIL_TEMPLATES.quote_sent.defaultBody, templateVars),
     replyTo: operator.replyToEmail ?? undefined,
     bcc: operator.replyToEmail ?? undefined,
     from: operator.fromEmail,
@@ -177,7 +193,7 @@ async function cancelBooking(id: string, formData: FormData) {
 
   const scoped = await getScopedQuote(id);
   if (!scoped) return;
-  const { quote, operator } = scoped;
+  const { quote, option, operator } = scoped;
   if (quote.status !== "accepted") return;
 
   const note = String(formData.get("cancellationNote") ?? "").trim();
@@ -198,10 +214,24 @@ async function cancelBooking(id: string, formData: FormData) {
   });
 
   if (quote.tripRequest?.requestorEmail) {
+    const { routeShort } = routingVars(option.itinerary);
+    const templateVars = {
+      clientName: quote.tripRequest.requestorName,
+      quoteNumber: quote.quoteNumber,
+      routeShort,
+      cancellationNote: note,
+      operatorName: operator.name,
+    };
     await sendEmail({
       to: quote.tripRequest.requestorEmail,
-      subject: `Important update — ${quote.quoteNumber}`,
-      html: `<p>Hi ${quote.tripRequest.requestorName},</p><p>We're sorry to let you know your booking (${quote.quoteNumber}) has been cancelled: ${note}</p><p>Please contact us so we can help find another solution.</p><p>— ${operator.name}</p>`,
+      subject: renderTemplate(
+        operator.bookingCancelledSubject || EMAIL_TEMPLATES.booking_cancelled.defaultSubject,
+        templateVars
+      ),
+      html: renderTemplate(
+        operator.bookingCancelledBody || EMAIL_TEMPLATES.booking_cancelled.defaultBody,
+        templateVars
+      ),
       replyTo: operator.replyToEmail ?? undefined,
       bcc: operator.replyToEmail ?? undefined,
       from: operator.fromEmail,
