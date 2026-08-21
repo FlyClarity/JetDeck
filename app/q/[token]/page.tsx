@@ -512,36 +512,43 @@ export default async function ClientQuotePage({
             </p>
           </section>
 
-          {option.aircraft && (option.aircraft.photos.length > 0 || option.aircraft.amenities.length > 0) && (
-            <section className="mt-7">
-              <SectionHeading>Aircraft</SectionHeading>
-              {option.aircraft.photos.length > 0 && (
-                <div className="mt-3 flex gap-2 overflow-x-auto">
-                  {option.aircraft.photos.map((url) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      key={url}
-                      src={url}
-                      alt={aircraftLabel}
-                      className="h-32 w-48 shrink-0 rounded-xl border border-border/70 object-cover"
-                    />
-                  ))}
-                </div>
-              )}
-              {option.aircraft.amenities.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {option.aircraft.amenities.map((a) => (
-                    <span
-                      key={a}
-                      className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground"
-                    >
-                      {amenityLabel(a)}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
+          {(() => {
+            // Own-fleet and brokered aircraft carry the same photos/
+            // amenities shape — show whichever one this option actually has
+            // rather than only ever reading option.aircraft.
+            const media = option.aircraft ?? option.brokeredAircraft;
+            if (!media || (media.photos.length === 0 && media.amenities.length === 0)) return null;
+            return (
+              <section className="mt-7">
+                <SectionHeading>Aircraft</SectionHeading>
+                {media.photos.length > 0 && (
+                  <div className="mt-3 flex gap-2 overflow-x-auto">
+                    {media.photos.map((url) => (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        key={url}
+                        src={url}
+                        alt={aircraftLabel}
+                        className="h-32 w-48 shrink-0 rounded-xl border border-border/70 object-cover"
+                      />
+                    ))}
+                  </div>
+                )}
+                {media.amenities.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {media.amenities.map((a) => (
+                      <span
+                        key={a}
+                        className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground"
+                      >
+                        {amenityLabel(a)}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </section>
+            );
+          })()}
 
           {option.clientNotes && (
             <section className="mt-7">

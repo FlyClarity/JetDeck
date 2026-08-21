@@ -1,5 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { randomUUID } from "node:crypto";
+import { put, del } from "@vercel/blob";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Button } from "@/components/ui/button";
@@ -13,7 +15,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AIRCRAFT_CATEGORIES, categoryLabel } from "@/lib/aircraft";
+import { AIRCRAFT_CATEGORIES, AIRCRAFT_AMENITIES, categoryLabel } from "@/lib/aircraft";
+import { AircraftPhotoManager } from "@/components/fleet/aircraft-photo-manager";
+
+const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 
 async function getScopedOperatorId() {
   const { clerkOrgId } = await getTenantContext();
@@ -96,6 +101,7 @@ async function addBrokeredAircraft(preferredOperatorId: string, formData: FormDa
       category: String(formData.get("category") ?? "") || null,
       seats: formData.get("seats") ? Number(formData.get("seats")) : null,
       homeBase: String(formData.get("homeBase") ?? "").trim().toUpperCase() || null,
+      amenities: formData.getAll("amenities").map(String),
     },
   });
 
@@ -125,7 +131,103 @@ async function updateBrokeredAircraft(preferredOperatorId: string, aircraftId: s
       category: String(formData.get("category") ?? "") || null,
       seats: formData.get("seats") ? Number(formData.get("seats")) : null,
       homeBase: String(formData.get("homeBase") ?? "").trim().toUpperCase() || null,
+      amenities: formData.getAll("amenities").map(String),
     },
+  });
+
+  revalidatePath(`/sourcing/${preferredOperatorId}`);
+}
+
+// Same pattern as the Fleet equivalent (app/(app)/fleet/[id]/page.tsx) —
+// errors returned to the client component instead of just logged, since a
+// silent failure here leaves no way to tell "nothing happened" apart from
+// "it worked."
+async function uploadBrokeredAircraftPhotos(
+  preferredOperatorId: string,
+  aircraftId: string,
+  _prevState: { error: string } | null,
+  formData: FormData
+): Promise<{ error: string } | null> {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return { error: "Not signed in." };
+
+  const existing = await prisma.brokeredAircraft.findFirst({
+    where: { id: aircraftId, operatorId, preferredOperatorId },
+  });
+  if (!existing) return { error: "Aircraft not found." };
+
+  const files = formData
+    .getAll("photos")
+    .filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) return { error: "Choose at least one photo." };
+
+  const invalid = files.find((f) => !f.type.startsWith("image/") || f.size > MAX_PHOTO_BYTES);
+  if (invalid) return { error: `"${invalid.name}" isn't an image under 8MB.` };
+
+  let uploadedUrls: string[];
+  try {
+    const blobs = await Promise.all(
+      files.map((file) =>
+        put(`brokered-aircraft/${aircraftId}/${randomUUID()}-${file.name}`, file, { access: "public" })
+      )
+    );
+    uploadedUrls = blobs.map((b) => b.url);
+  } catch (err) {
+    console.error("Failed to upload brokered aircraft photo(s)", err);
+    const detail = err instanceof Error ? err.message : String(err);
+    return { error: `Upload failed: ${detail}` };
+  }
+
+  await prisma.brokeredAircraft.update({
+    where: { id: aircraftId },
+    data: { photos: { push: uploadedUrls } },
+  });
+
+  revalidatePath(`/sourcing/${preferredOperatorId}`);
+  return null;
+}
+
+async function removeBrokeredAircraftPhoto(preferredOperatorId: string, aircraftId: string, url: string) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+
+  const existing = await prisma.brokeredAircraft.findFirst({
+    where: { id: aircraftId, operatorId, preferredOperatorId },
+  });
+  if (!existing) return;
+
+  try {
+    await del(url);
+  } catch (err) {
+    console.error("Failed to delete photo blob (removing from list anyway)", err);
+  }
+
+  await prisma.brokeredAircraft.update({
+    where: { id: aircraftId },
+    data: { photos: existing.photos.filter((p) => p !== url) },
+  });
+
+  revalidatePath(`/sourcing/${preferredOperatorId}`);
+}
+
+async function setBrokeredAircraftCoverPhoto(preferredOperatorId: string, aircraftId: string, url: string) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+
+  const existing = await prisma.brokeredAircraft.findFirst({
+    where: { id: aircraftId, operatorId, preferredOperatorId },
+  });
+  if (!existing || !existing.photos.includes(url)) return;
+
+  await prisma.brokeredAircraft.update({
+    where: { id: aircraftId },
+    data: { photos: [url, ...existing.photos.filter((p) => p !== url)] },
   });
 
   revalidatePath(`/sourcing/${preferredOperatorId}`);
@@ -279,6 +381,9 @@ export default async function PreferredOperatorPage({
             {brokeredAircraft.map((a) => {
               const removeWithId = deleteBrokeredAircraft.bind(null, preferredOperator.id, a.id);
               const updateWithAircraftId = updateBrokeredAircraft.bind(null, preferredOperator.id, a.id);
+              const uploadPhotosWithId = uploadBrokeredAircraftPhotos.bind(null, preferredOperator.id, a.id);
+              const removePhotoWithId = removeBrokeredAircraftPhoto.bind(null, preferredOperator.id, a.id);
+              const setCoverPhotoWithId = setBrokeredAircraftCoverPhoto.bind(null, preferredOperator.id, a.id);
               return (
                 <details key={a.id} className="rounded-md border border-border text-sm">
                   <summary className="cursor-pointer px-3 py-2">
@@ -292,6 +397,18 @@ export default async function PreferredOperatorPage({
                     </span>
                   </summary>
                   <div className="border-t border-border p-3">
+                    <div className="mb-4 flex flex-col gap-2">
+                      <Label>Photos</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Shown to clients on their quote page — the cover photo shows first.
+                      </p>
+                      <AircraftPhotoManager
+                        photos={a.photos}
+                        uploadAction={uploadPhotosWithId}
+                        removeAction={removePhotoWithId}
+                        setCoverAction={setCoverPhotoWithId}
+                      />
+                    </div>
                     <form action={updateWithAircraftId} className="flex flex-col gap-3">
                       <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col gap-2">
@@ -347,6 +464,26 @@ export default async function PreferredOperatorPage({
                             name="homeBase"
                             defaultValue={a.homeBase ?? ""}
                           />
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <Label>Amenities</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {AIRCRAFT_AMENITIES.map((amenity) => (
+                            <div key={amenity.value} className="flex items-center gap-2">
+                              <input
+                                id={`amenity-${a.id}-${amenity.value}`}
+                                name="amenities"
+                                type="checkbox"
+                                value={amenity.value}
+                                defaultChecked={a.amenities.includes(amenity.value)}
+                                className="size-4 rounded border-input"
+                              />
+                              <Label htmlFor={`amenity-${a.id}-${amenity.value}`} className="font-normal">
+                                {amenity.label}
+                              </Label>
+                            </div>
+                          ))}
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
@@ -413,6 +550,28 @@ export default async function PreferredOperatorPage({
                 <Label htmlFor="aircraftHomeBase">Home base (ICAO)</Label>
                 <Input id="aircraftHomeBase" name="homeBase" placeholder="KTEB" />
               </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Amenities</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {AIRCRAFT_AMENITIES.map((amenity) => (
+                  <div key={amenity.value} className="flex items-center gap-2">
+                    <input
+                      id={`new-amenity-${amenity.value}`}
+                      name="amenities"
+                      type="checkbox"
+                      value={amenity.value}
+                      className="size-4 rounded border-input"
+                    />
+                    <Label htmlFor={`new-amenity-${amenity.value}`} className="font-normal">
+                      {amenity.label}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Photos can be added once the aircraft is saved.
+              </p>
             </div>
             <Button type="submit" size="sm" className="self-start">
               Add Aircraft

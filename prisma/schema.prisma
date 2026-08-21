@@ -571,6 +571,10 @@ model BrokeredAircraft {
   category   String? // "light" | "midsize" | etc.
   seats      Int?
   homeBase   String?
+  // Same shape as Aircraft.photos/amenities — shown on the client quote
+  // page exactly like an owned-fleet aircraft's would be.
+  photos     String[] @default([])
+  amenities  String[] @default([])
 
   createdAt DateTime @default(now())
 

@@ -2750,3 +2750,42 @@ sites would come back empty; and whether extracted aircraft should be
 reviewed/edited before being added, or trusted and inserted directly
 the way AI-extracted trip requests already are. Worth a scoping pass
 before building rather than guessing at both.
+
+## Brokered aircraft get photos and amenities, same as owned fleet
+
+User asked for brokered aircraft to match owned fleet on photos and
+amenities, so a client sees the same quality of aircraft presentation
+regardless of whether the trip is flown on the operator's own tail or
+a sourced one.
+
+- ~~**Schema — shipped**~~: `BrokeredAircraft` gets `photos String[]` /
+  `amenities String[]` (migration `20260821110000_brokered_aircraft_media`),
+  identical shape to `Aircraft`'s existing fields.
+- ~~**`/sourcing/[id]` (Settings → Sourcing) — shipped**~~: the "Add an
+  aircraft" form gained an amenities checklist (same
+  `AIRCRAFT_AMENITIES` list Fleet uses — reused directly, no
+  duplication); each aircraft's edit disclosure gained the same
+  checklist (pre-checked) plus a full photo manager. Reused
+  `AircraftPhotoManager` (`components/fleet/aircraft-photo-manager.tsx`)
+  as-is — it was already generic (props are `photos`/`uploadAction`/
+  `removeAction`/`setCoverAction`, nothing Aircraft-specific), so no
+  changes needed there. New `uploadBrokeredAircraftPhotos`/
+  `removeBrokeredAircraftPhoto`/`setBrokeredAircraftCoverPhoto` server
+  actions mirror Fleet's photo actions exactly (same `@vercel/blob`
+  `put`/`del` calls, same 8MB/image-type validation, same "first photo
+  in the array is the cover" convention), just scoped to
+  `BrokeredAircraft` under a `brokered-aircraft/` blob path prefix
+  instead of `aircraft/`. Photos can only be added after the aircraft
+  is saved, same as Fleet — there's nothing to attach a blob to before
+  that.
+- ~~**Client quote page — shipped**~~: the aircraft photos/amenities
+  section on `/q/[token]` read only `option.aircraft` before — now
+  reads `option.aircraft ?? option.brokeredAircraft` (both carry the
+  same shape) so a brokered option's photos/amenities show up exactly
+  like an owned-fleet one's would, no separate rendering path needed.
+- Not verified live: same known limitation as the original Fleet
+  photos feature — this sandbox has no `BLOB_READ_WRITE_TOKEN`, so
+  actual upload/remove/set-cover round-trips couldn't be tested here.
+  Worth a quick smoke test on the deployed app: open a brokered
+  aircraft's edit disclosure, upload a photo, confirm it shows up
+  there and on that aircraft's quotes' client pages.
