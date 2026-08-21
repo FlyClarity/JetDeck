@@ -25,6 +25,8 @@ import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { OriginalRequestPanel } from "@/components/quote/original-request-panel";
 import { SendQuoteGate } from "@/components/quote/send-quote-gate";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 async function getScopedQuote(id: string) {
@@ -140,6 +142,33 @@ async function sendQuote(id: string) {
   });
 
   redirect(`/quotes/${quote.id}`);
+}
+
+// Every outbound email for this quote (the quote itself, follow-ups,
+// cancellation notices, booking confirmations in lib/booking-server.ts)
+// sends to TripRequest.requestorName/requestorEmail, not anything on
+// Contact — so fixing it here is the one edit that actually reaches every
+// send path, not just the next one. Exists because the AI-extracted (or
+// manually typed) contact info is sometimes wrong, and a bad address fails
+// silently from the operator's side — no bounce ever reaches this app.
+async function updateRequestorInfo(id: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedQuote(id);
+  if (!scoped) return;
+  const { quote } = scoped;
+  if (!quote.tripRequest) return;
+
+  const requestorName = String(formData.get("requestorName") ?? "").trim();
+  const requestorEmail = String(formData.get("requestorEmail") ?? "").trim();
+  if (!requestorName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestorEmail)) return;
+
+  await prisma.tripRequest.update({
+    where: { id: quote.tripRequest.id },
+    data: { requestorName, requestorEmail },
+  });
+
+  redirect(`/quotes/${id}`);
 }
 
 async function cancelBooking(id: string, formData: FormData) {
@@ -423,6 +452,7 @@ export default async function QuotePage({
   }));
 
   const updateQuoteWithId = updateQuote.bind(null, quote.id);
+  const updateRequestorInfoWithId = updateRequestorInfo.bind(null, quote.id);
   const sendQuoteWithId = sendQuote.bind(null, quote.id);
   const cancelBookingWithId = cancelBooking.bind(null, quote.id);
   const confirmPendingBookingWithId = confirmPendingBooking.bind(null, quote.id);
@@ -451,6 +481,47 @@ export default async function QuotePage({
               : quote.status}
         </span>
       </div>
+
+      {quote.tripRequest && (
+        <details className="mt-3 text-sm">
+          <summary className="cursor-pointer text-muted-foreground">
+            Client contact — {quote.tripRequest.requestorName} (
+            {quote.tripRequest.requestorEmail})
+          </summary>
+          <form
+            action={updateRequestorInfoWithId}
+            className="mt-3 flex max-w-sm flex-col gap-3 rounded-md border border-border p-3"
+          >
+            <p className="text-xs text-muted-foreground">
+              Every email for this quote goes to the name and address below — fix it here if
+              it&apos;s wrong (e.g. a typo the AI pulled from the original email) rather than
+              leaving a quote silently unreachable.
+            </p>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="requestorName">Client name</Label>
+              <Input
+                id="requestorName"
+                name="requestorName"
+                defaultValue={quote.tripRequest.requestorName}
+                required
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="requestorEmail">Client email</Label>
+              <Input
+                id="requestorEmail"
+                name="requestorEmail"
+                type="email"
+                defaultValue={quote.tripRequest.requestorEmail}
+                required
+              />
+            </div>
+            <Button type="submit" size="sm" className="self-start">
+              Save
+            </Button>
+          </form>
+        </details>
+      )}
 
       {quote.status === "draft" ? (
         <div className="mt-4 flex flex-col gap-3">

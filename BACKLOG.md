@@ -2445,3 +2445,30 @@ above) pick it back up from there when the time comes.
   this computed position, while a "between legs" pair's arrival-home
   leg (same trip, different concept — see the code comment) still
   resyncs to true home base, unaffected.
+
+## Editable client name/email on a quote
+
+User reported quote emails not always reaching the client, and asked to
+be able to edit the recipient's name/email in case the stored
+information is wrong. Every outbound email tied to a quote — the quote
+itself, follow-ups, cancellation notices, and every booking-confirmation
+email in `lib/booking-server.ts` — sends to
+`TripRequest.requestorName`/`requestorEmail`, not anything on `Contact`.
+That's usually AI-extracted from the original inbound email (or typed by
+hand on a manual lead) and had no way to fix if wrong — a bad address
+just fails silently from the operator's side, no bounce ever reaches
+this app to flag it.
+
+- ~~**"Client contact" edit disclosure on the quote page — shipped**~~:
+  new `updateRequestorInfo` server action writes straight to
+  `TripRequest.requestorName`/`requestorEmail`, so a fix here reaches
+  every send path at once rather than just the next one. Exposed as a
+  `<details>` disclosure right under the quote header (matching the
+  existing "Send a follow-up message" pattern), visible regardless of
+  quote status — draft, sent, accepted, whatever — since a wrong
+  address can be caught at any point, not just before the first send.
+  Basic validation only (non-empty name, an email-shaped string) —
+  this isn't trying to verify deliverability, just catch the obvious
+  typo/garbage-extraction case. The "Review before sending" step on a
+  still-draft quote already reads live from `TripRequest`, so a fix
+  made here shows up there immediately without any separate wiring.
