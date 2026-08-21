@@ -72,6 +72,10 @@ async function updateQuote(id: string, formData: FormData) {
           quoteId: quote.id,
           label: o.label ?? "Option A",
           aircraftId: o.aircraftId,
+          fleetSource: o.fleetSource,
+          brokeredAircraftId: o.brokeredAircraftId,
+          wholesaleCost: o.wholesaleCost,
+          brokerMargin: o.brokerMargin,
           itinerary: o.itinerary,
           flightHours: o.flightHours,
           hourlyRate: o.hourlyRate,
@@ -336,6 +340,22 @@ export default async function QuotePage({
     orderBy: { tailNumber: "asc" },
   });
 
+  // Active preferred operators, plus whichever preferred operator this
+  // quote's own brokered option (if any) already sources from even if it's
+  // since gone inactive — otherwise reopening this quote would show its
+  // already-selected tail as if it no longer existed.
+  const brokeredAircraftList = await prisma.brokeredAircraft.findMany({
+    where: {
+      operatorId: operator.id,
+      OR: [
+        { preferredOperator: { isActive: true } },
+        { id: { in: allOptions.map((o) => o.brokeredAircraftId).filter((v): v is string => Boolean(v)) } },
+      ],
+    },
+    include: { preferredOperator: { select: { name: true } } },
+    orderBy: [{ preferredOperator: { name: "asc" } }, { tailNumber: "asc" }],
+  });
+
   const messages = await prisma.inboundEmail.findMany({
     where: { quoteId: quote.id },
     orderBy: { receivedAt: "asc" },
@@ -469,6 +489,9 @@ export default async function QuotePage({
   const initialOptions = allOptions.map((o) => ({
     label: o.label,
     aircraftId: o.aircraftId,
+    fleetSource: o.fleetSource === "brokered" ? ("brokered" as const) : ("own_fleet" as const),
+    brokeredAircraftId: o.brokeredAircraftId,
+    wholesaleCost: o.wholesaleCost,
     requestedLegs: [],
     legs: toSavedLegs((o.itinerary as StoredLeg[]) ?? []),
     hourlyRate: o.hourlyRate,
@@ -850,6 +873,7 @@ export default async function QuotePage({
           routeSummaryText={routeSummaryText}
           requestorLine={requestorLine}
           aircraftList={aircraftList}
+          brokeredAircraftList={brokeredAircraftList}
           airportsByIcao={airportsByIcao}
           positionByAircraftId={positionByAircraftId}
           trailingPositionByAircraftId={trailingPositionByAircraftId}

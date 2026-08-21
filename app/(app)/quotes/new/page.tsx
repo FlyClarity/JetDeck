@@ -127,19 +127,31 @@ async function createQuote(tripRequestId: string, formData: FormData) {
   const parsedOptions = Array.from({ length: optionCount }, (_, i) =>
     parseOptionFromFormData(formData, `option_${i}_`, operator.defaultOvernightFee)
   );
-  // Every option needs a real aircraft on this operator's fleet — silently
-  // refusing to create anything on a bad submission matches the prior
-  // single-option behavior rather than partially creating a quote with a
-  // missing aircraft on one of its options.
+  // Every option needs a real aircraft — either on this operator's own
+  // fleet, or a brokered tail on file under one of their preferred
+  // operators. Silently refusing to create anything on a bad submission
+  // matches the prior single-option behavior rather than partially creating
+  // a quote with a missing aircraft on one of its options.
   const aircraftIds = parsedOptions.map((o) => o.aircraftId).filter((id): id is string => Boolean(id));
-  const aircraftById = new Map(
-    (
-      await prisma.aircraft.findMany({
-        where: { id: { in: aircraftIds }, operatorId: operator.id },
-      })
-    ).map((a) => [a.id, a])
-  );
-  if (parsedOptions.some((o) => !o.aircraftId || !aircraftById.has(o.aircraftId))) return;
+  const brokeredAircraftIds = parsedOptions
+    .map((o) => o.brokeredAircraftId)
+    .filter((id): id is string => Boolean(id));
+  const [aircraftById, brokeredAircraftById] = await Promise.all([
+    prisma.aircraft
+      .findMany({ where: { id: { in: aircraftIds }, operatorId: operator.id } })
+      .then((rows) => new Map(rows.map((a) => [a.id, a]))),
+    prisma.brokeredAircraft
+      .findMany({ where: { id: { in: brokeredAircraftIds }, operatorId: operator.id } })
+      .then((rows) => new Map(rows.map((a) => [a.id, a]))),
+  ]);
+  if (
+    parsedOptions.some((o) =>
+      o.fleetSource === "brokered"
+        ? !o.brokeredAircraftId || !brokeredAircraftById.has(o.brokeredAircraftId)
+        : !o.aircraftId || !aircraftById.has(o.aircraftId)
+    )
+  )
+    return;
 
   const quoteNumber = await generateQuoteNumber(operator.id);
   const validUntil = String(formData.get("validUntil") ?? defaultValidUntil());
@@ -163,6 +175,10 @@ async function createQuote(tripRequestId: string, formData: FormData) {
           quoteId: quote.id,
           label: o.label ?? "Option A",
           aircraftId: o.aircraftId,
+          fleetSource: o.fleetSource,
+          brokeredAircraftId: o.brokeredAircraftId,
+          wholesaleCost: o.wholesaleCost,
+          brokerMargin: o.brokerMargin,
           itinerary: o.itinerary,
           flightHours: o.flightHours,
           hourlyRate: o.hourlyRate,
@@ -238,6 +254,15 @@ export default async function NewQuotePage({
   const aircraftList = await prisma.aircraft.findMany({
     where: { operatorId: operator.id, status: "active" },
     orderBy: { tailNumber: "asc" },
+  });
+
+  // Only from active preferred operators — an inactive one shouldn't be
+  // sourceable for a new quote even though its tails stay on file for
+  // historical quotes that already reference them.
+  const brokeredAircraftList = await prisma.brokeredAircraft.findMany({
+    where: { operatorId: operator.id, preferredOperator: { isActive: true } },
+    include: { preferredOperator: { select: { name: true } } },
+    orderBy: [{ preferredOperator: { name: "asc" } }, { tailNumber: "asc" }],
   });
 
   // Fed into the Quote Builder for a live "is this aircraft already booked
@@ -400,6 +425,7 @@ export default async function NewQuotePage({
           routeSummaryText={routeSummaryText}
           requestorLine={requestorLine}
           aircraftList={aircraftList}
+          brokeredAircraftList={brokeredAircraftList}
           airportsByIcao={airportsByIcao}
           positionByAircraftId={positionByAircraftId}
           trailingPositionByAircraftId={trailingPositionByAircraftId}
@@ -407,6 +433,9 @@ export default async function NewQuotePage({
           initialOptions={[
             {
               aircraftId: defaultAircraft?.id ?? null,
+              fleetSource: "own_fleet",
+              brokeredAircraftId: null,
+              wholesaleCost: null,
               requestedLegs,
               hourlyRate: defaultAircraft?.hourlyRate ?? 0,
               repoRate: defaultAircraft?.repoRate ?? defaultAircraft?.hourlyRate ?? 0,

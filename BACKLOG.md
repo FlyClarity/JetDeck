@@ -2624,3 +2624,73 @@ Not built yet: adding/managing the actual aircraft under a preferred
 operator (Phase 2), and nothing references this from the Quote Builder
 yet (Phase 3) — `wholesaleCost`/`brokerMargin` are still unused columns
 until then.
+
+## Broker sales — Phase 2 & 3: brokered aircraft + Quote Builder integration
+
+Continuing the broker-sales build from Phase 1 (Preferred Operators
+directory). This round: the actual tails you can source, and wiring the
+whole thing into the Quote Builder so a brokered trip can actually be
+quoted end to end.
+
+- ~~**Brokered aircraft management — shipped**~~: `/sourcing/[id]` now
+  lists and manages the tails on file under that preferred operator
+  (tail number, make/model, category, seats, home base) — an inline
+  "Add an aircraft" disclosure plus a "Remove" action per row. Remove
+  is blocked once any `QuoteOption` actually references the tail
+  (redirect + friendly banner, same pattern used everywhere else this
+  session for FK-guarded deletes) — nothing to "mark inactive" instead
+  since `BrokeredAircraft` has no such flag, it's a much lighter record
+  than a preferred operator.
+- ~~**Quote Builder: source a brokered aircraft — shipped**~~: a new
+  "My Fleet / Brokered" toggle at the top of each option's aircraft
+  picker (`components/quote/quote-builder-form.tsx`). Brokered mode
+  swaps in a `<Select>` of every active preferred operator's tails
+  (`TAIL — Make Model (Preferred Operator)`) in place of the owned-
+  fleet dropdown, and skips repositioning-leg logic entirely — no
+  home base to reposition from/to on a plane you don't operate, so
+  `buildInitialLegs` gets `null` for both the starting and ending
+  position and never synthesizes a leading/trailing/between-legs
+  repositioning leg. The double-booking conflict check is skipped too
+  for the same reason (a brokered tail isn't on a schedule this
+  operator's JetDeck controls).
+- ~~**Wholesale-cost pricing, decoupled from the client-facing total —
+  shipped**~~: brokered mode replaces "Hourly rate" / "Repositioning
+  rate" with "Wholesale cost ($)" (what the source operator quoted —
+  tracked for margin only, never sent to the client) and "Your price
+  to client ($)" (a flat number, not multiplied by flight hours — see
+  `calculateQuoteTotals`'s new `flatRate` mode in `lib/quote.ts`).
+  Landing/handling fees, discount, and FET tax still apply on top
+  exactly as they do for an owned-fleet option. A live "Margin: $X"
+  line shows `total - wholesaleCost`, matching
+  `QuoteOption.brokerMargin`'s already-documented meaning — red if
+  negative. Flight hours themselves stay a real, separately-tracked
+  duration (summed from the legs, entered by hand since a brokered
+  tail has no cruise speed on file) — never hijacked to make the
+  pricing math work, so "Flight (3.2 hrs)" in the sidebar still means
+  what it says.
+- ~~**Server-side wiring — shipped**~~: `parseOptionFromFormData`
+  parses `fleetSource`/`brokeredAircraftId`/`wholesaleCost` and
+  computes `brokerMargin`; both `createQuote`
+  (`quotes/new/page.tsx`) and `updateQuote` (`quotes/[id]/page.tsx`)
+  validate a brokered option against a real `BrokeredAircraft` the
+  operator owns (same silent-refuse-on-bad-submission behavior the
+  owned-fleet path already had) and persist all four new columns.
+  Both pages fetch the operator's active-preferred-operator tails
+  (`quotes/[id]/page.tsx` also keeps an already-selected tail visible
+  even if its preferred operator has since gone inactive, so reopening
+  an old quote doesn't show a hole where the aircraft used to be).
+- **Not touched, confirmed already correct**: the client-facing quote
+  page (`/q/[token]/page.tsx`) already queried `brokeredAircraft` and
+  had a fallback aircraft-name builder for it from an earlier schema
+  pass — no changes needed there. AI opportunity scoring
+  (`lib/ai/score-opportunity.ts`) and the Fleet Calendar stay owned-
+  fleet-only, unchanged, per the Phase 4 plan from last round.
+
+Checked `/ops/trips/[id]` too, expecting to find the same gap there —
+it already has its own `aircraft ?? brokeredAircraft` fallback for both
+the display label and seat count, and `/ops/board`/`/ops/trips` don't
+show aircraft at all on their list rows, so there was nothing to fix.
+Only real remaining gap (Phase 4): aircraft photos/amenities for a
+brokered tail on the client quote page — still just tail/make/model/
+category/seats, no visual section, same limitation the fleet-photos
+feature already flagged as out of scope for brokered aircraft.

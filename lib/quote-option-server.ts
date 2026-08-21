@@ -12,11 +12,19 @@ export function parseOptionFromFormData(
   prefix: string,
   defaultOvernightFee: number
 ) {
-  const aircraftId = String(formData.get(`${prefix}aircraftId`) ?? "");
+  const fleetSource = String(formData.get(`${prefix}fleetSource`) ?? "own_fleet");
+  const isBrokered = fleetSource === "brokered";
+  const aircraftId = isBrokered ? "" : String(formData.get(`${prefix}aircraftId`) ?? "");
+  const brokeredAircraftId = isBrokered
+    ? String(formData.get(`${prefix}brokeredAircraftId`) ?? "") || null
+    : null;
   const flightHours = Number(formData.get(`${prefix}flightHours`) ?? 0);
   const hourlyRate = Number(formData.get(`${prefix}hourlyRate`) ?? 0);
   const repoHours = Number(formData.get(`${prefix}repoHours`) ?? 0);
   const repoRate = Number(formData.get(`${prefix}repoRate`) ?? 0);
+  const wholesaleCost = isBrokered && formData.get(`${prefix}wholesaleCost`)
+    ? Number(formData.get(`${prefix}wholesaleCost`))
+    : null;
   // The client already computes the right number of nights for whichever
   // mode the "returns to base between legs" toggle is in (0 when it's on,
   // since gaps become repositioning legs instead of overnight stays) — no
@@ -50,7 +58,12 @@ export function parseOptionFromFormData(
     additionalFees,
     fetTax: fetTaxEnabled,
     discount,
+    flatRate: isBrokered,
   });
+  // Reported to the operator only — never shown to the client, and not part
+  // of the total charged above. Matches QuoteOption.brokerMargin's own
+  // documented meaning (total minus what the third-party operator charged).
+  const brokerMargin = isBrokered && wholesaleCost !== null ? total - wholesaleCost : null;
 
   let legsJson: unknown[] = [];
   try {
@@ -73,6 +86,10 @@ export function parseOptionFromFormData(
     label,
     clientNotes,
     aircraftId: aircraftId || null,
+    fleetSource,
+    brokeredAircraftId,
+    wholesaleCost,
+    brokerMargin,
     itinerary,
     flightHours,
     hourlyRate,

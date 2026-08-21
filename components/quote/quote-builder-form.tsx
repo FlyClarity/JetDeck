@@ -43,6 +43,22 @@ export type QuoteLegInput = {
   arrTime?: string | null;
 };
 
+// A tail sourced from a preferred operator rather than the account's own
+// fleet — no cruise speed/rate on file (a broker doesn't operate the plane,
+// they were quoted an all-in price by whoever does), so flight hours are
+// always entered by hand and pricing is a flat number instead of hours ×
+// rate. See BrokeredAircraft in prisma/schema.prisma.
+export type BrokeredAircraftOption = {
+  id: string;
+  tailNumber: string;
+  make: string | null;
+  model: string | null;
+  category: string | null;
+  seats: number | null;
+  homeBase: string | null;
+  preferredOperator: { name: string };
+};
+
 export type SavedLegInput = {
   billAs: "revenue" | "repositioning";
   dep: AirportOption | { icao: string } | null;
@@ -60,8 +76,19 @@ export type SavedLegInput = {
 export type QuoteOptionValues = {
   label?: string;
   aircraftId: string | null;
+  // "own_fleet" (default) uses aircraftId; "brokered" uses
+  // brokeredAircraftId + wholesaleCost instead, and skips auto
+  // repositioning legs entirely — see the fleet-source toggle below.
+  fleetSource: "own_fleet" | "brokered";
+  brokeredAircraftId: string | null;
+  // What the source operator quoted for this trip — tracked for margin
+  // reporting only, never shown to the client and not part of the total
+  // charged (see calculateQuoteTotals's flatRate mode).
+  wholesaleCost: number | null;
   // For a brand-new quote: only the customer-requested legs are known, and
-  // repositioning legs get derived (home base + aircraft cruise speed).
+  // repositioning legs get derived (home base + aircraft cruise speed) —
+  // only for an own-fleet option; a brokered one never gets auto
+  // repositioning legs (see buildInitialLegs).
   requestedLegs: QuoteLegInput[];
   // For an existing quote: the full previously-saved leg breakdown, loaded
   // as-is instead of re-derived. Takes precedence over requestedLegs.
@@ -269,6 +296,7 @@ function buildInitialLegs(
 function QuoteOptionFields({
   namePrefix,
   aircraftList,
+  brokeredAircraftList,
   airportsByIcao,
   positionByAircraftId,
   trailingPositionByAircraftId,
@@ -282,13 +310,15 @@ function QuoteOptionFields({
 }: {
   namePrefix: string;
   aircraftList: Aircraft[];
+  brokeredAircraftList: BrokeredAircraftOption[];
   airportsByIcao: Record<string, AirportOption>;
   // Where each aircraft is actually expected to be on this trip's first
   // date, derived server-side from its own schedule (see
   // lib/aircraft-schedule.ts) — not always the same as its permanent home
   // base if it's away on another trip when this one starts. Missing entry
   // (or no data at all) falls back to home base, same as before this
-  // existed.
+  // existed. Own-fleet aircraft only — a brokered tail isn't on a schedule
+  // JetDeck controls.
   positionByAircraftId?: Record<string, string>;
   // Where the aircraft should reposition to right after this trip ends —
   // its next confirmed commitment's departure airport, but only when that's
@@ -304,7 +334,14 @@ function QuoteOptionFields({
   defaultBlockTimeBufferHours: number;
   locked: boolean;
 }) {
+  const [fleetSource, setFleetSource] = useState<"own_fleet" | "brokered">(
+    initialValues.fleetSource
+  );
   const [aircraftId, setAircraftId] = useState(initialValues.aircraftId ?? "");
+  const [brokeredAircraftId, setBrokeredAircraftId] = useState(
+    initialValues.brokeredAircraftId ?? ""
+  );
+  const [wholesaleCost, setWholesaleCost] = useState(String(initialValues.wholesaleCost || ""));
   const [hourlyRate, setHourlyRate] = useState(String(initialValues.hourlyRate || ""));
   const [repoRate, setRepoRate] = useState(String(initialValues.repoRate || ""));
   const [returnsToHomeBase, setReturnsToHomeBase] = useState(initialValues.returnsToHomeBase);
@@ -321,19 +358,29 @@ function QuoteOptionFields({
   const [discountNote, setDiscountNote] = useState(initialValues.discountNote);
 
   const selectedAircraft = aircraftList.find((a) => a.id === aircraftId);
+  const selectedBrokeredAircraft = brokeredAircraftList.find((a) => a.id === brokeredAircraftId);
+  const isBrokered = fleetSource === "brokered";
   const homeBaseAirport: LegAirport | null = selectedAircraft
     ? airportsByIcao[selectedAircraft.homeBase] ?? { icao: selectedAircraft.homeBase }
     : null;
   const expectedPositionIcao = selectedAircraft ? positionByAircraftId?.[selectedAircraft.id] : undefined;
-  const startingPositionAirport: LegAirport | null = expectedPositionIcao
-    ? airportsByIcao[expectedPositionIcao] ?? { icao: expectedPositionIcao }
-    : homeBaseAirport;
+  // A brokered option never gets auto repositioning legs — the wholesale
+  // price already covers however the source operator gets their own
+  // aircraft to and from the client, and a broker isn't tracking a
+  // third-party tail's schedule to reason about it anyway.
+  const startingPositionAirport: LegAirport | null = isBrokered
+    ? null
+    : expectedPositionIcao
+      ? airportsByIcao[expectedPositionIcao] ?? { icao: expectedPositionIcao }
+      : homeBaseAirport;
   const expectedTrailingIcao = selectedAircraft
     ? trailingPositionByAircraftId?.[selectedAircraft.id]
     : undefined;
-  const endingPositionAirport: LegAirport | null = expectedTrailingIcao
-    ? airportsByIcao[expectedTrailingIcao] ?? { icao: expectedTrailingIcao }
-    : homeBaseAirport;
+  const endingPositionAirport: LegAirport | null = isBrokered
+    ? null
+    : expectedTrailingIcao
+      ? airportsByIcao[expectedTrailingIcao] ?? { icao: expectedTrailingIcao }
+      : homeBaseAirport;
 
   const [legs, setLegs] = useState<LegRow[]>(() => {
     if (initialValues.legs && initialValues.legs.length > 0) {
@@ -686,6 +733,24 @@ function QuoteOptionFields({
     }
   }
 
+  // Switching source strips any auto repositioning legs the other mode
+  // built up — own-fleet's leading/trailing/between-legs legs mean nothing
+  // once there's no home base in the picture, and a brokered option never
+  // had any to begin with. Everything else (revenue legs, fees, discount)
+  // carries over untouched; only the aircraft/rate fields reset since
+  // they're mode-specific.
+  function handleFleetSourceChange(value: "own_fleet" | "brokered") {
+    setFleetSource(value);
+    setLegs((prev) => prev.filter((l) => !(l.auto && l.billAs === "repositioning")));
+    if (value === "brokered") {
+      setReturnsToHomeBase(false);
+      setAircraftId("");
+    } else {
+      setBrokeredAircraftId("");
+      setWholesaleCost("");
+    }
+  }
+
   function updateFee(index: number, patch: Partial<AdditionalFee>) {
     setAdditionalFees((prev) =>
       prev.map((f, i) => (i === index ? { ...f, ...patch } : f))
@@ -747,11 +812,17 @@ function QuoteOptionFields({
         additionalFees,
         fetTax,
         discount: Number(discount) || 0,
+        flatRate: isBrokered,
       }),
-    [flightHours, hourlyRate, repoHours, repoRate, overnightFee, landingFees, handlingFees, additionalFees, fetTax, discount]
+    [flightHours, hourlyRate, repoHours, repoRate, overnightFee, landingFees, handlingFees, additionalFees, fetTax, discount, isBrokered]
   );
+  const brokerMargin = isBrokered ? totals.total - (Number(wholesaleCost) || 0) : null;
 
+  // Own-fleet only — checking a brokered tail against JetDeck's own
+  // schedule of accepted bookings doesn't mean anything, since it isn't a
+  // plane this operator's schedule has any claim over.
   const conflict = useMemo(() => {
+    if (isBrokered) return null;
     const itineraryForCheck = legs.map((l) => ({
       billAs: l.billAs,
       depAirport: l.dep?.icao ?? null,
@@ -759,7 +830,7 @@ function QuoteOptionFields({
       date: l.date,
     }));
     return findConflictingBooking(aircraftId, itineraryForCheck, existingBookings);
-  }, [aircraftId, legs, existingBookings]);
+  }, [isBrokered, aircraftId, legs, existingBookings]);
 
   const discountPercentOfSubtotal =
     totals.subtotal > 0 ? ((Number(discount) || 0) / totals.subtotal) * 100 : 0;
@@ -769,6 +840,8 @@ function QuoteOptionFields({
   return (
     <div className="flex gap-8">
       <input type="hidden" name={`${namePrefix}aircraftId`} value={aircraftId} />
+      <input type="hidden" name={`${namePrefix}fleetSource`} value={fleetSource} />
+      <input type="hidden" name={`${namePrefix}brokeredAircraftId`} value={brokeredAircraftId} />
       <input type="hidden" name={`${namePrefix}additionalFeesJson`} value={JSON.stringify(additionalFees)} />
       <input type="hidden" name={`${namePrefix}fetTax`} value={fetTax ? "on" : ""} />
       <input type="hidden" name={`${namePrefix}returnsToHomeBase`} value={returnsToHomeBase ? "on" : ""} />
@@ -786,21 +859,75 @@ function QuoteOptionFields({
         )}
 
         <div className="flex flex-col gap-2">
-          <Label htmlFor={`${namePrefix}aircraftId-select`}>Aircraft</Label>
-          <Select value={aircraftId} onValueChange={handleAircraftChange}>
-            <SelectTrigger id={`${namePrefix}aircraftId-select`}>
-              <SelectValue placeholder="Select aircraft" />
-            </SelectTrigger>
-            <SelectContent>
-              {aircraftList.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  {a.tailNumber} — {a.make} {a.model}
-                  {!a.cruiseSpeedKts && " (no cruise speed set)"}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label>Source</Label>
+          <div className="flex gap-1 rounded-md bg-muted p-1 text-sm">
+            <button
+              type="button"
+              onClick={() => handleFleetSourceChange("own_fleet")}
+              className={cn(
+                "flex-1 rounded-md px-3 py-1.5 font-medium transition-colors",
+                !isBrokered ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              My Fleet
+            </button>
+            <button
+              type="button"
+              onClick={() => handleFleetSourceChange("brokered")}
+              className={cn(
+                "flex-1 rounded-md px-3 py-1.5 font-medium transition-colors",
+                isBrokered ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Brokered
+            </button>
+          </div>
         </div>
+
+        {isBrokered ? (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`${namePrefix}brokeredAircraftId-select`}>Brokered aircraft</Label>
+            <Select value={brokeredAircraftId} onValueChange={setBrokeredAircraftId}>
+              <SelectTrigger id={`${namePrefix}brokeredAircraftId-select`}>
+                <SelectValue placeholder="Select a brokered aircraft" />
+              </SelectTrigger>
+              <SelectContent>
+                {brokeredAircraftList.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.tailNumber} — {[a.make, a.model].filter(Boolean).join(" ") || "Unknown model"}{" "}
+                    ({a.preferredOperator.name})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {brokeredAircraftList.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No brokered aircraft on file yet —{" "}
+                <a href="/sourcing" target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
+                  add a preferred operator and their tails
+                </a>{" "}
+                first.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`${namePrefix}aircraftId-select`}>Aircraft</Label>
+            <Select value={aircraftId} onValueChange={handleAircraftChange}>
+              <SelectTrigger id={`${namePrefix}aircraftId-select`}>
+                <SelectValue placeholder="Select aircraft" />
+              </SelectTrigger>
+              <SelectContent>
+                {aircraftList.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.tailNumber} — {a.make} {a.model}
+                    {!a.cruiseSpeedKts && " (no cruise speed set)"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {conflict && (
           <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
@@ -839,33 +966,81 @@ function QuoteOptionFields({
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor={`${namePrefix}hourlyRate`}>Hourly rate ($)</Label>
-            <Input
-              id={`${namePrefix}hourlyRate`}
-              name={`${namePrefix}hourlyRate`}
-              type="number"
-              min={0}
-              step="0.01"
-              value={hourlyRate}
-              onChange={(e) => setHourlyRate(e.target.value)}
-              required
-            />
+        {isBrokered ? (
+          <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`${namePrefix}wholesaleCost`}>Wholesale cost ($)</Label>
+                <Input
+                  id={`${namePrefix}wholesaleCost`}
+                  name={`${namePrefix}wholesaleCost`}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={wholesaleCost}
+                  onChange={(e) => setWholesaleCost(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  What {selectedBrokeredAircraft?.preferredOperator.name ?? "the source operator"}{" "}
+                  quoted you — never shown to the client, tracked for your own margin only.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`${namePrefix}hourlyRate`}>Your price to client ($)</Label>
+                <Input
+                  id={`${namePrefix}hourlyRate`}
+                  name={`${namePrefix}hourlyRate`}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={hourlyRate}
+                  onChange={(e) => setHourlyRate(e.target.value)}
+                  required
+                />
+                <p className="text-xs text-muted-foreground">
+                  A flat price for the flight itself — fees/discount/tax below still apply on top.
+                </p>
+              </div>
+            </div>
+            {Number(wholesaleCost) > 0 && (
+              <p className="text-sm">
+                Margin:{" "}
+                <span className={brokerMargin !== null && brokerMargin < 0 ? "text-destructive" : "font-medium"}>
+                  {formatCurrency(brokerMargin ?? 0)}
+                </span>
+              </p>
+            )}
+            <input type="hidden" name={`${namePrefix}repoRate`} value="0" />
           </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor={`${namePrefix}repoRate`}>Repositioning rate ($)</Label>
-            <Input
-              id={`${namePrefix}repoRate`}
-              name={`${namePrefix}repoRate`}
-              type="number"
-              min={0}
-              step="0.01"
-              value={repoRate}
-              onChange={(e) => setRepoRate(e.target.value)}
-            />
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}hourlyRate`}>Hourly rate ($)</Label>
+              <Input
+                id={`${namePrefix}hourlyRate`}
+                name={`${namePrefix}hourlyRate`}
+                type="number"
+                min={0}
+                step="0.01"
+                value={hourlyRate}
+                onChange={(e) => setHourlyRate(e.target.value)}
+                required
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}repoRate`}>Repositioning rate ($)</Label>
+              <Input
+                id={`${namePrefix}repoRate`}
+                name={`${namePrefix}repoRate`}
+                type="number"
+                min={0}
+                step="0.01"
+                value={repoRate}
+                onChange={(e) => setRepoRate(e.target.value)}
+              />
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="flex flex-col gap-2">
           <Label>Legs</Label>
@@ -1069,25 +1244,27 @@ function QuoteOptionFields({
         </div>
 
         <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-          <div className="flex items-center gap-2">
-            <input
-              id={`${namePrefix}returnsToHomeBaseCheckbox`}
-              type="checkbox"
-              className="size-4 rounded border-input"
-              checked={returnsToHomeBase}
-              onChange={(e) => toggleReturnsToHomeBase(e.target.checked)}
-            />
-            <Label htmlFor={`${namePrefix}returnsToHomeBaseCheckbox`}>
-              Aircraft returns to base between each leg (no overnight stays)
-            </Label>
-          </div>
+          {!isBrokered && (
+            <div className="flex items-center gap-2">
+              <input
+                id={`${namePrefix}returnsToHomeBaseCheckbox`}
+                type="checkbox"
+                className="size-4 rounded border-input"
+                checked={returnsToHomeBase}
+                onChange={(e) => toggleReturnsToHomeBase(e.target.checked)}
+              />
+              <Label htmlFor={`${namePrefix}returnsToHomeBaseCheckbox`}>
+                Aircraft returns to base between each leg (no overnight stays)
+              </Label>
+            </div>
+          )}
           {returnsToHomeBase ? (
             <p className="pl-6 text-sm text-muted-foreground">
               Repositioning legs added between each leg instead of overnight fees — the aircraft
               comes home and goes back out for every one.
             </p>
           ) : (
-            <div className="flex flex-col gap-2 pl-6">
+            <div className={cn("flex flex-col gap-2", !isBrokered && "pl-6")}>
               {autoNightsAway > 0 && (
                 <p className="text-sm text-muted-foreground">
                   {autoNightsAway} night{autoNightsAway === 1 ? "" : "s"} away calculated from leg
@@ -1240,10 +1417,12 @@ function QuoteOptionFields({
             <span className="text-muted-foreground">Flight ({flightHours.toFixed(1)} hrs)</span>
             <span>{formatCurrency(totals.flightCost)}</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Repositioning ({repoHours.toFixed(1)} hrs)</span>
-            <span>{formatCurrency(totals.repoCost)}</span>
-          </div>
+          {!isBrokered && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Repositioning ({repoHours.toFixed(1)} hrs)</span>
+              <span>{formatCurrency(totals.repoCost)}</span>
+            </div>
+          )}
           {overnightFee > 0 && (
             <div className="flex justify-between">
               <span className="text-muted-foreground">Overnight fee</span>
@@ -1292,6 +1471,7 @@ export function QuoteBuilderForm({
   routeSummaryText,
   requestorLine,
   aircraftList,
+  brokeredAircraftList,
   airportsByIcao,
   positionByAircraftId,
   trailingPositionByAircraftId,
@@ -1310,6 +1490,7 @@ export function QuoteBuilderForm({
   routeSummaryText: string;
   requestorLine: string;
   aircraftList: Aircraft[];
+  brokeredAircraftList: BrokeredAircraftOption[];
   airportsByIcao: Record<string, AirportOption>;
   // Where each aircraft is actually expected to be on this trip's first
   // date (see lib/aircraft-schedule.ts) — falls back to home base per
@@ -1381,6 +1562,9 @@ export function QuoteBuilderForm({
         label: optionLabel(prev.length),
         initialValues: {
           aircraftId: null,
+          fleetSource: "own_fleet",
+          brokeredAircraftId: null,
+          wholesaleCost: null,
           requestedLegs: baseRequestedLegs,
           hourlyRate: 0,
           repoRate: 0,
@@ -1493,6 +1677,7 @@ export function QuoteBuilderForm({
           <QuoteOptionFields
             namePrefix={`option_${i}_`}
             aircraftList={aircraftList}
+            brokeredAircraftList={brokeredAircraftList}
             airportsByIcao={airportsByIcao}
             positionByAircraftId={positionByAircraftId}
             trailingPositionByAircraftId={trailingPositionByAircraftId}

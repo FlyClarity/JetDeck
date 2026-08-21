@@ -11,10 +11,18 @@ export type QuotePricingInput = {
   additionalFees: AdditionalFee[];
   fetTax: boolean;
   discount: number;
+  // Brokered options only: hourlyRate is charged as a flat price for the
+  // flight instead of multiplied by flightHours. A broker isn't pricing a
+  // plane they operate by the hour — they're setting the one number they're
+  // charging the client for the trip, having already been quoted a wholesale
+  // cost by the third-party operator (tracked separately, see
+  // QuoteOption.wholesaleCost — not part of this calculation at all, it only
+  // feeds the margin shown to the operator, never the client-facing total).
+  flatRate?: boolean;
 };
 
 export function calculateQuoteTotals(input: QuotePricingInput) {
-  const flightCost = input.flightHours * input.hourlyRate;
+  const flightCost = input.flatRate ? input.hourlyRate : input.flightHours * input.hourlyRate;
   const repoCost = input.repoHours * input.repoRate;
   const feesTotal = input.additionalFees.reduce((sum, f) => sum + (f.amount || 0), 0);
   const subtotal =
