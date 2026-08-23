@@ -6,6 +6,7 @@ import { categoryLabel } from "@/lib/aircraft";
 import { STATUS_SHORT_LABELS } from "@/lib/trip";
 import { TRIP_PURPOSE_LABELS } from "@/lib/quote";
 import { cn } from "@/lib/utils";
+import { CalendarTodayRedirect } from "@/components/ops/calendar-today-redirect";
 
 const WINDOW_DAYS = 14;
 
@@ -66,13 +67,19 @@ type Tile = {
 export default async function FleetCalendarPage({
   searchParams,
 }: {
-  searchParams: Promise<{ start?: string }>;
+  searchParams: Promise<{ start?: string; today?: string }>;
 }) {
   const operator = await getCurrentOperator();
   if (!operator) return null;
 
-  const { start } = await searchParams;
-  const todayIso = isoDate(new Date());
+  const { start, today } = await searchParams;
+  // "Today" has to come from the viewer's own browser, not the server clock
+  // — Vercel runs on UTC, which reads as tomorrow for anyone west of
+  // Greenwich for several hours a day. See CalendarTodayRedirect.
+  if (!today || !/^\d{4}-\d{2}-\d{2}$/.test(today)) {
+    return <CalendarTodayRedirect start={start} />;
+  }
+  const todayIso = today;
   const startIso = start && /^\d{4}-\d{2}-\d{2}$/.test(start) ? start : todayIso;
   const dates = Array.from({ length: WINDOW_DAYS }, (_, i) => addDays(startIso, i));
   const endIso = dates[dates.length - 1];
@@ -146,19 +153,19 @@ export default async function FleetCalendarPage({
         </div>
         <div className="flex items-center gap-2 text-sm">
           <Link
-            href={`/ops/calendar?start=${addDays(startIso, -WINDOW_DAYS)}`}
+            href={`/ops/calendar?start=${addDays(startIso, -WINDOW_DAYS)}&today=${todayIso}`}
             className="rounded-md border border-border px-2.5 py-1 hover:bg-muted"
           >
             ← Prev
           </Link>
           <Link
-            href="/ops/calendar"
+            href={`/ops/calendar?today=${todayIso}`}
             className="rounded-md border border-border px-2.5 py-1 hover:bg-muted"
           >
             Today
           </Link>
           <Link
-            href={`/ops/calendar?start=${addDays(startIso, WINDOW_DAYS)}`}
+            href={`/ops/calendar?start=${addDays(startIso, WINDOW_DAYS)}&today=${todayIso}`}
             className="rounded-md border border-border px-2.5 py-1 hover:bg-muted"
           >
             Next →

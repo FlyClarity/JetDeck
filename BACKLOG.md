@@ -2789,3 +2789,25 @@ a sourced one.
   Worth a quick smoke test on the deployed app: open a brokered
   aircraft's edit disclosure, upload a photo, confirm it shows up
   there and on that aircraft's quotes' client pages.
+
+## Fleet Calendar showing tomorrow's date as "today"
+
+User reported the calendar thinking it's the 23rd when it's still the
+22nd locally. Root cause: `todayIso` was computed server-side via
+`new Date().toISOString()`, which is always UTC — Vercel's serverless
+functions run on UTC, so for anyone west of Greenwich (essentially all
+US timezones), the server's "today" flips over several hours before
+the viewer's own local midnight. At 9pm Eastern, the server already
+thinks it's tomorrow.
+
+- ~~**Client-derived "today" via a one-time redirect — fixed**~~: the
+  server genuinely has no way to know the viewer's timezone, so
+  `/ops/calendar` now requires a `today` query param; when it's
+  missing, a new client component (`CalendarTodayRedirect`) computes
+  the browser's actual local date and redirects to
+  `?today=<local-date>` (preserving an explicit `start` if one was
+  already given). The default window and the "today" column highlight
+  both key off this value instead of the server clock. The Prev/Next/
+  Today nav links all carry `today` forward so paging through the
+  calendar never re-triggers the redirect or drifts back to a
+  server-guessed date mid-session.
