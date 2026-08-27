@@ -2811,3 +2811,23 @@ thinks it's tomorrow.
   Today nav links all carry `today` forward so paging through the
   calendar never re-triggers the redirect or drifts back to a
   server-guessed date mid-session.
+
+## Discounts weren't visible on the client-facing quote
+
+User reported discounts don't show on the quote a client sees. True —
+the client-facing pricing breakdown (`/q/[token]`) allocated the
+per-leg segment fees from the *post-discount* subtotal, so a discount
+was already baked invisibly into each leg's number with no line item
+ever calling it out — a client receiving a discounted quote had no way
+to tell one had been applied at all.
+
+- ~~**Discount line item on the client quote page — fixed**~~: segment
+  fees now allocate from the pre-discount subtotal (list price per
+  leg), with a new "Discount" row (`-$X`) between the leg rows and
+  Subtotal when `option.discount > 0` — standard receipt shape: line
+  items, discount, subtotal, tax, total. `option.discountNote` stays
+  internal-only (it's the operator's own justification for discounts
+  over 10%, not client-facing copy — the existing type comment
+  documenting it as client-facing was actually misattached to the
+  wrong field, describes `clientNotes` instead) so nothing about *why*
+  the discount was given leaks to the client, just that one exists.

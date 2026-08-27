@@ -336,15 +336,20 @@ export default async function ClientQuotePage({
   );
 
   // Client-facing pricing shows one fee per segment, not the internal cost
-  // breakdown (hourly rate, repositioning, landing/handling fees, discount)
-  // that produced it — those stay internal-only, visible on the operator's
-  // quote detail page instead. Derived from total/fetTax rather than the
-  // stored subtotal so it's always self-consistent with what's displayed
-  // below, regardless of how subtotal was computed at save time.
+  // breakdown (hourly rate, repositioning, landing/handling fees) that
+  // produced it — that stays internal-only, visible on the operator's quote
+  // detail page instead. Segments are allocated from the pre-discount
+  // subtotal (list price per leg), with the discount itself broken out as
+  // its own line below — a client who was quoted a discount should be able
+  // to see it, not just receive an already-net number with no indication
+  // anything was taken off. Derived from total/fetTax rather than trusting
+  // the stored subtotal/discount pair blindly, so the displayed total is
+  // always self-consistent with what's actually being charged.
   const preTaxSubtotal = option.total - option.fetTax;
+  const preDiscountSubtotal = preTaxSubtotal + option.discount;
   const segmentFees = allocateProportionally(
     legs.map((l) => l.flightHours ?? 0),
-    preTaxSubtotal
+    preDiscountSubtotal
   );
 
   // "expired" itself is a real stored status now (see the daily cron sweep,
@@ -568,6 +573,9 @@ export default async function ClientQuotePage({
                   emphasis="muted"
                 />
               ))}
+              {option.discount > 0 && (
+                <Row label="Discount" value={`-${formatCurrency(option.discount)}`} emphasis="muted" />
+              )}
               <div className="flex justify-between border-t border-border pt-2">
                 <span>Subtotal</span>
                 <span>{formatCurrency(preTaxSubtotal)}</span>
