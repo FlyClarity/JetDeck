@@ -3,11 +3,13 @@ import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { revenueLegsOf, legDate } from "@/lib/itinerary";
+import { revenueLegsOf, revenueLegsWithIndex, legDate, type StoredLeg } from "@/lib/itinerary";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { createManifestForTrip } from "@/lib/manifest";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import {
   Select,
@@ -16,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { FlightPathMap } from "@/components/ops/flight-path-map";
 import { getAppUrl } from "@/lib/url";
 import { cn } from "@/lib/utils";
 
@@ -58,6 +61,35 @@ async function getScopedTrip(id: string) {
   }
 
   return { trip, operator };
+}
+
+// FBO assignment is an ops/dispatch detail decided once a trip is confirmed
+// — not part of pricing, so it lives here rather than the Quote Builder.
+// Written back onto the leg's own position in the stored itinerary array
+// (see revenueLegsWithIndex) rather than a separate table, since it's just
+// two more fields on data that already exists per leg.
+async function updateLegFbos(tripId: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped || !scoped.trip.quote.selectedOptionId) return;
+
+  const itinerary = (scoped.trip.quote.selectedOption?.itinerary as StoredLeg[] | null) ?? [];
+  const updated = itinerary.map((leg, index) => {
+    if ((leg.billAs ?? "revenue") !== "revenue") return leg;
+    return {
+      ...leg,
+      depFbo: String(formData.get(`depFbo-${index}`) ?? "").trim() || null,
+      arrFbo: String(formData.get(`arrFbo-${index}`) ?? "").trim() || null,
+    };
+  });
+
+  await prisma.quoteOption.update({
+    where: { id: scoped.trip.quote.selectedOptionId },
+    data: { itinerary: updated },
+  });
+
+  revalidatePath(`/ops/trips/${tripId}`);
 }
 
 async function verifyPassenger(tripId: string, passengerId: string) {
@@ -169,6 +201,31 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
   const { trip } = scoped;
 
   const legs = revenueLegsOf(trip.quote.selectedOption?.itinerary);
+  const legsIndexed = revenueLegsWithIndex(trip.quote.selectedOption?.itinerary);
+
+  const legAirportCodes = [
+    ...new Set(legs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))),
+  ];
+  const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
+  const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
+  const mapLegs = legs
+    .map((l) => {
+      const dep = l.depAirport ? airportByIcao[l.depAirport] : undefined;
+      const arr = l.arrAirport ? airportByIcao[l.arrAirport] : undefined;
+      if (!dep || !arr) return null;
+      return {
+        dep: { icao: dep.icao, lat: dep.lat, lon: dep.lon },
+        arr: { icao: arr.icao, lat: arr.lat, lon: arr.lon },
+      };
+    })
+    .filter((l): l is NonNullable<typeof l> => l !== null);
+
+  const passengerNotes = trip.passengers.filter((p) => p.specialRequests);
+  const hasNotes =
+    Boolean(trip.quote.tripRequest?.specialRequests) ||
+    Boolean(trip.quote.selectedOption?.clientNotes) ||
+    passengerNotes.length > 0;
+
   const aircraftLabel = trip.quote.selectedOption?.aircraft
     ? `${trip.quote.selectedOption.aircraft.make} ${trip.quote.selectedOption.aircraft.model} (${trip.quote.selectedOption.aircraft.tailNumber})`
     : trip.quote.selectedOption?.brokeredAircraft
@@ -186,6 +243,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
     orderBy: { name: "asc" },
   });
   const assignWithId = assignCrew.bind(null, trip.id);
+  const updateLegFbosWithId = updateLegFbos.bind(null, trip.id);
   const paid = isTripPaid(trip.quote);
   const stageIndex = TRIP_STAGES.findIndex((s) => s === trip.status);
 
@@ -253,16 +311,66 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
 
       <div className="mt-6 rounded-md border border-border p-4">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>
-        <div className="mt-2 flex flex-col gap-1">
-          {legs.map((leg, i) => (
-            <div key={i} className="flex items-center justify-between text-sm">
-              <span>
-                {leg.depAirport} → {leg.arrAirport}
-              </span>
-              <span className="text-muted-foreground">{legDate(leg)}</span>
+        <form action={updateLegFbosWithId} className="mt-2 flex flex-col gap-3">
+          {legsIndexed.map(({ leg, index }) => (
+            <div key={index} className="flex flex-col gap-1.5 border-b border-border pb-3 last:border-0 last:pb-0">
+              <div className="flex items-center justify-between text-sm">
+                <span>
+                  {leg.depAirport} → {leg.arrAirport}
+                </span>
+                <span className="text-muted-foreground">{legDate(leg)}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor={`depFbo-${index}`} className="text-xs font-normal text-muted-foreground">
+                    FBO at {leg.depAirport}
+                  </Label>
+                  <Input
+                    id={`depFbo-${index}`}
+                    name={`depFbo-${index}`}
+                    defaultValue={leg.depFbo ?? ""}
+                    placeholder="e.g. Atlantic Aviation"
+                    className="h-8 text-sm"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor={`arrFbo-${index}`} className="text-xs font-normal text-muted-foreground">
+                    FBO at {leg.arrAirport}
+                  </Label>
+                  <Input
+                    id={`arrFbo-${index}`}
+                    name={`arrFbo-${index}`}
+                    defaultValue={leg.arrFbo ?? ""}
+                    placeholder="e.g. Signature Flight Support"
+                    className="h-8 text-sm"
+                  />
+                </div>
+              </div>
             </div>
           ))}
-        </div>
+          <Button type="submit" size="sm" className="self-start">
+            Save FBOs
+          </Button>
+        </form>
+
+        {mapLegs.length > 0 && (
+          <div className="mt-4">
+            <FlightPathMap legs={mapLegs} width={500} height={200} />
+          </div>
+        )}
+
+        {hasNotes && (
+          <div className="mt-4 flex flex-col gap-1 border-t border-border pt-3 text-sm">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Notes</p>
+            {trip.quote.selectedOption?.clientNotes && <p>{trip.quote.selectedOption.clientNotes}</p>}
+            {trip.quote.tripRequest?.specialRequests && <p>{trip.quote.tripRequest.specialRequests}</p>}
+            {passengerNotes.map((p) => (
+              <p key={p.id}>
+                {p.firstName ?? ""} {p.lastName ?? ""}: {p.specialRequests}
+              </p>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="mt-6 rounded-md border border-border p-4">

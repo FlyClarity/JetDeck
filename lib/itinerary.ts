@@ -10,11 +10,26 @@ export type StoredLeg = {
   depTime?: string | null;
   depTimeTBD?: boolean;
   arrTime?: string | null;
+  // Ops-entered post-booking, not part of pricing — which FBO to use at
+  // each end of this leg. Only ever set on revenue legs in practice (see
+  // /ops/trips/[id]'s itinerary editor).
+  depFbo?: string | null;
+  arrFbo?: string | null;
 };
 
 export function revenueLegsOf(itinerary: unknown): StoredLeg[] {
   const legs = (itinerary as StoredLeg[]) ?? [];
   return legs.filter((l) => (l.billAs ?? "revenue") === "revenue");
+}
+
+// Same as revenueLegsOf, but keeps each leg's real position in the full
+// stored array — needed to write a single leg's field back (e.g. FBO)
+// without disturbing the repositioning legs interleaved around it.
+export function revenueLegsWithIndex(itinerary: unknown): { leg: StoredLeg; index: number }[] {
+  const legs = (itinerary as StoredLeg[]) ?? [];
+  return legs
+    .map((leg, index) => ({ leg, index }))
+    .filter(({ leg }) => (leg.billAs ?? "revenue") === "revenue");
 }
 
 export function legDateIso(leg: StoredLeg): string | null {

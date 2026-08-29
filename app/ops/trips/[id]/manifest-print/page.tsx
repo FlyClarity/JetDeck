@@ -3,6 +3,7 @@ import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDate } from "@/lib/itinerary";
 import { crewRoleLabel } from "@/lib/crew";
+import { FlightPathMap } from "@/components/ops/flight-path-map";
 
 // Deliberately outside the (ops) route group — no nav chrome, so printing
 // (or "Save as PDF") from the browser produces a clean page for the trip
@@ -21,13 +22,42 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
     include: {
       passengers: { orderBy: [{ isLead: "desc" }, { createdAt: "asc" }] },
       crewAssignments: { include: { crew: true }, orderBy: { createdAt: "asc" } },
-      quote: { include: { selectedOption: { include: { aircraft: true } } } },
+      quote: {
+        include: {
+          selectedOption: { include: { aircraft: true } },
+          tripRequest: true,
+        },
+      },
     },
   });
   if (!trip) notFound();
 
   const legs = revenueLegsOf(trip.quote.selectedOption?.itinerary);
   const tail = trip.quote.selectedOption?.aircraft?.tailNumber ?? "—";
+
+  const legAirportCodes = [
+    ...new Set(legs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))),
+  ];
+  const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
+  const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
+
+  const mapLegs = legs
+    .map((l) => {
+      const dep = l.depAirport ? airportByIcao[l.depAirport] : undefined;
+      const arr = l.arrAirport ? airportByIcao[l.arrAirport] : undefined;
+      if (!dep || !arr) return null;
+      return {
+        dep: { icao: dep.icao, lat: dep.lat, lon: dep.lon },
+        arr: { icao: arr.icao, lat: arr.lat, lon: arr.lon },
+      };
+    })
+    .filter((l): l is NonNullable<typeof l> => l !== null);
+
+  const passengerNotes = trip.passengers.filter((p) => p.specialRequests);
+  const hasNotes =
+    Boolean(trip.quote.tripRequest?.specialRequests) ||
+    Boolean(trip.quote.selectedOption?.clientNotes) ||
+    passengerNotes.length > 0;
 
   return (
     <div className="mx-auto max-w-2xl px-8 py-10 text-sm text-black">
@@ -41,19 +71,51 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
 
       <div className="mt-4">
         {legs.map((leg, i) => (
-          <p key={i}>
-            {leg.depAirport} → {leg.arrAirport} — {legDate(leg)}
-          </p>
+          <div key={i} className="flex flex-col gap-0.5">
+            <p>
+              {leg.depAirport} → {leg.arrAirport} — {legDate(leg)}
+            </p>
+            {(leg.depFbo || leg.arrFbo) && (
+              <p className="pl-3 text-xs text-black/70">
+                {leg.depFbo && `Depart from: ${leg.depFbo}`}
+                {leg.depFbo && leg.arrFbo && " · "}
+                {leg.arrFbo && `Arrive at: ${leg.arrFbo}`}
+              </p>
+            )}
+          </div>
         ))}
       </div>
 
+      {mapLegs.length > 0 && (
+        <div className="mt-4">
+          <FlightPathMap legs={mapLegs} width={544} height={200} />
+        </div>
+      )}
+
       {trip.crewAssignments.length > 0 && (
-        <p className="mt-2">
+        <p className="mt-4">
           Crew:{" "}
           {trip.crewAssignments
             .map((a) => `${a.crew.name} (${crewRoleLabel(a.roleOnTrip)})`)
             .join(", ")}
         </p>
+      )}
+
+      {hasNotes && (
+        <div className="mt-4 border-t border-black/20 pt-3">
+          <p className="text-xs font-semibold tracking-wide uppercase">Notes</p>
+          {trip.quote.selectedOption?.clientNotes && (
+            <p className="mt-1">{trip.quote.selectedOption.clientNotes}</p>
+          )}
+          {trip.quote.tripRequest?.specialRequests && (
+            <p className="mt-1">{trip.quote.tripRequest.specialRequests}</p>
+          )}
+          {passengerNotes.map((p) => (
+            <p key={p.id} className="mt-1">
+              {p.firstName ?? ""} {p.lastName ?? ""}: {p.specialRequests}
+            </p>
+          ))}
+        </div>
       )}
 
       <table className="mt-6 w-full border-collapse text-left">

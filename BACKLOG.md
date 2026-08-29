@@ -2831,3 +2831,46 @@ to tell one had been applied at all.
   documenting it as client-facing was actually misattached to the
   wrong field, describes `clientNotes` instead) so nothing about *why*
   the discount was given leaks to the client, just that one exists.
+
+## Manifest gets FBOs, a flight-path map, and notes
+
+User flagged the manifest was missing several things it should have:
+FBO info, a map showing the route, and any system-captured notes
+(catering, ground transportation, etc.).
+
+- ~~**FBO per leg — shipped**~~: `StoredLeg` (`lib/itinerary.ts`) gains
+  optional `depFbo`/`arrFbo` — no schema migration needed since
+  itinerary is already a JSON blob, just two new keys. This is an
+  ops/dispatch detail decided once a trip is confirmed, not a pricing
+  concern, so it's editable on `/ops/trips/[id]`'s Itinerary section
+  (new `updateLegFbos` action) rather than the Quote Builder — one
+  "FBO at X" input per leg endpoint, written back onto that leg's own
+  position in the stored itinerary array (`revenueLegsWithIndex`, new
+  in `lib/itinerary.ts`, keeps each revenue leg's true index into the
+  full array so writing one leg's FBO can't disturb the repositioning
+  legs interleaved around it). Scoped to revenue legs only —
+  repositioning legs don't carry passengers, so there's no FBO
+  coordination need there today.
+- ~~**Flight-path map — shipped**~~: new `FlightPathMap`
+  (`components/ops/flight-path-map.tsx`) — a dependency-free SVG, not
+  a real geographic map: projects each leg's airports (lat/lon already
+  in the `Airport` table) onto a plain equirectangular grid, connects
+  them with a slightly-arced dashed line per leg, labels each unique
+  airport by ICAO. No map-tile service, no coastline data, no network
+  call — good enough to show a routing's shape at a glance, not meant
+  to be geographically precise. Shown on both the ops trip detail page
+  and the print manifest.
+- ~~**System notes surfaced — shipped**~~: a trip's manifest now shows
+  `QuoteOption.clientNotes` (the operator's own client-facing notes —
+  catering, ground transport, etc.), `TripRequest.specialRequests`
+  (whatever the client originally asked for), and each passenger's own
+  `specialRequests` from manifest collection (dietary, mobility, etc.
+  — collected already, never displayed anywhere before this). Nothing
+  operator-internal-only (`Quote.internalNotes`) is included — that
+  stays exactly as internal as it already was.
+- Both `/ops/trips/[id]` and the print manifest
+  (`/ops/trips/[id]/manifest-print`) got all three additions in
+  parallel, sharing the same `FlightPathMap` component and the same
+  airport-lookup pattern, so the ops-facing detail page and the
+  document that actually leaves the building (print/PDF) show
+  consistent information.
