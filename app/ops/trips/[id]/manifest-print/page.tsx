@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { revenueLegsOf, legDate } from "@/lib/itinerary";
+import { revenueLegsOf, legDate, mapsSearchUrl } from "@/lib/itinerary";
 import { crewRoleLabel } from "@/lib/crew";
 import { FlightPathMap } from "@/components/ops/flight-path-map";
 
@@ -41,14 +41,24 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
   const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
   const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
 
+  // "KILG" means nothing to most people reading this document — pair every
+  // code with the airport's own name and city/state.
+  function airportLabel(icao: string | null | undefined): string {
+    if (!icao) return "—";
+    const a = airportByIcao[icao];
+    if (!a) return icao;
+    const location = [a.city, a.state].filter(Boolean).join(", ");
+    return location ? `${icao} — ${a.name} (${location})` : `${icao} — ${a.name}`;
+  }
+
   const mapLegs = legs
     .map((l) => {
       const dep = l.depAirport ? airportByIcao[l.depAirport] : undefined;
       const arr = l.arrAirport ? airportByIcao[l.arrAirport] : undefined;
       if (!dep || !arr) return null;
       return {
-        dep: { icao: dep.icao, lat: dep.lat, lon: dep.lon },
-        arr: { icao: arr.icao, lat: arr.lat, lon: arr.lon },
+        dep: { icao: dep.icao, lat: dep.lat, lon: dep.lon, city: dep.city, state: dep.state },
+        arr: { icao: arr.icao, lat: arr.lat, lon: arr.lon, city: arr.city, state: arr.state },
       };
     })
     .filter((l): l is NonNullable<typeof l> => l !== null);
@@ -69,28 +79,50 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
         <p>Aircraft: {tail}</p>
       </div>
 
-      <div className="mt-4">
+      {mapLegs.length > 0 && (
+        <div className="mt-4">
+          <FlightPathMap legs={mapLegs} width={544} height={240} />
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-col gap-3">
         {legs.map((leg, i) => (
-          <div key={i} className="flex flex-col gap-0.5">
-            <p>
-              {leg.depAirport} → {leg.arrAirport} — {legDate(leg)}
+          <div key={i} className="border-b border-black/10 pb-2 last:border-0">
+            <p className="font-medium">
+              {airportLabel(leg.depAirport)} → {airportLabel(leg.arrAirport)}
             </p>
-            {(leg.depFbo || leg.arrFbo) && (
-              <p className="pl-3 text-xs text-black/70">
-                {leg.depFbo && `Depart from: ${leg.depFbo}`}
-                {leg.depFbo && leg.arrFbo && " · "}
-                {leg.arrFbo && `Arrive at: ${leg.arrFbo}`}
+            <p className="text-black/70">{legDate(leg)}</p>
+            {(leg.depFboName || leg.depFboAddress) && (
+              <p className="mt-1">
+                <span className="text-black/70">Depart from: </span>
+                {leg.depFboName}
+                {leg.depFboAddress && (
+                  <>
+                    {leg.depFboName && " — "}
+                    <a href={mapsSearchUrl(leg.depFboAddress)} className="underline">
+                      {leg.depFboAddress}
+                    </a>
+                  </>
+                )}
+              </p>
+            )}
+            {(leg.arrFboName || leg.arrFboAddress) && (
+              <p>
+                <span className="text-black/70">Arrive at: </span>
+                {leg.arrFboName}
+                {leg.arrFboAddress && (
+                  <>
+                    {leg.arrFboName && " — "}
+                    <a href={mapsSearchUrl(leg.arrFboAddress)} className="underline">
+                      {leg.arrFboAddress}
+                    </a>
+                  </>
+                )}
               </p>
             )}
           </div>
         ))}
       </div>
-
-      {mapLegs.length > 0 && (
-        <div className="mt-4">
-          <FlightPathMap legs={mapLegs} width={544} height={200} />
-        </div>
-      )}
 
       {trip.crewAssignments.length > 0 && (
         <p className="mt-4">

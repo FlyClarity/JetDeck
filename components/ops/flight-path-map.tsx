@@ -1,15 +1,28 @@
-type MapAirport = { icao: string; lat: number; lon: number };
+import { greatCircleDistanceNm } from "@/lib/geo";
+
+type MapAirport = {
+  icao: string;
+  lat: number;
+  lon: number;
+  city?: string | null;
+  state?: string | null;
+};
 export type MapLeg = { dep: MapAirport; arr: MapAirport };
+
+function locationLine(a: MapAirport): string {
+  return [a.city, a.state].filter(Boolean).join(", ");
+}
 
 // A lightweight, dependency-free stand-in for a real map — no coastline
 // data or map-tile service involved, just the trip's own airports (lat/lon
-// already in the Airport table) projected onto a plain equirectangular grid
-// and connected leg by leg. Good enough to show the shape of a routing at a
-// glance on a print manifest; not meant to be geographically precise.
+// already in the Airport table) projected onto a sectional-chart-style
+// backdrop and connected leg by leg. Good enough to show the shape and
+// scale of a routing at a glance on a manifest; not meant to be
+// geographically precise (straight/arced lines, not true great circles).
 export function FlightPathMap({
   legs,
-  width = 480,
-  height = 220,
+  width = 520,
+  height = 260,
 }: {
   legs: MapLeg[];
   width?: number;
@@ -18,23 +31,20 @@ export function FlightPathMap({
   const points = legs.flatMap((l) => [l.dep, l.arr]);
   if (points.length === 0) return null;
 
+  const margin = 56; // room for airport labels beyond the plotted points
   const lats = points.map((p) => p.lat);
   const lons = points.map((p) => p.lon);
   const latMin = Math.min(...lats);
   const latMax = Math.max(...lats);
   const lonMin = Math.min(...lons);
   const lonMax = Math.max(...lons);
-  // Padding scales with the route's own span so a short hop doesn't render
-  // as two dots jammed in a corner, and a transcontinental one still fits.
-  const latPad = Math.max((latMax - latMin) * 0.3, 1.5);
-  const lonPad = Math.max((lonMax - lonMin) * 0.3, 1.5);
-  const latSpan = latMax - latMin + latPad * 2 || 1;
-  const lonSpan = lonMax - lonMin + lonPad * 2 || 1;
+  const latSpan = latMax - latMin || 1;
+  const lonSpan = lonMax - lonMin || 1;
 
   function project(p: MapAirport) {
-    const x = ((p.lon - (lonMin - lonPad)) / lonSpan) * width;
+    const x = margin + ((p.lon - lonMin) / lonSpan) * (width - margin * 2);
     // Latitude increases northward but SVG y increases downward.
-    const y = height - ((p.lat - (latMin - latPad)) / latSpan) * height;
+    const y = height - margin - ((p.lat - latMin) / latSpan) * (height - margin * 2);
     return { x, y };
   }
 
@@ -46,40 +56,73 @@ export function FlightPathMap({
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       className="rounded-md border border-border/70"
-      style={{ background: "#f8fafc" }}
     >
-      {[0.25, 0.5, 0.75].map((f) => (
-        <line key={`h${f}`} x1={0} y1={height * f} x2={width} y2={height * f} stroke="#e2e8f0" strokeWidth={1} />
+      <defs>
+        <linearGradient id="chart-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#fefce8" />
+          <stop offset="100%" stopColor="#fef3c7" />
+        </linearGradient>
+      </defs>
+      <rect x={0} y={0} width={width} height={height} fill="url(#chart-bg)" />
+
+      {/* Sectional-chart-style graticule with a compass rose — evokes an
+          aviation chart rather than a street map, and grid lines give a
+          sense of scale even without real coastlines. */}
+      {[0.2, 0.4, 0.6, 0.8].map((f) => (
+        <line key={`h${f}`} x1={0} y1={height * f} x2={width} y2={height * f} stroke="#d4a72c" strokeWidth={0.5} strokeOpacity={0.35} />
       ))}
-      {[0.25, 0.5, 0.75].map((f) => (
-        <line key={`v${f}`} x1={width * f} y1={0} x2={width * f} y2={height} stroke="#e2e8f0" strokeWidth={1} />
+      {[0.2, 0.4, 0.6, 0.8].map((f) => (
+        <line key={`v${f}`} x1={width * f} y1={0} x2={width * f} y2={height} stroke="#d4a72c" strokeWidth={0.5} strokeOpacity={0.35} />
       ))}
+      <g transform={`translate(${width - 28}, 28)`} opacity={0.6}>
+        <circle r={14} fill="none" stroke="#78716c" strokeWidth={1} />
+        <path d="M 0 -14 L -3 -6 L 0 -9 L 3 -6 Z" fill="#78716c" />
+        <text x={0} y={-17} textAnchor="middle" fontSize={8} fontWeight={700} fill="#78716c">N</text>
+      </g>
+
       {legs.map((l, i) => {
         const a = project(l.dep);
         const b = project(l.arr);
-        // A slight upward arc reads as a flight path rather than a flat
-        // point-to-point line — purely stylistic, not a real great circle.
         const midX = (a.x + b.x) / 2;
         const midY = Math.min(a.y, b.y) - Math.max(20, Math.abs(a.x - b.x) * 0.15);
+        const distanceNm = Math.round(greatCircleDistanceNm(l.dep.lat, l.dep.lon, l.arr.lat, l.arr.lon));
         return (
-          <path
-            key={i}
-            d={`M ${a.x} ${a.y} Q ${midX} ${midY} ${b.x} ${b.y}`}
-            fill="none"
-            stroke="#0f172a"
-            strokeWidth={1.5}
-            strokeDasharray="5 4"
-          />
+          <g key={i}>
+            <path
+              d={`M ${a.x} ${a.y} Q ${midX} ${midY} ${b.x} ${b.y}`}
+              fill="none"
+              stroke="#78350f"
+              strokeWidth={1.5}
+              strokeDasharray="5 4"
+            />
+            <text
+              x={midX}
+              y={midY - 4}
+              textAnchor="middle"
+              fontSize={10}
+              fill="#78350f"
+              className="font-medium"
+            >
+              {distanceNm.toLocaleString()} nm
+            </text>
+          </g>
         );
       })}
+
       {uniqueAirports.map((p) => {
         const { x, y } = project(p);
+        const location = locationLine(p);
         return (
           <g key={p.icao}>
-            <circle cx={x} cy={y} r={4} fill="#0f172a" />
-            <text x={x} y={y - 9} textAnchor="middle" fontSize={11} fontWeight={600} fill="#0f172a">
+            <circle cx={x} cy={y} r={4.5} fill="#78350f" stroke="#fefce8" strokeWidth={1.5} />
+            <text x={x} y={y - 22} textAnchor="middle" fontSize={12} fontWeight={700} fill="#1c1917">
               {p.icao}
             </text>
+            {location && (
+              <text x={x} y={y - 10} textAnchor="middle" fontSize={9} fill="#57534e">
+                {location}
+              </text>
+            )}
           </g>
         );
       })}

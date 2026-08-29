@@ -3,13 +3,12 @@ import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { revenueLegsOf, revenueLegsWithIndex, legDate, type StoredLeg } from "@/lib/itinerary";
+import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { createManifestForTrip } from "@/lib/manifest";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import {
   Select,
@@ -67,7 +66,9 @@ async function getScopedTrip(id: string) {
 // — not part of pricing, so it lives here rather than the Quote Builder.
 // Written back onto the leg's own position in the stored itinerary array
 // (see revenueLegsWithIndex) rather than a separate table, since it's just
-// two more fields on data that already exists per leg.
+// a few more fields on data that already exists per leg. Name and address
+// are separate fields (not one free-text blob) so the address can render
+// as a real clickable maps link.
 async function updateLegFbos(tripId: string, formData: FormData) {
   "use server";
 
@@ -79,8 +80,10 @@ async function updateLegFbos(tripId: string, formData: FormData) {
     if ((leg.billAs ?? "revenue") !== "revenue") return leg;
     return {
       ...leg,
-      depFbo: String(formData.get(`depFbo-${index}`) ?? "").trim() || null,
-      arrFbo: String(formData.get(`arrFbo-${index}`) ?? "").trim() || null,
+      depFboName: String(formData.get(`depFboName-${index}`) ?? "").trim() || null,
+      depFboAddress: String(formData.get(`depFboAddress-${index}`) ?? "").trim() || null,
+      arrFboName: String(formData.get(`arrFboName-${index}`) ?? "").trim() || null,
+      arrFboAddress: String(formData.get(`arrFboAddress-${index}`) ?? "").trim() || null,
     };
   });
 
@@ -208,14 +211,23 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
   ];
   const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
   const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
+  // "KILG" means nothing to most people — pair every code with the airport's
+  // own name and city/state wherever it's shown.
+  function airportLabel(icao: string | null | undefined): string {
+    if (!icao) return "—";
+    const a = airportByIcao[icao];
+    if (!a) return icao;
+    const location = [a.city, a.state].filter(Boolean).join(", ");
+    return location ? `${icao} — ${a.name} (${location})` : `${icao} — ${a.name}`;
+  }
   const mapLegs = legs
     .map((l) => {
       const dep = l.depAirport ? airportByIcao[l.depAirport] : undefined;
       const arr = l.arrAirport ? airportByIcao[l.arrAirport] : undefined;
       if (!dep || !arr) return null;
       return {
-        dep: { icao: dep.icao, lat: dep.lat, lon: dep.lon },
-        arr: { icao: arr.icao, lat: arr.lat, lon: arr.lon },
+        dep: { icao: dep.icao, lat: dep.lat, lon: dep.lon, city: dep.city, state: dep.state },
+        arr: { icao: arr.icao, lat: arr.lat, lon: arr.lon, city: arr.city, state: arr.state },
       };
     })
     .filter((l): l is NonNullable<typeof l> => l !== null);
@@ -311,39 +323,76 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
 
       <div className="mt-6 rounded-md border border-border p-4">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>
-        <form action={updateLegFbosWithId} className="mt-2 flex flex-col gap-3">
+
+        {mapLegs.length > 0 && (
+          <div className="mt-3">
+            <FlightPathMap legs={mapLegs} width={500} height={240} />
+          </div>
+        )}
+
+        <form action={updateLegFbosWithId} className="mt-4 flex flex-col gap-4">
           {legsIndexed.map(({ leg, index }) => (
-            <div key={index} className="flex flex-col gap-1.5 border-b border-border pb-3 last:border-0 last:pb-0">
-              <div className="flex items-center justify-between text-sm">
-                <span>
-                  {leg.depAirport} → {leg.arrAirport}
+            <div key={index} className="flex flex-col gap-3 rounded-md border border-border p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">
+                  {airportLabel(leg.depAirport)} → {airportLabel(leg.arrAirport)}
                 </span>
-                <span className="text-muted-foreground">{legDate(leg)}</span>
+                <span className="shrink-0 pl-3 text-sm text-muted-foreground">{legDate(leg)}</span>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex flex-col gap-1">
-                  <Label htmlFor={`depFbo-${index}`} className="text-xs font-normal text-muted-foreground">
-                    FBO at {leg.depAirport}
-                  </Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Departure FBO — {leg.depAirport}
+                  </p>
                   <Input
-                    id={`depFbo-${index}`}
-                    name={`depFbo-${index}`}
-                    defaultValue={leg.depFbo ?? ""}
-                    placeholder="e.g. Atlantic Aviation"
+                    name={`depFboName-${index}`}
+                    defaultValue={leg.depFboName ?? ""}
+                    placeholder="Name (e.g. Atlantic Aviation)"
                     className="h-8 text-sm"
                   />
+                  <Input
+                    name={`depFboAddress-${index}`}
+                    defaultValue={leg.depFboAddress ?? ""}
+                    placeholder="Address"
+                    className="h-8 text-sm"
+                  />
+                  {leg.depFboAddress && (
+                    <a
+                      href={mapsSearchUrl(leg.depFboAddress)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-primary underline underline-offset-4"
+                    >
+                      Open in Maps ↗
+                    </a>
+                  )}
                 </div>
-                <div className="flex flex-col gap-1">
-                  <Label htmlFor={`arrFbo-${index}`} className="text-xs font-normal text-muted-foreground">
-                    FBO at {leg.arrAirport}
-                  </Label>
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Arrival FBO — {leg.arrAirport}
+                  </p>
                   <Input
-                    id={`arrFbo-${index}`}
-                    name={`arrFbo-${index}`}
-                    defaultValue={leg.arrFbo ?? ""}
-                    placeholder="e.g. Signature Flight Support"
+                    name={`arrFboName-${index}`}
+                    defaultValue={leg.arrFboName ?? ""}
+                    placeholder="Name (e.g. Signature Flight Support)"
                     className="h-8 text-sm"
                   />
+                  <Input
+                    name={`arrFboAddress-${index}`}
+                    defaultValue={leg.arrFboAddress ?? ""}
+                    placeholder="Address"
+                    className="h-8 text-sm"
+                  />
+                  {leg.arrFboAddress && (
+                    <a
+                      href={mapsSearchUrl(leg.arrFboAddress)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-primary underline underline-offset-4"
+                    >
+                      Open in Maps ↗
+                    </a>
+                  )}
                 </div>
               </div>
             </div>
@@ -352,12 +401,6 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
             Save FBOs
           </Button>
         </form>
-
-        {mapLegs.length > 0 && (
-          <div className="mt-4">
-            <FlightPathMap legs={mapLegs} width={500} height={200} />
-          </div>
-        )}
 
         {hasNotes && (
           <div className="mt-4 flex flex-col gap-1 border-t border-border pt-3 text-sm">

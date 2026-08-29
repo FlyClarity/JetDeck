@@ -11,10 +11,14 @@ export type StoredLeg = {
   depTimeTBD?: boolean;
   arrTime?: string | null;
   // Ops-entered post-booking, not part of pricing — which FBO to use at
-  // each end of this leg. Only ever set on revenue legs in practice (see
+  // each end of this leg, structured so the address can render as a real
+  // clickable maps link rather than being buried inside a single free-text
+  // string. Only ever set on revenue legs in practice (see
   // /ops/trips/[id]'s itinerary editor).
-  depFbo?: string | null;
-  arrFbo?: string | null;
+  depFboName?: string | null;
+  depFboAddress?: string | null;
+  arrFboName?: string | null;
+  arrFboAddress?: string | null;
 };
 
 export function revenueLegsOf(itinerary: unknown): StoredLeg[] {
@@ -34,6 +38,13 @@ export function revenueLegsWithIndex(itinerary: unknown): { leg: StoredLeg; inde
 
 export function legDateIso(leg: StoredLeg): string | null {
   return leg.date || (leg.depDt ? leg.depDt.slice(0, 10) : null);
+}
+
+// A plain Google Maps search link — works for turn-by-turn directions on
+// any phone (opens the Maps app if installed) without needing a geocoding
+// call ourselves; Maps resolves the free-text address on its own.
+export function mapsSearchUrl(address: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
 
 export function formatIsoDate(iso: string): string {

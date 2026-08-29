@@ -2874,3 +2874,46 @@ FBO info, a map showing the route, and any system-captured notes
   airport-lookup pattern, so the ops-facing detail page and the
   document that actually leaves the building (print/PDF) show
   consistent information.
+
+## Manifest follow-up: structured FBOs, richer map, readable itinerary
+
+User tested the FBO/map/notes round and came back with concrete
+feedback: the map read as empty with no real information on it; FBO
+needed a proper name *and* a clickable address for directions, not one
+free-text blob (the test screenshot showed a full "name + street
+address" string jammed into the single field from the prior round);
+airport codes alone (KILG, MWCR) aren't recognizable to most readers;
+and the itinerary layout itself was cramped and hard to follow.
+
+- ~~**FBO split into name + address — fixed**~~: `depFbo`/`arrFbo`
+  (single string) replaced with `depFboName`/`depFboAddress`/
+  `arrFboName`/`arrFboAddress` on `StoredLeg` (`lib/itinerary.ts`) —
+  still just JSON keys, no migration, and no backfill for the one test
+  value already saved (this is active test data, not anything worth
+  preserving). New `mapsSearchUrl()` helper builds a plain Google Maps
+  search link from the address — works for turn-by-turn directions on
+  any phone without a geocoding call, Maps resolves the free-text
+  address itself. The print manifest renders the address as that link;
+  the ops edit page (`/ops/trips/[id]`) shows an "Open in Maps ↗" link
+  next to any address already saved, so ops can sanity-check what they
+  typed without leaving the edit form.
+- ~~**Airports get real names, not just codes — fixed**~~: a shared
+  `airportLabel()` (written once per page, small enough not to need a
+  common export) renders `KILG — New Castle Airport (Wilmington, DE)`
+  wherever a leg's airports are shown — the itinerary cards on both
+  `/ops/trips/[id]` and the print manifest, and the map's own labels
+  (`FlightPathMap` now takes each airport's city/state alongside
+  lat/lon and prints both under the ICAO code).
+- ~~**Map redesigned with actual content — fixed**~~: still no external
+  map-tile service or coastline data (deliberately — see the original
+  entry), but now reads as an aviation sectional chart instead of an
+  empty grid: a warm cream/tan gradient background, a compass rose,
+  distance in nautical miles labeled along each leg's path
+  (`greatCircleDistanceNm`, already in `lib/geo.ts`), and two-line
+  airport labels (ICAO + city/state) instead of a bare code.
+- ~~**Itinerary readability — fixed**~~: each leg is now its own
+  bordered card — route (with full airport labels) and date up top,
+  then departure/arrival FBO name+address clearly grouped under their
+  own labeled subsections — instead of a cramped single line with FBO
+  text crammed underneath in tiny type. The map moved to the top of
+  the Itinerary section (overview first, details below) on both pages.
