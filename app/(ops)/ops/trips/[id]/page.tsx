@@ -17,7 +17,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FlightPathMap } from "@/components/ops/flight-path-map";
 import { getAppUrl } from "@/lib/url";
 import { cn } from "@/lib/utils";
 
@@ -211,26 +210,16 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
   ];
   const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
   const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
-  // "KILG" means nothing to most people — pair every code with the airport's
-  // own name and city/state wherever it's shown.
+  // "KILG" means nothing to most people — pair every code with the
+  // airport's city/state wherever it's shown. Deliberately short (not the
+  // full FAA facility name) so a leg's two endpoints fit on one line.
   function airportLabel(icao: string | null | undefined): string {
     if (!icao) return "—";
     const a = airportByIcao[icao];
     if (!a) return icao;
     const location = [a.city, a.state].filter(Boolean).join(", ");
-    return location ? `${icao} — ${a.name} (${location})` : `${icao} — ${a.name}`;
+    return location ? `${location} (${icao})` : icao;
   }
-  const mapLegs = legs
-    .map((l) => {
-      const dep = l.depAirport ? airportByIcao[l.depAirport] : undefined;
-      const arr = l.arrAirport ? airportByIcao[l.arrAirport] : undefined;
-      if (!dep || !arr) return null;
-      return {
-        dep: { icao: dep.icao, lat: dep.lat, lon: dep.lon, city: dep.city, state: dep.state },
-        arr: { icao: arr.icao, lat: arr.lat, lon: arr.lon, city: arr.city, state: arr.state },
-      };
-    })
-    .filter((l): l is NonNullable<typeof l> => l !== null);
 
   const passengerNotes = trip.passengers.filter((p) => p.specialRequests);
   const hasNotes =
@@ -324,13 +313,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
       <div className="mt-6 rounded-md border border-border p-4">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>
 
-        {mapLegs.length > 0 && (
-          <div className="mt-3">
-            <FlightPathMap legs={mapLegs} width={500} height={240} />
-          </div>
-        )}
-
-        <form action={updateLegFbosWithId} className="mt-4 flex flex-col gap-4">
+        <form action={updateLegFbosWithId} className="mt-3 flex flex-col gap-4">
           {legsIndexed.map(({ leg, index }) => (
             <div key={index} className="flex flex-col gap-3 rounded-md border border-border p-3">
               <div className="flex items-center justify-between">

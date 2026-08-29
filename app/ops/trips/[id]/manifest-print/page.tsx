@@ -3,7 +3,6 @@ import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDate, mapsSearchUrl } from "@/lib/itinerary";
 import { crewRoleLabel } from "@/lib/crew";
-import { FlightPathMap } from "@/components/ops/flight-path-map";
 
 // Deliberately outside the (ops) route group — no nav chrome, so printing
 // (or "Save as PDF") from the browser produces a clean page for the trip
@@ -42,26 +41,16 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
   const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
 
   // "KILG" means nothing to most people reading this document — pair every
-  // code with the airport's own name and city/state.
+  // code with the airport's city/state. Deliberately short (not the full
+  // FAA facility name) so a leg's two endpoints fit on one line instead of
+  // wrapping mid-phrase.
   function airportLabel(icao: string | null | undefined): string {
     if (!icao) return "—";
     const a = airportByIcao[icao];
     if (!a) return icao;
     const location = [a.city, a.state].filter(Boolean).join(", ");
-    return location ? `${icao} — ${a.name} (${location})` : `${icao} — ${a.name}`;
+    return location ? `${location} (${icao})` : icao;
   }
-
-  const mapLegs = legs
-    .map((l) => {
-      const dep = l.depAirport ? airportByIcao[l.depAirport] : undefined;
-      const arr = l.arrAirport ? airportByIcao[l.arrAirport] : undefined;
-      if (!dep || !arr) return null;
-      return {
-        dep: { icao: dep.icao, lat: dep.lat, lon: dep.lon, city: dep.city, state: dep.state },
-        arr: { icao: arr.icao, lat: arr.lat, lon: arr.lon, city: arr.city, state: arr.state },
-      };
-    })
-    .filter((l): l is NonNullable<typeof l> => l !== null);
 
   const passengerNotes = trip.passengers.filter((p) => p.specialRequests);
   const hasNotes =
@@ -79,46 +68,40 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
         <p>Aircraft: {tail}</p>
       </div>
 
-      {mapLegs.length > 0 && (
-        <div className="mt-4">
-          <FlightPathMap legs={mapLegs} width={544} height={240} />
-        </div>
-      )}
-
-      <div className="mt-4 flex flex-col gap-3">
+      <div className="mt-4 flex flex-col gap-4">
         {legs.map((leg, i) => (
-          <div key={i} className="border-b border-black/10 pb-2 last:border-0">
-            <p className="font-medium">
-              {airportLabel(leg.depAirport)} → {airportLabel(leg.arrAirport)}
-            </p>
-            <p className="text-black/70">{legDate(leg)}</p>
-            {(leg.depFboName || leg.depFboAddress) && (
-              <p className="mt-1">
-                <span className="text-black/70">Depart from: </span>
-                {leg.depFboName}
-                {leg.depFboAddress && (
-                  <>
-                    {leg.depFboName && " — "}
-                    <a href={mapsSearchUrl(leg.depFboAddress)} className="underline">
-                      {leg.depFboAddress}
-                    </a>
-                  </>
-                )}
+          <div key={i} className="rounded border border-black/15 p-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="font-semibold">
+                {airportLabel(leg.depAirport)} → {airportLabel(leg.arrAirport)}
               </p>
+              <p className="shrink-0 text-black/60">{legDate(leg)}</p>
+            </div>
+            {(leg.depFboName || leg.depFboAddress) && (
+              <div className="mt-2 border-l-2 border-black/15 pl-3">
+                <p className="text-xs font-semibold tracking-wide text-black/60 uppercase">
+                  Depart — {leg.depAirport} FBO
+                </p>
+                {leg.depFboName && <p>{leg.depFboName}</p>}
+                {leg.depFboAddress && (
+                  <a href={mapsSearchUrl(leg.depFboAddress)} className="text-xs underline">
+                    {leg.depFboAddress}
+                  </a>
+                )}
+              </div>
             )}
             {(leg.arrFboName || leg.arrFboAddress) && (
-              <p>
-                <span className="text-black/70">Arrive at: </span>
-                {leg.arrFboName}
+              <div className="mt-2 border-l-2 border-black/15 pl-3">
+                <p className="text-xs font-semibold tracking-wide text-black/60 uppercase">
+                  Arrive — {leg.arrAirport} FBO
+                </p>
+                {leg.arrFboName && <p>{leg.arrFboName}</p>}
                 {leg.arrFboAddress && (
-                  <>
-                    {leg.arrFboName && " — "}
-                    <a href={mapsSearchUrl(leg.arrFboAddress)} className="underline">
-                      {leg.arrFboAddress}
-                    </a>
-                  </>
+                  <a href={mapsSearchUrl(leg.arrFboAddress)} className="text-xs underline">
+                    {leg.arrFboAddress}
+                  </a>
                 )}
-              </p>
+              </div>
             )}
           </div>
         ))}

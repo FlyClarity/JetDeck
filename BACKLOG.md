@@ -2917,3 +2917,31 @@ and the itinerary layout itself was cramped and hard to follow.
   own labeled subsections — instead of a cramped single line with FBO
   text crammed underneath in tiny type. The map moved to the top of
   the Itinerary section (overview first, details below) on both pages.
+
+## Manifest follow-up: map removed, itinerary decluttered
+
+User tried the redesigned manifest and the map still wasn't landing —
+"pretty empty" became "may is no good, remove it all together" once
+seeing it filled in with real content. The itinerary text was also
+still too crowded: pairing each airport with its full FAA facility
+name plus city/state made both endpoints of a leg wrap mid-phrase onto
+a second line, and the FBO details ran on immediately underneath with
+no visual separation.
+
+- ~~**Flight-path map removed — shipped**~~: deleted
+  `components/ops/flight-path-map.tsx` and its usage on both
+  `/ops/trips/[id]` and the print manifest. Two attempts at a
+  dependency-free abstract map (grid, then a chart-style version with
+  distance/compass) didn't land — not worth a third pass without a
+  clearer sense of what would; simpler to drop it than keep guessing.
+- ~~**Airport labels shortened — fixed**~~: `airportLabel()` on both
+  pages now renders `City, State (ICAO)` (e.g. "Wilmington, DE
+  (KILG)") instead of `ICAO — Full Facility Name (City, State)` — short
+  enough that a leg's two endpoints reliably fit on one line instead
+  of wrapping mid-phrase.
+- ~~**Itinerary leg cards decluttered — fixed**~~: each leg is now a
+  bordered card with the route/date on their own clear header line,
+  and departure/arrival FBO details each in their own indented
+  sub-block (small-caps "Depart — KILG FBO" label, name, then the
+  address as its own line) instead of a single run-on paragraph.
+  Applied identically to the print manifest and the ops edit page.
