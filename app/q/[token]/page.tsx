@@ -12,6 +12,7 @@ import { amenityLabel } from "@/lib/aircraft";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
+import { SectionHeading, Row } from "@/components/quote/client-page-ui";
 
 async function getQuoteByToken(token: string) {
   return prisma.quote.findUnique({
@@ -268,31 +269,6 @@ function aircraftLabelFor(o: {
       ? `${o.brokeredAircraft.make ?? ""} ${o.brokeredAircraft.model ?? ""}`.trim() ||
         "Aircraft to be confirmed"
       : "Aircraft to be confirmed";
-}
-
-export function Row({
-  label,
-  value,
-  emphasis,
-}: {
-  label: string;
-  value: string;
-  emphasis?: "muted" | "destructive";
-}) {
-  return (
-    <div className="flex justify-between">
-      <span className={emphasis === "muted" ? "text-muted-foreground" : ""}>{label}</span>
-      <span className={emphasis === "destructive" ? "font-medium text-destructive" : ""}>{value}</span>
-    </div>
-  );
-}
-
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <h2 className="text-[13px] font-semibold tracking-wide text-foreground/55 uppercase">
-      {children}
-    </h2>
-  );
 }
 
 export default async function ClientQuotePage({

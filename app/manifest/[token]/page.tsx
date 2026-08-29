@@ -2,12 +2,13 @@ import { notFound, redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { put } from "@vercel/blob";
 import { prisma } from "@/lib/prisma";
-import { revenueLegsOf } from "@/lib/itinerary";
+import { revenueLegsOf, legDate, legTimeLabel, mapsSearchUrl } from "@/lib/itinerary";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
+import { SectionHeading } from "@/components/quote/client-page-ui";
 import { getAppUrl } from "@/lib/url";
 
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
@@ -27,12 +28,27 @@ async function getPassengerByToken(token: string) {
           operator: true,
           passengers: { orderBy: { createdAt: "asc" } },
           quote: {
-            include: { selectedOption: { include: { aircraft: true, brokeredAircraft: true } } },
+            include: {
+              selectedOption: { include: { aircraft: true, brokeredAircraft: true } },
+              tripRequest: true,
+            },
           },
         },
       },
     },
   });
+}
+
+function aircraftLabelFor(option: {
+  aircraft: { make: string; model: string; tailNumber: string } | null;
+  brokeredAircraft: { make: string | null; model: string | null } | null;
+}): string {
+  return option.aircraft
+    ? `${option.aircraft.make} ${option.aircraft.model} (${option.aircraft.tailNumber})`
+    : option.brokeredAircraft
+      ? `${option.brokeredAircraft.make ?? ""} ${option.brokeredAircraft.model ?? ""}`.trim() ||
+        "Aircraft to be confirmed"
+      : "Aircraft to be confirmed";
 }
 
 // Any passenger can update their own row; the lead can also update any
@@ -272,6 +288,21 @@ export default async function ManifestPage({
     ? new Date(`${firstLeg.date}T00:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
     : "";
 
+  const legAirportCodes = [
+    ...new Set(legs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))),
+  ];
+  const legAirportRows = legAirportCodes.length
+    ? await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } })
+    : [];
+  const cityStateByIcao = Object.fromEntries(
+    legAirportRows.map((a) => [a.icao, [a.city, a.state].filter(Boolean).join(", ")])
+  );
+
+  const aircraftLabel = trip.quote.selectedOption ? aircraftLabelFor(trip.quote.selectedOption) : null;
+  const tripNotes = [trip.quote.selectedOption?.clientNotes, trip.quote.tripRequest?.specialRequests].filter(
+    (n): n is string => Boolean(n)
+  );
+
   const seatCap =
     trip.quote.selectedOption?.aircraft?.seats ?? trip.quote.selectedOption?.brokeredAircraft?.seats ?? null;
   const otherPassengers = passenger.isLead ? trip.passengers.filter((p) => p.id !== passenger.id) : [];
@@ -308,6 +339,70 @@ export default async function ManifestPage({
             <p className="mt-4 text-sm text-muted-foreground">
               Please complete your own information below for this flight.
             </p>
+          )}
+
+          {legs.length > 0 && (
+            <section className="mt-7">
+              <SectionHeading>Your Trip</SectionHeading>
+              <div className="mt-3 flex flex-col gap-2">
+                {legs.map((leg, i) => {
+                  const depLocation = leg.depAirport ? cityStateByIcao[leg.depAirport] : undefined;
+                  const arrLocation = leg.arrAirport ? cityStateByIcao[leg.arrAirport] : undefined;
+                  return (
+                    <div key={i} className="rounded-xl border border-border/70 p-4 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">
+                          {leg.depAirport} → {leg.arrAirport}
+                        </span>
+                        <span className="text-right text-muted-foreground">
+                          <span className="block">{legDate(leg)}</span>
+                          <span className="block text-xs">{legTimeLabel(leg)}</span>
+                        </span>
+                      </div>
+                      {(depLocation || arrLocation) && (
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {depLocation || "—"} → {arrLocation || "—"}
+                        </p>
+                      )}
+                      {(leg.depFboName || leg.depFboAddress) && (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Depart from: {leg.depFboName}
+                          {leg.depFboName && leg.depFboAddress && " — "}
+                          {leg.depFboAddress && (
+                            <a href={mapsSearchUrl(leg.depFboAddress)} className="underline underline-offset-4">
+                              {leg.depFboAddress}
+                            </a>
+                          )}
+                        </p>
+                      )}
+                      {(leg.arrFboName || leg.arrFboAddress) && (
+                        <p className="text-xs text-muted-foreground">
+                          Arrive at: {leg.arrFboName}
+                          {leg.arrFboName && leg.arrFboAddress && " — "}
+                          {leg.arrFboAddress && (
+                            <a href={mapsSearchUrl(leg.arrFboAddress)} className="underline underline-offset-4">
+                              {leg.arrFboAddress}
+                            </a>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {aircraftLabel && <p className="mt-3 text-sm text-muted-foreground">{aircraftLabel}</p>}
+            </section>
+          )}
+
+          {tripNotes.length > 0 && (
+            <section className="mt-7">
+              <SectionHeading>Notes</SectionHeading>
+              <div className="mt-3 flex flex-col gap-1.5 text-sm">
+                {tripNotes.map((note, i) => (
+                  <p key={i}>{note}</p>
+                ))}
+              </div>
+            </section>
           )}
         </div>
 

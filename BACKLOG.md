@@ -2945,3 +2945,32 @@ no visual separation.
   sub-block (small-caps "Depart — KILG FBO" label, name, then the
   address as its own line) instead of a single run-on paragraph.
   Applied identically to the print manifest and the ops edit page.
+
+## Client-facing manifest gets the quote page's level of polish
+
+User clarified an important distinction: the ops print manifest
+(`/ops/trips/[id]/manifest-print`) is working well for crew reference
+and should stay as-is — the actual gap is the *client-facing* side,
+the self-service passenger page at `/manifest/[token]`, which already
+matched the quote page's visual polish (same rounded-card-on-muted-
+background look) but only ever showed a bare one-line route/date
+before jumping straight into the passenger info form — no itinerary
+detail, no FBO, no notes.
+
+- ~~**Shared client-page primitives extracted — shipped**~~: pulled
+  `SectionHeading`/`Row` out of `/q/[token]/page.tsx` into a new
+  `components/quote/client-page-ui.tsx` — importing UI out of another
+  route's `page.tsx` would've worked but is the wrong shape; now both
+  client-facing pages share one real component source, guaranteeing
+  they actually look consistent rather than two hand-matched copies
+  drifting apart later.
+- ~~**"Your Trip" section on the passenger manifest page — shipped**~~:
+  added a full itinerary breakdown (per-leg city/state-labeled route,
+  date, time, and FBO name + clickable maps link when set — same
+  `mapsSearchUrl()` helper the ops side uses) plus the aircraft label
+  and a Notes section (`clientNotes` + the original `specialRequests`
+  from intake), styled identically to the quote page's own Itinerary/
+  Notes sections (`rounded-xl border border-border/70 p-4` leg cards,
+  `SectionHeading` labels). A client filling in their passenger info
+  now sees the same trip detail and polish they saw on the quote
+  itself, not a bare route string.
