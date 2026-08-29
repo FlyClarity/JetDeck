@@ -7,12 +7,14 @@ import { formatCurrency, allocateProportionally } from "@/lib/quote";
 import { paxCount } from "@/lib/queue";
 import { getAppUrl } from "@/lib/url";
 import { findBookingConflict, finalizeBooking, startAchPayment } from "@/lib/booking-server";
-import { revenueLegsOf, legDate, legTimeLabel, mapsSearchUrl } from "@/lib/itinerary";
+import { revenueLegsOf, legDate, legDateIso, flightTimeLabel } from "@/lib/itinerary";
+import { greatCircleDistanceNm } from "@/lib/geo";
+import { to12Hour, tzAbbreviation, tzChangeLabel } from "@/lib/time";
 import { amenityLabel } from "@/lib/aircraft";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
-import { SectionHeading, Row } from "@/components/quote/client-page-ui";
+import { SectionHeading, Row, LegItineraryCard } from "@/components/quote/client-page-ui";
 
 async function getQuoteByToken(token: string) {
   return prisma.quote.findUnique({
@@ -302,14 +304,22 @@ export default async function ClientQuotePage({
   ];
   const legAirports = await prisma.airport.findMany({
     where: { icao: { in: legAirportCodes } },
-    select: { icao: true, city: true, state: true },
   });
-  const cityStateByIcao = Object.fromEntries(
-    legAirports.map((a) => [
-      a.icao,
-      [a.city, a.state].filter(Boolean).join(", "),
-    ])
-  );
+  const airportByIcao = Object.fromEntries(legAirports.map((a) => [a.icao, a]));
+
+  // "New Castle County (ILG)" — the airport's full name reads fine here
+  // since it's stacked on its own line per Departs/Arrives column, not
+  // sharing a single route line the way an earlier version crammed it in
+  // (which is what caused the wrapping this replaces).
+  function airportNameFor(icao: string | null | undefined): string {
+    if (!icao) return "—";
+    const a = airportByIcao[icao];
+    return a ? `${a.name} (${icao})` : icao;
+  }
+  function locationFor(icao: string | null | undefined): string | undefined {
+    const a = icao ? airportByIcao[icao] : undefined;
+    return a ? [a.city, a.state].filter(Boolean).join(", ") || undefined : undefined;
+  }
 
   // Client-facing pricing shows one fee per segment, not the internal cost
   // breakdown (hourly rate, repositioning, landing/handling fees) that
@@ -462,47 +472,53 @@ export default async function ClientQuotePage({
           <section className="mt-7">
             <SectionHeading>Itinerary</SectionHeading>
             <div className="mt-3 flex flex-col gap-2">
-              {legs.map((leg, i) => (
-                <div key={i} className="rounded-xl border border-border/70 p-4 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">
-                      {leg.depAirport} → {leg.arrAirport}
-                    </span>
-                    <span className="text-right text-muted-foreground">
-                      <span className="block">{legDate(leg)}</span>
-                      <span className="block text-xs">{legTimeLabel(leg)}</span>
-                    </span>
-                  </div>
-                  {(cityStateByIcao[leg.depAirport ?? ""] || cityStateByIcao[leg.arrAirport ?? ""]) && (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {cityStateByIcao[leg.depAirport ?? ""] ?? "—"} →{" "}
-                      {cityStateByIcao[leg.arrAirport ?? ""] ?? "—"}
-                    </p>
-                  )}
-                  {(leg.depFboName || leg.depFboAddress) && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Depart from: {leg.depFboName}
-                      {leg.depFboName && leg.depFboAddress && " — "}
-                      {leg.depFboAddress && (
-                        <a href={mapsSearchUrl(leg.depFboAddress)} className="underline underline-offset-4">
-                          {leg.depFboAddress}
-                        </a>
-                      )}
-                    </p>
-                  )}
-                  {(leg.arrFboName || leg.arrFboAddress) && (
-                    <p className="text-xs text-muted-foreground">
-                      Arrive at: {leg.arrFboName}
-                      {leg.arrFboName && leg.arrFboAddress && " — "}
-                      {leg.arrFboAddress && (
-                        <a href={mapsSearchUrl(leg.arrFboAddress)} className="underline underline-offset-4">
-                          {leg.arrFboAddress}
-                        </a>
-                      )}
-                    </p>
-                  )}
-                </div>
-              ))}
+              {legs.map((leg, i) => {
+                const dep = leg.depAirport ? airportByIcao[leg.depAirport] : undefined;
+                const arr = leg.arrAirport ? airportByIcao[leg.arrAirport] : undefined;
+                const isoDate = legDateIso(leg);
+                const distanceNm =
+                  dep && arr ? Math.round(greatCircleDistanceNm(dep.lat, dep.lon, arr.lat, arr.lon)) : null;
+                const flightTime = flightTimeLabel(leg.flightHours);
+                const tzChange = tzChangeLabel(dep?.timezone, arr?.timezone, isoDate);
+                const metaLabel =
+                  [
+                    distanceNm !== null ? `${distanceNm.toLocaleString()} nm` : null,
+                    flightTime ? `${flightTime} flight` : null,
+                    tzChange ? `${tzChange} hr time change` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || null;
+                const depTimeLabel = leg.depTimeTBD || !leg.depTime
+                  ? "TBD"
+                  : `${to12Hour(leg.depTime)} ${tzAbbreviation(dep?.timezone, isoDate)}`.trim();
+                const arrTimeLabel = leg.arrTime
+                  ? `${to12Hour(leg.arrTime)} ${tzAbbreviation(arr?.timezone, isoDate)}`.trim()
+                  : "TBD";
+
+                return (
+                  <LegItineraryCard
+                    key={i}
+                    legNumber={i + 1}
+                    route={`${leg.depAirport} → ${leg.arrAirport}`}
+                    dateLabel={legDate(leg)}
+                    metaLabel={metaLabel}
+                    dep={{
+                      timeLabel: depTimeLabel,
+                      airportName: airportNameFor(leg.depAirport),
+                      location: locationFor(leg.depAirport),
+                      fboName: leg.depFboName,
+                      fboAddress: leg.depFboAddress,
+                    }}
+                    arr={{
+                      timeLabel: arrTimeLabel,
+                      airportName: airportNameFor(leg.arrAirport),
+                      location: locationFor(leg.arrAirport),
+                      fboName: leg.arrFboName,
+                      fboAddress: leg.arrFboAddress,
+                    }}
+                  />
+                );
+              })}
             </div>
             <p className="mt-3 text-sm text-muted-foreground">
               {aircraftLabel}

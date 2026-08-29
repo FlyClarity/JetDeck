@@ -69,7 +69,7 @@ export function addHoursToTime(time: string, hours: number): TimeWithDayOffset {
 // UTC offset, in minutes, of an IANA timezone at a given instant (handles
 // DST automatically since it reads the zone's actual wall clock at that
 // moment rather than a fixed offset table).
-function utcOffsetMinutes(timeZone: string, instant: Date): number {
+export function utcOffsetMinutes(timeZone: string, instant: Date): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     hourCycle: "h23",
@@ -157,4 +157,50 @@ export function addHoursAcrossTimezones(
   );
 
   return { time: `${hh}:${mm}`, dayOffset };
+}
+
+// "EDT", "PST", etc. for a specific date — so a leg near a DST transition
+// gets the abbreviation actually in effect that day, not whatever's
+// current right now.
+export function tzAbbreviation(timeZone: string | null | undefined, date: string | null | undefined): string {
+  if (!timeZone || !date) return "";
+  try {
+    const instant = new Date(`${date}T12:00:00Z`);
+    return (
+      new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" })
+        .formatToParts(instant)
+        .find((p) => p.type === "timeZoneName")?.value ?? ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+// Signed hour difference between two airports' local clocks on a given
+// date (positive = the arrival clock jumps forward) — null if either zone
+// is unknown or they match. Half-hour zones (India, Newfoundland) round to
+// the nearest half hour.
+export function tzChangeLabel(
+  depTimezone: string | null | undefined,
+  arrTimezone: string | null | undefined,
+  date: string | null | undefined
+): string | null {
+  if (!depTimezone || !arrTimezone || !date || depTimezone === arrTimezone) return null;
+  const instant = new Date(`${date}T12:00:00Z`);
+  const diffMin = utcOffsetMinutes(arrTimezone, instant) - utcOffsetMinutes(depTimezone, instant);
+  if (diffMin === 0) return null;
+  const diffHours = Math.round(diffMin / 30) / 2;
+  return diffHours > 0 ? `+${diffHours}` : `${diffHours}`;
+}
+
+// "14:00" -> "2:00 PM" — times are stored 24-hour (see normalizeTimeString);
+// client-facing pages show 12-hour to match how a client actually reads a
+// clock.
+export function to12Hour(time: string | null | undefined): string {
+  if (!time) return "";
+  const m = time.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return time;
+  const suffix = Number(m[1]) >= 12 ? "PM" : "AM";
+  const h = Number(m[1]) % 12 || 12;
+  return `${h}:${m[2]} ${suffix}`;
 }

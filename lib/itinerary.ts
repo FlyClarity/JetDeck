@@ -64,6 +64,16 @@ export function legTimeLabel(leg: StoredLeg): string {
   return leg.arrTime ? `Departs ${dep} · Arrives ${leg.arrTime}` : `Departs ${dep}`;
 }
 
+// "3:24" from 3.4 hours — matches how flight time reads on a boarding-
+// pass-style itinerary, not the decimal hours pricing uses internally.
+export function flightTimeLabel(hours: number | null | undefined): string {
+  if (!hours) return "";
+  const totalMinutes = Math.round(hours * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h}:${String(m).padStart(2, "0")}`;
+}
+
 // Same gap-between-consecutive-legs math the Quote Builder uses live (see
 // autoNightsAway in quote-builder-form.tsx), but computed from a saved
 // itinerary instead of live leg state — used to split a saved

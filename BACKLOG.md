@@ -3001,3 +3001,44 @@ whenever they want (not just the one automatic email at booking time).
   resendable any time — exactly what's needed after FBOs get filled in
   post-booking, or when a client says the original email never
   arrived.
+
+## Itinerary leg cards redesigned for readability
+
+User flagged the client-facing itinerary as still hard to read and
+shared a sample PDF itinerary from another operator for inspiration —
+a header bar per leg (route, date, distance, flight time, time-zone
+change) over a two-column Departs/Arrives block with full airport
+names and FBO detail. Skipped the sample's weather and embedded map
+images deliberately: weather needs a forecast API with no upside once
+the flight is imminent, and a map is exactly what got built, iterated
+twice, and explicitly pulled a few rounds ago ("may is no good, remove
+it all together") — the ask here was readability, not those specific
+features.
+
+- ~~**`LegItineraryCard` — shipped**~~: new shared component
+  (`components/quote/client-page-ui.tsx`) replacing the leg-card JSX
+  that had been hand-duplicated across `/q/[token]` and
+  `/manifest/[token]`. Renders a `bg-muted/60` header bar ("Leg 1: ILG
+  → MWCR", date, and a distance/flight-time/time-zone-change meta
+  line when computable) over a two-column grid — each side stacking
+  local time, the airport's full name (`"New Castle County (ILG)"`,
+  safe to show in full now that it's not fighting for space on one
+  crowded route line), city/state, and FBO name + clickable maps
+  address.
+- ~~**Distance, flight time, and time-zone change computed from data
+  already on hand — shipped**~~: distance via the existing
+  `greatCircleDistanceNm` (`lib/geo.ts`, already used for pricing) off
+  each airport's lat/lon; flight time from the leg's own
+  `flightHours`, formatted `H:MM` (new `flightTimeLabel` in
+  `lib/itinerary.ts`); time-zone change and per-airport abbreviation
+  (`tzChangeLabel`/`tzAbbreviation`, new in `lib/time.ts`) from each
+  airport's IANA timezone, resolved for the leg's actual date so a
+  flight near a DST transition doesn't get the wrong abbreviation. No
+  new data entry required — everything needed was already stored.
+- ~~**Times switched to 12-hour with zone abbreviation — shipped**~~:
+  `to12Hour()` (`lib/time.ts`) turns the stored 24-hour `"14:00"` into
+  `"2:00 PM"`; combined with `tzAbbreviation()` each side now reads
+  "12:00 PM EDT" / "2:24 PM EST" instead of the bare 24-hour time. The
+  crew-facing pages (`legTimeLabel`, ops itinerary editor, print
+  manifest) are untouched — this only changed how the two
+  client-facing pages format the same stored data.
