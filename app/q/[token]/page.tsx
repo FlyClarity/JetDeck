@@ -11,6 +11,7 @@ import { revenueLegsOf, legDate, legDateIso, flightTimeLabel } from "@/lib/itine
 import { greatCircleDistanceNm } from "@/lib/geo";
 import { to12Hour, tzAbbreviation, tzChangeLabel } from "@/lib/time";
 import { amenityLabel } from "@/lib/aircraft";
+import { crewRoleLabel } from "@/lib/crew";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
@@ -27,6 +28,12 @@ async function getQuoteByToken(token: string) {
       options: {
         include: { aircraft: true, brokeredAircraft: true },
         orderBy: { createdAt: "asc" },
+      },
+      trip: {
+        include: {
+          passengers: { orderBy: [{ isLead: "desc" }, { createdAt: "asc" }] },
+          crewAssignments: { include: { crew: true }, orderBy: { createdAt: "asc" } },
+        },
       },
     },
   });
@@ -341,6 +348,14 @@ export default async function ClientQuotePage({
     (quote.validUntil.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)
   );
 
+  // Once ops has reviewed and sent the booking to Ops (not just the moment
+  // the client signs — sentToOps is the deliberate handoff, see Trip.
+  // sentToOps), this page shifts from "quote" to "itinerary": the terms
+  // and conditions the client already signed stop being the focus, the
+  // pill reads "Confirmed" instead of the raw status, and passenger/crew
+  // rosters (irrelevant before a trip exists) show up.
+  const isConfirmed = Boolean(quote.trip?.sentToOps);
+
   const requestToBookWithToken = requestToBook.bind(null, token);
   const acceptQuoteWithToken = acceptQuote.bind(null, token);
   const declineQuoteWithToken = declineQuote.bind(null, token);
@@ -407,11 +422,13 @@ export default async function ClientQuotePage({
             <span className="shrink-0 rounded-full bg-muted px-3 py-1 text-xs font-medium capitalize text-muted-foreground">
               {isExpired
                 ? "Expired"
-                : quote.status === "pending_confirmation"
-                  ? "Confirming availability"
-                  : quote.status === "approved"
-                    ? "Ready to finalize"
-                    : quote.status}
+                : isConfirmed
+                  ? "Confirmed"
+                  : quote.status === "pending_confirmation"
+                    ? "Confirming availability"
+                    : quote.status === "approved"
+                      ? "Ready to finalize"
+                      : quote.status}
             </span>
           </div>
 
@@ -554,6 +571,33 @@ export default async function ClientQuotePage({
             );
           })()}
 
+          {isConfirmed && quote.trip && quote.trip.passengers.length > 0 && (
+            <section className="mt-7">
+              <SectionHeading>Passengers</SectionHeading>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {quote.trip.passengers.map((p) => (
+                  <span key={p.id} className="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
+                    {p.firstName || p.lastName ? `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() : "Passenger TBD"}
+                    {p.isLead && " (Lead)"}
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {isConfirmed && quote.trip && quote.trip.crewAssignments.length > 0 && (
+            <section className="mt-7">
+              <SectionHeading>Crew</SectionHeading>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {quote.trip.crewAssignments.map((a) => (
+                  <span key={a.id} className="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
+                    {a.crew.name} ({crewRoleLabel(a.roleOnTrip)})
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+
           {(() => {
             const notes = [option.clientNotes, tripRequest?.specialRequests].filter(
               (n): n is string => Boolean(n)
@@ -608,7 +652,7 @@ export default async function ClientQuotePage({
             </div>
           </section>
 
-          {termsText && !pendingDecision && quote.status !== "pending_confirmation" && (
+          {termsText && !pendingDecision && quote.status !== "pending_confirmation" && !isConfirmed && (
             <section className="mt-7">
               <SectionHeading>Charter Terms</SectionHeading>
               <div className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-border/70 p-4 text-sm whitespace-pre-wrap text-muted-foreground">

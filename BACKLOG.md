@@ -3112,3 +3112,21 @@ airports, dates, aircraft.
   brokered) — crossing lanes changes the pricing model (wholesale
   cost, margin) and belongs in a re-quote, not a quick tail swap for
   "N123AB went down for maintenance."
+
+## Client quote page shifts to "itinerary mode" once sent to Ops
+
+User: once a trip moves to ops, the client's link should stop reading
+like a quote (terms, raw status) and start reading like an itinerary
+(who's confirmed, who's flying, who's crewing it).
+
+- ~~**"Confirmed" pill + terms hidden — shipped**~~: new `isConfirmed`
+  flag keyed off `quote.trip?.sentToOps` (not just `status ===
+  "accepted"` — the deliberate sales-to-ops handoff, same gate the Ops
+  Board itself uses) rather than the moment the client signs. Once
+  true, the top-right pill reads "Confirmed" instead of the raw
+  status, and the Charter Terms section — already signed, no longer
+  the point once the trip's actually moving — stops showing.
+- ~~**Passengers and Crew sections — shipped**~~: `getQuoteByToken` now
+  pulls `trip.passengers`/`trip.crewAssignments` (Quote already had a
+  `trip` back-relation); shown as name pills, same style as amenity
+  tags, once `isConfirmed` and there's anyone to list.
