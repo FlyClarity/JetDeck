@@ -3042,3 +3042,48 @@ features.
   crew-facing pages (`legTimeLabel`, ops itinerary editor, print
   manifest) are untouched — this only changed how the two
   client-facing pages format the same stored data.
+
+## Manifest collection cleanup (six items in one round)
+
+User feedback batch, all shipped together: KTN removed outright ("never
+applicable" — no reason to keep collecting it), only name/DOB required,
+a way to say which legs a passenger is actually on, a more prominent
+share-link, passenger removal, and a branded print manifest.
+
+- ~~**KTN field dropped — shipped**~~: `Passenger.ktn` removed from the
+  schema entirely (migration `20260829090000_drop_passenger_ktn`), not
+  just hidden — "never applicable" per the operator.
+- ~~**Only name + DOB required — shipped**~~: weight is now optional on
+  the passenger form; `submittedAt`/"complete" only checks
+  firstName/lastName/dateOfBirth.
+- ~~**Per-leg passenger assignment — shipped**~~: new
+  `Passenger.legIndexes` (empty = every leg, the common case) lets a
+  passenger be checked into specific legs of a multi-leg trip instead
+  of all of them — the picker only appears on the passenger form when
+  the trip actually has more than one leg. Surfaced back on the ops
+  trip page (a "Legs: ..." line per passenger) and the print manifest
+  (a "Legs" column, only shown when it'd actually say something other
+  than "All" for every passenger) so crew still know who's on which
+  leg — the one case where extending the print manifest was necessary
+  to keep it correct rather than just decoration.
+- ~~**Share-link banner moved to the top, made prominent — shipped**~~:
+  was a small text line below the form; now a highlighted banner
+  (`border-accent/40 bg-accent/10`) at the top of each additional
+  passenger's card, matching how the operator described it — "an
+  awesome feature" that deserved more visibility.
+- ~~**Remove a passenger — shipped**~~: `removePassenger` action on the
+  ops trip page, guarded against removing the lead (their token is
+  what every email link and the "who can manage this manifest" check
+  is keyed to — an ops mistake there means editing the lead's info,
+  not deleting the row).
+- ~~**Print manifest branded — shipped**~~: operator logo now shown
+  prominently in the header (falls back to the name when there's no
+  logo) instead of plain text, with a heavier header rule and a proper
+  two-column layout for the trip/aircraft info.
+- ~~**Brokered aircraft tail number on client pages — fixed**~~:
+  `aircraftLabelFor` (extracted to the shared
+  `components/quote/client-page-ui.tsx` from two near-identical
+  copies) included the tail number for owned-fleet aircraft but not
+  brokered ones, even though `BrokeredAircraft.tailNumber` is always
+  set — a client sourcing a brokered aircraft had no way to identify
+  the actual plane at the FBO. Now both branches include it.

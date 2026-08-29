@@ -470,8 +470,14 @@ model Passenger {
   idExpiry DateTime?
   idImageUrl String? // uploaded to Vercel Blob, same pattern as Aircraft.photos
 
+  // Which legs this passenger actually flies — empty means every revenue
+  // leg (the common case: most passengers fly the whole trip). Indices are
+  // positions in the itinerary's full stored array, same indexing
+  // revenueLegsWithIndex/updateLegFbos already use, so a passenger doesn't
+  // need its own leg model just to reference one.
+  legIndexes Int[] @default([])
+
   // Optional
-  ktn             String? // known traveler number / TSA PreCheck
   specialRequests String?
 
   // Status

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { revenueLegsOf, legDate, mapsSearchUrl } from "@/lib/itinerary";
+import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl } from "@/lib/itinerary";
 import { crewRoleLabel } from "@/lib/crew";
 
 // Deliberately outside the (ops) route group — no nav chrome, so printing
@@ -32,7 +32,21 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
   if (!trip) notFound();
 
   const legs = revenueLegsOf(trip.quote.selectedOption?.itinerary);
+  const legsIndexed = revenueLegsWithIndex(trip.quote.selectedOption?.itinerary);
   const tail = trip.quote.selectedOption?.aircraft?.tailNumber ?? "—";
+  // Only worth a column when the trip has more than one leg and at least
+  // one passenger isn't on all of them — otherwise every passenger is
+  // trivially "on every leg" and the column would be dead weight.
+  const showLegsColumn =
+    legsIndexed.length > 1 && trip.passengers.some((p) => p.legIndexes.length > 0);
+  function legsLabelFor(indexes: number[]): string {
+    if (indexes.length === 0) return "All";
+    return indexes
+      .map((i) => legsIndexed.find((l) => l.index === i))
+      .filter((l): l is (typeof legsIndexed)[number] => Boolean(l))
+      .map((l) => `${l.leg.depAirport}→${l.leg.arrAirport}`)
+      .join(", ");
+  }
 
   const legAirportCodes = [
     ...new Set(legs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))),
@@ -60,12 +74,20 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
 
   return (
     <div className="mx-auto max-w-2xl px-8 py-10 text-sm text-black">
-      <div className="flex items-center justify-between border-b border-black pb-3">
-        <div>
-          <h1 className="text-lg font-semibold">{operator.name}</h1>
-          <p>Passenger Manifest — {trip.tripNumber}</p>
+      <div className="flex items-center justify-between gap-4 border-b-2 border-black pb-4">
+        <div className="flex items-center gap-3">
+          {operator.logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={operator.logoUrl} alt={operator.name} className="h-10 w-auto object-contain" />
+          ) : (
+            <h1 className="text-xl font-semibold tracking-tight">{operator.name}</h1>
+          )}
+          <div className={operator.logoUrl ? "border-l border-black/20 pl-3" : ""}>
+            <p className="font-semibold">Passenger Manifest</p>
+            <p className="text-black/60">{trip.tripNumber}</p>
+          </div>
         </div>
-        <p>Aircraft: {tail}</p>
+        <p className="text-right font-medium">Aircraft: {tail}</p>
       </div>
 
       <div className="mt-4 flex flex-col gap-4">
@@ -140,6 +162,7 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
             <th className="py-1.5 pr-3">DOB</th>
             <th className="py-1.5 pr-3">Weight</th>
             <th className="py-1.5 pr-3">ID</th>
+            {showLegsColumn && <th className="py-1.5 pr-3">Legs</th>}
             <th className="py-1.5">Verified</th>
           </tr>
         </thead>
@@ -155,6 +178,7 @@ export default async function ManifestPrintPage({ params }: { params: Promise<{ 
               <td className="py-1.5 pr-3">
                 {p.idType ?? "—"} {p.idNumber ?? ""}
               </td>
+              {showLegsColumn && <td className="py-1.5 pr-3">{legsLabelFor(p.legIndexes)}</td>}
               <td className="py-1.5">{p.verifiedAt ? "✓" : ""}</td>
             </tr>
           ))}

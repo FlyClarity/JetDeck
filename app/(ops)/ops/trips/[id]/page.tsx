@@ -113,6 +113,26 @@ async function verifyPassenger(tripId: string, passengerId: string) {
   revalidatePath(`/ops/trips/${tripId}`);
 }
 
+// Deliberately can't remove the lead — their token is what the booking
+// confirmation email and every reminder point to, and the self-service page
+// keys "who can add/manage other passengers" off isLead. Removing them
+// would orphan those links and the rest of the manifest with no one able
+// to manage it. An ops mistake there means editing the lead's own info
+// instead, not deleting the row.
+async function removePassenger(tripId: string, passengerId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+
+  const passenger = scoped.trip.passengers.find((p) => p.id === passengerId);
+  if (!passenger || passenger.isLead) return;
+
+  await prisma.passenger.delete({ where: { id: passengerId } });
+
+  revalidatePath(`/ops/trips/${tripId}`);
+}
+
 // Ops-side entry point for a trip that never got a manifest automatically
 // (internal trips — owner/maintenance/repositioning — skip this in
 // finalizeBooking by design) but still needs one, e.g. a booking that came
@@ -552,6 +572,16 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
                     {" · "}
                     {p.idNumber ? `ID on file (${p.idType ?? "type unknown"})` : "ID missing"}
                   </p>
+                  {legsIndexed.length > 1 && p.legIndexes.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Legs:{" "}
+                      {p.legIndexes
+                        .map((i) => legsIndexed.find((l) => l.index === i))
+                        .filter((l): l is (typeof legsIndexed)[number] => Boolean(l))
+                        .map((l) => `${l.leg.depAirport} → ${l.leg.arrAirport}`)
+                        .join(", ")}
+                    </p>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {p.submittedAt ? (
@@ -564,6 +594,13 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
                     <span className="text-xs text-muted-foreground">Awaiting submission</span>
                   )}
                   <CopyLinkButton link={`${appUrl}/manifest/${p.token}`} />
+                  {!p.isLead && (
+                    <form action={removePassenger.bind(null, trip.id, p.id)}>
+                      <Button type="submit" size="sm" variant="ghost" className="text-destructive hover:text-destructive">
+                        Remove
+                      </Button>
+                    </form>
+                  )}
                 </div>
               </div>
             );

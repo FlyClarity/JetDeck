@@ -14,7 +14,7 @@ import { amenityLabel } from "@/lib/aircraft";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
-import { SectionHeading, Row, LegItineraryCard } from "@/components/quote/client-page-ui";
+import { SectionHeading, Row, LegItineraryCard, aircraftLabelFor } from "@/components/quote/client-page-ui";
 
 async function getQuoteByToken(token: string) {
   return prisma.quote.findUnique({
@@ -259,18 +259,6 @@ async function requestChanges(token: string, formData: FormData) {
   }
 
   redirect(`/q/${token}?requested=1`);
-}
-
-function aircraftLabelFor(o: {
-  aircraft: { make: string; model: string; tailNumber: string } | null;
-  brokeredAircraft: { make: string | null; model: string | null } | null;
-}) {
-  return o.aircraft
-    ? `${o.aircraft.make} ${o.aircraft.model} (${o.aircraft.tailNumber})`
-    : o.brokeredAircraft
-      ? `${o.brokeredAircraft.make ?? ""} ${o.brokeredAircraft.model ?? ""}`.trim() ||
-        "Aircraft to be confirmed"
-      : "Aircraft to be confirmed";
 }
 
 export default async function ClientQuotePage({

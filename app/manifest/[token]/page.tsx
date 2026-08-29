@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { put } from "@vercel/blob";
 import { prisma } from "@/lib/prisma";
-import { revenueLegsOf, legDate, legDateIso, flightTimeLabel } from "@/lib/itinerary";
+import { revenueLegsOf, revenueLegsWithIndex, legDate, legDateIso, flightTimeLabel } from "@/lib/itinerary";
 import { greatCircleDistanceNm } from "@/lib/geo";
 import { to12Hour, tzAbbreviation, tzChangeLabel } from "@/lib/time";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
-import { SectionHeading, LegItineraryCard } from "@/components/quote/client-page-ui";
+import { SectionHeading, LegItineraryCard, aircraftLabelFor } from "@/components/quote/client-page-ui";
 import { getAppUrl } from "@/lib/url";
 
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
@@ -41,18 +41,6 @@ async function getPassengerByToken(token: string) {
   });
 }
 
-function aircraftLabelFor(option: {
-  aircraft: { make: string; model: string; tailNumber: string } | null;
-  brokeredAircraft: { make: string | null; model: string | null } | null;
-}): string {
-  return option.aircraft
-    ? `${option.aircraft.make} ${option.aircraft.model} (${option.aircraft.tailNumber})`
-    : option.brokeredAircraft
-      ? `${option.brokeredAircraft.make ?? ""} ${option.brokeredAircraft.model ?? ""}`.trim() ||
-        "Aircraft to be confirmed"
-      : "Aircraft to be confirmed";
-}
-
 // Any passenger can update their own row; the lead can also update any
 // other passenger on the same trip (e.g. filling out a child's info
 // themselves instead of forwarding the link) — enforced here rather than
@@ -74,8 +62,24 @@ async function savePassengerInfo(actingToken: string, targetId: string, formData
   const idType = String(formData.get("idType") ?? "") || null;
   const idNumber = String(formData.get("idNumber") ?? "").trim() || null;
   const idExpiryRaw = String(formData.get("idExpiry") ?? "");
-  const ktn = String(formData.get("ktn") ?? "").trim() || null;
   const specialRequests = String(formData.get("specialRequests") ?? "").trim() || null;
+
+  // Empty means "every leg" — only worth storing a specific subset when the
+  // trip actually has more than one and the passenger isn't checked into
+  // all of them.
+  const trip = await prisma.trip.findUnique({
+    where: { id: target.tripId },
+    select: { quote: { select: { selectedOption: { select: { itinerary: true } } } } },
+  });
+  const allLegIndexes = revenueLegsWithIndex(trip?.quote.selectedOption?.itinerary).map((l) => l.index);
+  const checkedLegIndexes = formData
+    .getAll("legs")
+    .map((v) => Number(v))
+    .filter((n) => allLegIndexes.includes(n));
+  const legIndexes =
+    allLegIndexes.length > 1 && checkedLegIndexes.length > 0 && checkedLegIndexes.length < allLegIndexes.length
+      ? checkedLegIndexes.sort((a, b) => a - b)
+      : [];
 
   let idImageUrl = target.idImageUrl;
   const photo = formData.get("idImage");
@@ -92,7 +96,10 @@ async function savePassengerInfo(actingToken: string, targetId: string, formData
     }
   }
 
-  const complete = Boolean(firstName && lastName && dobRaw && weightRaw);
+  // Only name and DOB are actually required — everything else (weight, ID,
+  // special requests) is nice-to-have but shouldn't block a passenger from
+  // being considered "done."
+  const complete = Boolean(firstName && lastName && dobRaw);
 
   await prisma.passenger.update({
     where: { id: target.id },
@@ -105,8 +112,8 @@ async function savePassengerInfo(actingToken: string, targetId: string, formData
       idNumber,
       idExpiry: idExpiryRaw ? new Date(`${idExpiryRaw}T00:00:00`) : null,
       idImageUrl,
-      ktn,
       specialRequests,
+      legIndexes,
       submittedAt: complete ? new Date() : target.submittedAt,
     },
   });
@@ -147,16 +154,30 @@ function PassengerForm({
   passenger,
   actingToken,
   title,
+  shareLink,
+  legOptions,
 }: {
-  passenger: { id: string; firstName: string | null; lastName: string | null; dateOfBirth: Date | null; weightLbs: number | null; idType: string | null; idNumber: string | null; idExpiry: Date | null; idImageUrl: string | null; ktn: string | null; specialRequests: string | null; submittedAt: Date | null };
+  passenger: { id: string; firstName: string | null; lastName: string | null; dateOfBirth: Date | null; weightLbs: number | null; idType: string | null; idNumber: string | null; idExpiry: Date | null; idImageUrl: string | null; specialRequests: string | null; submittedAt: Date | null; legIndexes: number[] };
   actingToken: string;
   title: string;
+  shareLink?: string;
+  legOptions: { index: number; label: string }[];
 }) {
   const saveWithIds = savePassengerInfo.bind(null, actingToken, passenger.id);
   const toDateInput = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : "");
 
   return (
     <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      {shareLink && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-accent">Let them fill this out themselves</p>
+            <p className="text-xs text-muted-foreground">Send this passenger their own private link</p>
+          </div>
+          <CopyLinkButton link={shareLink} />
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">{title}</h2>
         {passenger.submittedAt && (
@@ -196,8 +217,8 @@ function PassengerForm({
               name="weightLbs"
               type="number"
               min={1}
+              placeholder="Optional"
               defaultValue={passenger.weightLbs ?? ""}
-              required
             />
           </div>
         </div>
@@ -225,20 +246,14 @@ function PassengerForm({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`idExpiry-${passenger.id}`}>ID expiry</Label>
-            <Input
-              id={`idExpiry-${passenger.id}`}
-              name="idExpiry"
-              type="date"
-              defaultValue={toDateInput(passenger.idExpiry)}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`ktn-${passenger.id}`}>Known Traveler Number</Label>
-            <Input id={`ktn-${passenger.id}`} name="ktn" placeholder="Optional" defaultValue={passenger.ktn ?? ""} />
-          </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`idExpiry-${passenger.id}`}>ID expiry</Label>
+          <Input
+            id={`idExpiry-${passenger.id}`}
+            name="idExpiry"
+            type="date"
+            defaultValue={toDateInput(passenger.idExpiry)}
+          />
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -248,6 +263,26 @@ function PassengerForm({
             <p className="text-xs text-muted-foreground">A photo is already on file — upload again to replace it.</p>
           )}
         </div>
+
+        {legOptions.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <Label>Which legs is this passenger on?</Label>
+            <div className="flex flex-col gap-2 rounded-md border border-input p-3">
+              {legOptions.map((opt) => (
+                <label key={opt.index} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name="legs"
+                    value={opt.index}
+                    defaultChecked={passenger.legIndexes.length === 0 || passenger.legIndexes.includes(opt.index)}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  {opt.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`special-${passenger.id}`}>Special requests</Label>
@@ -283,6 +318,16 @@ export default async function ManifestPage({
   const { trip } = passenger;
   const operator = trip.operator;
   const legs = revenueLegsOf(trip.quote.selectedOption?.itinerary);
+  // Only worth asking "which legs" when there's more than one — a
+  // single-leg trip has nothing to choose between.
+  const legsIndexed = revenueLegsWithIndex(trip.quote.selectedOption?.itinerary);
+  const legOptions =
+    legsIndexed.length > 1
+      ? legsIndexed.map(({ leg, index }) => ({
+          index,
+          label: `${leg.depAirport} → ${leg.arrAirport} (${legDate(leg)})`,
+        }))
+      : [];
   const firstLeg = legs[0];
   const lastLeg = legs[legs.length - 1];
   const routeText = firstLeg ? `${firstLeg.depAirport ?? "?"} → ${lastLeg?.arrAirport ?? "?"}` : "your flight";
@@ -428,24 +473,20 @@ export default async function ManifestPage({
             passenger={passenger}
             actingToken={token}
             title={passenger.isLead ? "Your Information" : "Your Information"}
+            legOptions={legOptions}
           />
 
           {passenger.isLead && (
             <>
               {otherPassengers.map((p, i) => (
-                <div key={p.id} className="flex flex-col gap-2">
-                  <PassengerForm
-                    passenger={p}
-                    actingToken={token}
-                    title={p.firstName ? `${p.firstName} ${p.lastName ?? ""}`.trim() : `Passenger ${i + 2}`}
-                  />
-                  {appUrl && (
-                    <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
-                      <span>Forward this passenger&apos;s own link:</span>
-                      <CopyLinkButton link={`${appUrl}/manifest/${p.token}`} />
-                    </div>
-                  )}
-                </div>
+                <PassengerForm
+                  key={p.id}
+                  passenger={p}
+                  actingToken={token}
+                  title={p.firstName ? `${p.firstName} ${p.lastName ?? ""}`.trim() : `Passenger ${i + 2}`}
+                  shareLink={appUrl ? `${appUrl}/manifest/${p.token}` : undefined}
+                  legOptions={legOptions}
+                />
               ))}
 
               {canAddMore && (

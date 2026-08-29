@@ -30,6 +30,27 @@ export function Row({
   );
 }
 
+// "Bombardier Challenger 300 (N251FT)" — a client identifies the actual
+// aircraft at the FBO by tail number, not make/model alone, so it's
+// included for a brokered aircraft too (BrokeredAircraft.tailNumber is
+// always set, unlike make/model which can be blank for a not-yet-fully-
+// detailed source), not just an owned-fleet one.
+export function aircraftLabelFor(option: {
+  aircraft: { make: string; model: string; tailNumber: string } | null;
+  brokeredAircraft: { make: string | null; model: string | null; tailNumber: string } | null;
+}): string {
+  if (option.aircraft) {
+    return `${option.aircraft.make} ${option.aircraft.model} (${option.aircraft.tailNumber})`;
+  }
+  if (option.brokeredAircraft) {
+    const makeModel = `${option.brokeredAircraft.make ?? ""} ${option.brokeredAircraft.model ?? ""}`.trim();
+    return makeModel
+      ? `${makeModel} (${option.brokeredAircraft.tailNumber})`
+      : option.brokeredAircraft.tailNumber;
+  }
+  return "Aircraft to be confirmed";
+}
+
 type LegEndpoint = {
   timeLabel: string;
   airportName: string;
