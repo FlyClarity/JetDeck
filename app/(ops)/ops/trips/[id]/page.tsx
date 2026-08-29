@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
-import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
+import { revenueLegsOf, revenueLegsWithIndex, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { createManifestForTrip } from "@/lib/manifest";
@@ -62,14 +62,16 @@ async function getScopedTrip(id: string) {
   return { trip, operator };
 }
 
-// FBO assignment is an ops/dispatch detail decided once a trip is confirmed
-// — not part of pricing, so it lives here rather than the Quote Builder.
-// Written back onto the leg's own position in the stored itinerary array
-// (see revenueLegsWithIndex) rather than a separate table, since it's just
-// a few more fields on data that already exists per leg. Name and address
-// are separate fields (not one free-text blob) so the address can render
-// as a real clickable maps link.
-async function updateLegFbos(tripId: string, formData: FormData) {
+// Ops correction of the itinerary's schedule details (airports, date,
+// times) and FBO assignment, post-booking — not part of pricing, so it
+// lives here rather than the Quote Builder. Written back onto each leg's
+// own position in the stored itinerary array (see revenueLegsWithIndex)
+// rather than a separate table, since it's just fields on data that
+// already exists per leg. Deliberately doesn't touch pricing
+// (hourlyRate/overnightNights/totals) — this is for fixing a data-entry
+// mistake or a schedule change the client already agreed to out of band,
+// not a re-quote.
+async function updateLegDetails(tripId: string, formData: FormData) {
   "use server";
 
   const scoped = await getScopedTrip(tripId);
@@ -78,8 +80,15 @@ async function updateLegFbos(tripId: string, formData: FormData) {
   const itinerary = (scoped.trip.quote.selectedOption?.itinerary as StoredLeg[] | null) ?? [];
   const updated = itinerary.map((leg, index) => {
     if ((leg.billAs ?? "revenue") !== "revenue") return leg;
+    const depTimeTBD = formData.get(`depTimeTBD-${index}`) === "on";
     return {
       ...leg,
+      depAirport: String(formData.get(`depAirport-${index}`) ?? "").trim().toUpperCase() || leg.depAirport,
+      arrAirport: String(formData.get(`arrAirport-${index}`) ?? "").trim().toUpperCase() || leg.arrAirport,
+      date: String(formData.get(`date-${index}`) ?? "").trim() || leg.date,
+      depTimeTBD,
+      depTime: depTimeTBD ? null : String(formData.get(`depTime-${index}`) ?? "").trim() || null,
+      arrTime: String(formData.get(`arrTime-${index}`) ?? "").trim() || null,
       depFboName: String(formData.get(`depFboName-${index}`) ?? "").trim() || null,
       depFboAddress: String(formData.get(`depFboAddress-${index}`) ?? "").trim() || null,
       arrFboName: String(formData.get(`arrFboName-${index}`) ?? "").trim() || null,
@@ -91,6 +100,45 @@ async function updateLegFbos(tripId: string, formData: FormData) {
     where: { id: scoped.trip.quote.selectedOptionId },
     data: { itinerary: updated },
   });
+
+  revalidatePath(`/ops/trips/${tripId}`);
+}
+
+// A pure tail swap within the same sourcing lane (own fleet <-> own fleet,
+// or brokered <-> brokered) — the common ops case ("N123AB went down for
+// maintenance, move this trip to N456CD"). Switching sourcing lane
+// entirely (fleet to brokered or vice versa) changes the pricing model
+// (wholesale cost, margin) and belongs in a re-quote, not a quick
+// correction here, so this only ever updates the aircraft/brokeredAircraft
+// FK that already applies to this option.
+async function updateAircraft(tripId: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped || !scoped.trip.quote.selectedOptionId) return;
+
+  const newId = String(formData.get("aircraftId") ?? "");
+  if (!newId) return;
+
+  if (scoped.trip.quote.selectedOption?.fleetSource === "brokered") {
+    const aircraft = await prisma.brokeredAircraft.findFirst({
+      where: { id: newId, operatorId: scoped.operator.id },
+    });
+    if (!aircraft) return;
+    await prisma.quoteOption.update({
+      where: { id: scoped.trip.quote.selectedOptionId },
+      data: { brokeredAircraftId: aircraft.id },
+    });
+  } else {
+    const aircraft = await prisma.aircraft.findFirst({
+      where: { id: newId, operatorId: scoped.operator.id },
+    });
+    if (!aircraft) return;
+    await prisma.quoteOption.update({
+      where: { id: scoped.trip.quote.selectedOptionId },
+      data: { aircraftId: aircraft.id },
+    });
+  }
 
   revalidatePath(`/ops/trips/${tripId}`);
 }
@@ -266,15 +314,13 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
   ];
   const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
   const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
-  // "KILG" means nothing to most people — pair every code with the
-  // airport's city/state wherever it's shown. Deliberately short (not the
-  // full FAA facility name) so a leg's two endpoints fit on one line.
-  function airportLabel(icao: string | null | undefined): string {
-    if (!icao) return "—";
+  // "KILG" means nothing to most people — shown as a caption under each
+  // airport input so ops can confirm it's the right one without needing to
+  // already know the ICAO code by heart.
+  function airportLocation(icao: string | null | undefined): string | null {
+    if (!icao) return null;
     const a = airportByIcao[icao];
-    if (!a) return icao;
-    const location = [a.city, a.state].filter(Boolean).join(", ");
-    return location ? `${location} (${icao})` : icao;
+    return a ? [a.city, a.state].filter(Boolean).join(", ") || null : null;
   }
 
   const passengerNotes = trip.passengers.filter((p) => p.specialRequests);
@@ -300,7 +346,28 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
     orderBy: { name: "asc" },
   });
   const assignWithId = assignCrew.bind(null, trip.id);
-  const updateLegFbosWithId = updateLegFbos.bind(null, trip.id);
+  const updateLegDetailsWithId = updateLegDetails.bind(null, trip.id);
+  const updateAircraftWithId = updateAircraft.bind(null, trip.id);
+
+  // Reassignment offers only aircraft in the same sourcing lane as what's
+  // already selected — swapping fleet-sourced for brokered (or vice versa)
+  // changes the pricing model and belongs in a re-quote, not here.
+  const fleetSource = trip.quote.selectedOption?.fleetSource ?? "own_fleet";
+  const otherAircraft =
+    fleetSource === "brokered"
+      ? (
+          await prisma.brokeredAircraft.findMany({
+            where: { operatorId: scoped.operator.id, id: { not: trip.quote.selectedOption?.brokeredAircraftId ?? undefined } },
+            orderBy: { tailNumber: "asc" },
+          })
+        ).map((a) => ({ id: a.id, label: `${a.tailNumber}${a.make || a.model ? ` — ${a.make ?? ""} ${a.model ?? ""}`.trim() : ""}` }))
+      : (
+          await prisma.aircraft.findMany({
+            where: { operatorId: scoped.operator.id, status: "active", id: { not: trip.quote.selectedOption?.aircraftId ?? undefined } },
+            orderBy: { tailNumber: "asc" },
+          })
+        ).map((a) => ({ id: a.id, label: `${a.tailNumber} — ${a.make} ${a.model}` }));
+
   const paid = isTripPaid(trip.quote);
   const stageIndex = TRIP_STAGES.findIndex((s) => s === trip.status);
 
@@ -378,14 +445,96 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
           )}
         </div>
 
-        <form action={updateLegFbosWithId} className="mt-3 flex flex-col gap-4">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 p-3">
+          <p className="text-sm">
+            <span className="text-muted-foreground">Aircraft: </span>
+            <span className="font-medium">{aircraftLabel}</span>
+          </p>
+          {otherAircraft.length > 0 && (
+            <form action={updateAircraftWithId} className="flex items-center gap-2">
+              <Select name="aircraftId">
+                <SelectTrigger className="h-8 w-56 overflow-hidden text-sm">
+                  <SelectValue placeholder="Swap to..." className="min-w-0 flex-1 truncate" />
+                </SelectTrigger>
+                <SelectContent>
+                  {otherAircraft.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button type="submit" size="sm" variant="outline">
+                Swap
+              </Button>
+            </form>
+          )}
+        </div>
+
+        <form action={updateLegDetailsWithId} className="mt-3 flex flex-col gap-4">
           {legsIndexed.map(({ leg, index }) => (
             <div key={index} className="flex flex-col gap-3 rounded-md border border-border p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">
-                  {airportLabel(leg.depAirport)} → {airportLabel(leg.arrAirport)}
-                </span>
-                <span className="shrink-0 pl-3 text-sm text-muted-foreground">{legDate(leg)}</span>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Departure Airport
+                  </p>
+                  <Input
+                    name={`depAirport-${index}`}
+                    defaultValue={leg.depAirport ?? ""}
+                    placeholder="ICAO"
+                    className="h-8 text-sm uppercase"
+                  />
+                  {airportLocation(leg.depAirport) && (
+                    <p className="text-xs text-muted-foreground">{airportLocation(leg.depAirport)}</p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Arrival Airport
+                  </p>
+                  <Input
+                    name={`arrAirport-${index}`}
+                    defaultValue={leg.arrAirport ?? ""}
+                    placeholder="ICAO"
+                    className="h-8 text-sm uppercase"
+                  />
+                  {airportLocation(leg.arrAirport) && (
+                    <p className="text-xs text-muted-foreground">{airportLocation(leg.arrAirport)}</p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Date</p>
+                  <Input name={`date-${index}`} type="date" defaultValue={leg.date ?? ""} className="h-8 text-sm" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Departure Time
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      name={`depTime-${index}`}
+                      type="time"
+                      defaultValue={leg.depTime ?? ""}
+                      className="h-8 text-sm"
+                    />
+                    <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        name={`depTimeTBD-${index}`}
+                        defaultChecked={leg.depTimeTBD ?? false}
+                        className="h-3.5 w-3.5"
+                      />
+                      TBD
+                    </label>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Arrival Time</p>
+                  <Input name={`arrTime-${index}`} type="time" defaultValue={leg.arrTime ?? ""} className="h-8 text-sm" />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="flex flex-col gap-1.5">
@@ -446,7 +595,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
             </div>
           ))}
           <Button type="submit" size="sm" className="self-start">
-            Save FBOs
+            Save Itinerary
           </Button>
         </form>
 

@@ -3087,3 +3087,28 @@ share-link, passenger removal, and a branded print manifest.
   brokered ones, even though `BrokeredAircraft.tailNumber` is always
   set — a client sourcing a brokered aircraft had no way to identify
   the actual plane at the FBO. Now both branches include it.
+
+## Ops itinerary editor: schedule fields and aircraft swap
+
+User feedback: the ops trip page's itinerary section "just shows date
+and airport codes" and needed to be editable — departure times,
+airports, dates, aircraft.
+
+- ~~**Editable airports/date/times — shipped**~~: `updateLegFbos`
+  became `updateLegDetails`, extended to also write
+  `depAirport`/`arrAirport`/`date`/`depTime`/`depTimeTBD`/`arrTime`
+  back onto the leg's position in the stored itinerary array, same as
+  FBOs already did. Each airport input keeps a city/state caption
+  below it (using the airport data already looked up for the old
+  read-only labels) so ops can confirm it's the right one without
+  memorizing ICAO codes. Deliberately doesn't touch pricing
+  (hourlyRate/overnightNights/totals stay whatever was quoted and
+  paid) — this is for fixing a mistake or a schedule change already
+  agreed with the client, not a re-quote.
+- ~~**Aircraft swap — shipped**~~: new `updateAircraft` action and a
+  "Swap" dropdown next to the aircraft line, scoped to the same
+  sourcing lane as what's already selected (own-fleet aircraft can
+  only swap to another own-fleet aircraft, brokered to another
+  brokered) — crossing lanes changes the pricing model (wholesale
+  cost, margin) and belongs in a re-quote, not a quick tail swap for
+  "N123AB went down for maintenance."
