@@ -617,40 +617,42 @@ export default async function ClientQuotePage({
             );
           })()}
 
-          <section className="mt-7">
-            <SectionHeading>Pricing</SectionHeading>
-            <div className="mt-3 flex flex-col gap-2 text-sm">
-              {legs.map((leg, i) => (
-                <Row
-                  key={i}
-                  label={`${leg.depAirport} → ${leg.arrAirport}`}
-                  value={formatCurrency(segmentFees[i] ?? 0)}
-                  emphasis="muted"
-                />
-              ))}
-              {option.discount > 0 && (
-                <Row label="Discount" value={`-${formatCurrency(option.discount)}`} emphasis="muted" />
-              )}
-              <div className="flex justify-between border-t border-border pt-2">
-                <span>Subtotal</span>
-                <span>{formatCurrency(preTaxSubtotal)}</span>
+          {!isConfirmed && (
+            <section className="mt-7">
+              <SectionHeading>Pricing</SectionHeading>
+              <div className="mt-3 flex flex-col gap-2 text-sm">
+                {legs.map((leg, i) => (
+                  <Row
+                    key={i}
+                    label={`${leg.depAirport} → ${leg.arrAirport}`}
+                    value={formatCurrency(segmentFees[i] ?? 0)}
+                    emphasis="muted"
+                  />
+                ))}
+                {option.discount > 0 && (
+                  <Row label="Discount" value={`-${formatCurrency(option.discount)}`} emphasis="muted" />
+                )}
+                <div className="flex justify-between border-t border-border pt-2">
+                  <span>Subtotal</span>
+                  <span>{formatCurrency(preTaxSubtotal)}</span>
+                </div>
+                {option.fetTax > 0 && (
+                  <Row label="Federal Excise Tax (7.5%)" value={formatCurrency(option.fetTax)} emphasis="muted" />
+                )}
+                <div className="mt-1 flex justify-between border-t border-border pt-3 text-base font-semibold">
+                  <span>Total</span>
+                  <span>{formatCurrency(option.total)}</span>
+                </div>
+                {option.depositAmount !== null && (
+                  <Row
+                    label={`Payment for Flight (${Math.round(operator.depositPercent * 100)}%)`}
+                    value={formatCurrency(option.depositAmount ?? 0)}
+                    emphasis="muted"
+                  />
+                )}
               </div>
-              {option.fetTax > 0 && (
-                <Row label="Federal Excise Tax (7.5%)" value={formatCurrency(option.fetTax)} emphasis="muted" />
-              )}
-              <div className="mt-1 flex justify-between border-t border-border pt-3 text-base font-semibold">
-                <span>Total</span>
-                <span>{formatCurrency(option.total)}</span>
-              </div>
-              {option.depositAmount !== null && (
-                <Row
-                  label={`Payment for Flight (${Math.round(operator.depositPercent * 100)}%)`}
-                  value={formatCurrency(option.depositAmount ?? 0)}
-                  emphasis="muted"
-                />
-              )}
-            </div>
-          </section>
+            </section>
+          )}
 
           {termsText && !pendingDecision && quote.status !== "pending_confirmation" && !isConfirmed && (
             <section className="mt-7">

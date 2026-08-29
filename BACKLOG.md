@@ -3130,3 +3130,7 @@ like a quote (terms, raw status) and start reading like an itinerary
   pulls `trip.passengers`/`trip.crewAssignments` (Quote already had a
   `trip` back-relation); shown as name pills, same style as amenity
   tags, once `isConfirmed` and there's anyone to list.
+- ~~**Pricing hidden too — fixed**~~: follow-up ("oh and remove the
+  pricing from it as well i forgot") — the whole Pricing section
+  (line items, tax, total, deposit) now sits behind the same
+  `!isConfirmed` check as Charter Terms.
