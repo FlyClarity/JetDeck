@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { sendEmail } from "@/lib/email";
 import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
@@ -146,6 +147,41 @@ async function addPassengerOps(tripId: string) {
   });
 
   revalidatePath(`/ops/trips/${tripId}`);
+}
+
+// On-demand, resendable any time — unlike the one-time automatic booking
+// confirmation (sendBookingConfirmationEmail), this is how ops gets a
+// fresh, polished copy of the itinerary into the client's inbox whenever
+// it changes (FBOs added, times adjusted) or the original email never
+// reached them. Links to the same /q/[token] page the client already
+// uses, which always reflects the trip's current state.
+async function sendItinerary(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+  const { trip, operator } = scoped;
+
+  const requestorEmail = trip.quote.tripRequest?.requestorEmail;
+  if (!requestorEmail) return;
+
+  const requestorName = trip.quote.tripRequest?.requestorName ?? "there";
+  const legs = revenueLegsOf(trip.quote.selectedOption?.itinerary);
+  const routeText = legs.length
+    ? `${legs[0].depAirport} → ${legs[legs.length - 1].arrAirport}`
+    : "";
+  const appUrl = await getAppUrl();
+  const quoteLink = `${appUrl}/q/${trip.quote.token}`;
+
+  await sendEmail({
+    to: requestorEmail,
+    subject: `Your Itinerary — ${trip.tripNumber}${routeText ? ` (${routeText})` : ""}`,
+    html: `<p>Hi ${requestorName},</p><p>Here's your itinerary for ${trip.tripNumber}: <a href="${quoteLink}">View Your Itinerary</a></p><p>— ${operator.name}</p>`,
+    replyTo: operator.replyToEmail ?? undefined,
+    bcc: operator.replyToEmail ?? undefined,
+    from: operator.fromEmail,
+    fromName: operator.name,
+  });
 }
 
 async function assignCrew(tripId: string, formData: FormData) {
@@ -311,7 +347,16 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
       )}
 
       <div className="mt-6 rounded-md border border-border p-4">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>
+          {trip.quote.tripRequest?.requestorEmail && (
+            <form action={sendItinerary.bind(null, trip.id)}>
+              <Button type="submit" size="sm" variant="outline">
+                Send Itinerary to Client
+              </Button>
+            </form>
+          )}
+        </div>
 
         <form action={updateLegFbosWithId} className="mt-3 flex flex-col gap-4">
           {legsIndexed.map(({ leg, index }) => (

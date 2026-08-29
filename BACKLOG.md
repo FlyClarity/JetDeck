@@ -2974,3 +2974,30 @@ detail, no FBO, no notes.
   `SectionHeading` labels). A client filling in their passenger info
   now sees the same trip detail and polish they saw on the quote
   itself, not a bare route string.
+
+## Ops can send a polished itinerary email on demand
+
+User wanted to replace a manual PDF-itinerary workflow with something
+sent straight from JetDeck, "not in PDF format but the format like
+what we send the quote in" — a real ask for two separate things: the
+client-facing page needed the FBO/notes detail that had only existed
+on the manifest page, and ops needed a button to actually send it
+whenever they want (not just the one automatic email at booking time).
+
+- ~~**`/q/[token]` gains FBO detail and full notes — fixed**~~: the
+  Itinerary section's leg cards now show departure/arrival FBO name +
+  clickable maps address (same `mapsSearchUrl()` pattern as the
+  manifest and ops pages) when set, and the Notes section merges in
+  the original intake `specialRequests` alongside `clientNotes` — this
+  page is what both the booking-confirmation email and the new send
+  button link to, so it needed the same detail already added to the
+  passenger manifest page.
+- ~~**"Send Itinerary to Client" button on the ops trip page —
+  shipped**~~: a new `sendItinerary` action next to the Itinerary
+  section header emails the trip's on-file requestor address a link to
+  `/q/[token]` (bcc'd to the operator's reply-to address, same as every
+  other client-facing send). Unlike `sendBookingConfirmationEmail`
+  (fires once, guarded against re-sending), this is deliberately
+  resendable any time — exactly what's needed after FBOs get filled in
+  post-booking, or when a client says the original email never
+  arrived.

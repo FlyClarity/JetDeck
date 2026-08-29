@@ -7,7 +7,7 @@ import { formatCurrency, allocateProportionally } from "@/lib/quote";
 import { paxCount } from "@/lib/queue";
 import { getAppUrl } from "@/lib/url";
 import { findBookingConflict, finalizeBooking, startAchPayment } from "@/lib/booking-server";
-import { revenueLegsOf, legDate, legTimeLabel } from "@/lib/itinerary";
+import { revenueLegsOf, legDate, legTimeLabel, mapsSearchUrl } from "@/lib/itinerary";
 import { amenityLabel } from "@/lib/aircraft";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -463,25 +463,44 @@ export default async function ClientQuotePage({
             <SectionHeading>Itinerary</SectionHeading>
             <div className="mt-3 flex flex-col gap-2">
               {legs.map((leg, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between rounded-xl border border-border/70 p-4 text-sm"
-                >
-                  <span>
+                <div key={i} className="rounded-xl border border-border/70 p-4 text-sm">
+                  <div className="flex items-center justify-between">
                     <span className="font-medium">
                       {leg.depAirport} → {leg.arrAirport}
                     </span>
-                    {(cityStateByIcao[leg.depAirport ?? ""] || cityStateByIcao[leg.arrAirport ?? ""]) && (
-                      <span className="block text-xs text-muted-foreground">
-                        {cityStateByIcao[leg.depAirport ?? ""] ?? "—"} →{" "}
-                        {cityStateByIcao[leg.arrAirport ?? ""] ?? "—"}
-                      </span>
-                    )}
-                  </span>
-                  <span className="text-right text-muted-foreground">
-                    <span className="block">{legDate(leg)}</span>
-                    <span className="block text-xs">{legTimeLabel(leg)}</span>
-                  </span>
+                    <span className="text-right text-muted-foreground">
+                      <span className="block">{legDate(leg)}</span>
+                      <span className="block text-xs">{legTimeLabel(leg)}</span>
+                    </span>
+                  </div>
+                  {(cityStateByIcao[leg.depAirport ?? ""] || cityStateByIcao[leg.arrAirport ?? ""]) && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {cityStateByIcao[leg.depAirport ?? ""] ?? "—"} →{" "}
+                      {cityStateByIcao[leg.arrAirport ?? ""] ?? "—"}
+                    </p>
+                  )}
+                  {(leg.depFboName || leg.depFboAddress) && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Depart from: {leg.depFboName}
+                      {leg.depFboName && leg.depFboAddress && " — "}
+                      {leg.depFboAddress && (
+                        <a href={mapsSearchUrl(leg.depFboAddress)} className="underline underline-offset-4">
+                          {leg.depFboAddress}
+                        </a>
+                      )}
+                    </p>
+                  )}
+                  {(leg.arrFboName || leg.arrFboAddress) && (
+                    <p className="text-xs text-muted-foreground">
+                      Arrive at: {leg.arrFboName}
+                      {leg.arrFboName && leg.arrFboAddress && " — "}
+                      {leg.arrFboAddress && (
+                        <a href={mapsSearchUrl(leg.arrFboAddress)} className="underline underline-offset-4">
+                          {leg.arrFboAddress}
+                        </a>
+                      )}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
@@ -531,12 +550,24 @@ export default async function ClientQuotePage({
             );
           })()}
 
-          {option.clientNotes && (
-            <section className="mt-7">
-              <SectionHeading>Notes</SectionHeading>
-              <p className="mt-3 text-sm whitespace-pre-wrap">{option.clientNotes}</p>
-            </section>
-          )}
+          {(() => {
+            const notes = [option.clientNotes, tripRequest?.specialRequests].filter(
+              (n): n is string => Boolean(n)
+            );
+            if (notes.length === 0) return null;
+            return (
+              <section className="mt-7">
+                <SectionHeading>Notes</SectionHeading>
+                <div className="mt-3 flex flex-col gap-1.5 text-sm">
+                  {notes.map((note, i) => (
+                    <p key={i} className="whitespace-pre-wrap">
+                      {note}
+                    </p>
+                  ))}
+                </div>
+              </section>
+            );
+          })()}
 
           <section className="mt-7">
             <SectionHeading>Pricing</SectionHeading>
