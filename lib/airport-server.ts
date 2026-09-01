@@ -1,8 +1,8 @@
 "use server";
 
-import tzLookup from "tz-lookup";
 import { prisma } from "@/lib/prisma";
 import { getTenantContext } from "@/lib/auth";
+import { resolveAirportTimezone } from "@/lib/geo";
 
 export type AirportOption = {
   icao: string;
@@ -12,20 +12,6 @@ export type AirportOption = {
   lon: number;
   timezone: string | null;
 };
-
-// The Airport table has a timezone column, but it's never been backfilled
-// (the OurAirports import didn't include it) — compute it on the fly from
-// lat/lon instead of blocking on a migration. Only ever called for the
-// handful of airports resolved per search/quote, so the lookup cost is
-// negligible.
-function resolveTimezone(stored: string | null, lat: number, lon: number): string | null {
-  if (stored) return stored;
-  try {
-    return tzLookup(lat, lon);
-  } catch {
-    return null;
-  }
-}
 
 export async function searchAirports(query: string): Promise<AirportOption[]> {
   const { userId } = await getTenantContext();
@@ -52,7 +38,7 @@ export async function searchAirports(query: string): Promise<AirportOption[]> {
     name: a.name,
     lat: a.lat,
     lon: a.lon,
-    timezone: resolveTimezone(a.timezone, a.lat, a.lon),
+    timezone: resolveAirportTimezone(a.timezone, a.lat, a.lon),
   }));
 }
 
@@ -77,7 +63,7 @@ export async function getAirportsByIcao(codes: string[]): Promise<AirportOption[
     name: a.name,
     lat: a.lat,
     lon: a.lon,
-    timezone: resolveTimezone(a.timezone, a.lat, a.lon),
+    timezone: resolveAirportTimezone(a.timezone, a.lat, a.lon),
   }));
 }
 

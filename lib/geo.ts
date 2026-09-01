@@ -1,4 +1,26 @@
+import tzLookup from "tz-lookup";
+
 const EARTH_RADIUS_NM = 3440.065;
+
+// Airport.timezone has never actually been backfilled (the OurAirports
+// import didn't include it) — every row's stored value is null. Anywhere
+// that needs a real IANA zone for time math has to fall back to computing
+// it from lat/lon instead of trusting the column, or it silently gets
+// "same zone" behavior for every cross-country route. Kept auth-free (no
+// "use server"/tenant context) so it's usable from public client-facing
+// pages, not just authenticated ops code.
+export function resolveAirportTimezone(
+  stored: string | null | undefined,
+  lat: number,
+  lon: number
+): string | null {
+  if (stored) return stored;
+  try {
+    return tzLookup(lat, lon);
+  } catch {
+    return null;
+  }
+}
 
 export function greatCircleDistanceNm(
   lat1: number,

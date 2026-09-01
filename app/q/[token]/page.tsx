@@ -8,7 +8,7 @@ import { paxCount } from "@/lib/queue";
 import { getAppUrl } from "@/lib/url";
 import { findBookingConflict, finalizeBooking, startAchPayment } from "@/lib/booking-server";
 import { revenueLegsOf, legDate, legDateIso, flightTimeLabel } from "@/lib/itinerary";
-import { greatCircleDistanceNm } from "@/lib/geo";
+import { greatCircleDistanceNm, resolveAirportTimezone } from "@/lib/geo";
 import { to12Hour, tzAbbreviation, tzChangeLabel } from "@/lib/time";
 import { amenityLabel } from "@/lib/aircraft";
 import { crewRoleLabel } from "@/lib/crew";
@@ -300,7 +300,13 @@ export default async function ClientQuotePage({
   const legAirports = await prisma.airport.findMany({
     where: { icao: { in: legAirportCodes } },
   });
-  const airportByIcao = Object.fromEntries(legAirports.map((a) => [a.icao, a]));
+  // Airport.timezone is never actually populated in the DB — resolve it
+  // from lat/lon (see resolveAirportTimezone) rather than trusting the
+  // stored column, or the time-zone-change/abbreviation display below
+  // silently comes up empty for every route.
+  const airportByIcao = Object.fromEntries(
+    legAirports.map((a) => [a.icao, { ...a, timezone: resolveAirportTimezone(a.timezone, a.lat, a.lon) }])
+  );
 
   // "New Castle County (ILG)" — the airport's full name reads fine here
   // since it's stacked on its own line per Departs/Arrives column, not

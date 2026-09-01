@@ -5,7 +5,7 @@ import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { revenueLegsOf, revenueLegsWithIndex, mapsSearchUrl, flightTimeLabel, type StoredLeg } from "@/lib/itinerary";
-import { greatCircleDistanceNm, estimateFlightHours } from "@/lib/geo";
+import { greatCircleDistanceNm, estimateFlightHours, resolveAirportTimezone } from "@/lib/geo";
 import { addHoursAcrossTimezones, to12Hour, tzAbbreviation } from "@/lib/time";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
@@ -106,7 +106,13 @@ async function updateLegDetails(tripId: string, formData: FormData) {
     if (e?.arrAirport) codes.add(e.arrAirport);
   }
   const airportRows = codes.size ? await prisma.airport.findMany({ where: { icao: { in: [...codes] } } }) : [];
-  const airportByCode = Object.fromEntries(airportRows.map((a) => [a.icao, a]));
+  // Airport.timezone is never actually populated in the DB (see
+  // resolveAirportTimezone) — resolve it from lat/lon here rather than
+  // trusting the stored column, or every cross-timezone route silently
+  // falls back to naive same-zone arrival math.
+  const airportByCode = Object.fromEntries(
+    airportRows.map((a) => [a.icao, { ...a, timezone: resolveAirportTimezone(a.timezone, a.lat, a.lon) }])
+  );
 
   // Only ever recomputable for an owned-fleet aircraft — BrokeredAircraft
   // has no cruise-speed performance data, so a brokered trip keeps
@@ -385,7 +391,9 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
     ...new Set(legs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))),
   ];
   const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
-  const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
+  const airportByIcao = Object.fromEntries(
+    legAirportRows.map((a) => [a.icao, { ...a, timezone: resolveAirportTimezone(a.timezone, a.lat, a.lon) }])
+  );
   // "KILG" means nothing to most people — shown as a caption under each
   // airport input so ops can confirm it's the right one without needing to
   // already know the ICAO code by heart.

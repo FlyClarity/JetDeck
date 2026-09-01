@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { put } from "@vercel/blob";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, revenueLegsWithIndex, legDate, legDateIso, flightTimeLabel } from "@/lib/itinerary";
-import { greatCircleDistanceNm } from "@/lib/geo";
+import { greatCircleDistanceNm, resolveAirportTimezone } from "@/lib/geo";
 import { to12Hour, tzAbbreviation, tzChangeLabel } from "@/lib/time";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -341,7 +341,13 @@ export default async function ManifestPage({
   const legAirportRows = legAirportCodes.length
     ? await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } })
     : [];
-  const airportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
+  // Airport.timezone is never actually populated in the DB — resolve it
+  // from lat/lon (see resolveAirportTimezone) rather than trusting the
+  // stored column, or the time-zone-change/abbreviation display below
+  // silently comes up empty for every route.
+  const airportByIcao = Object.fromEntries(
+    legAirportRows.map((a) => [a.icao, { ...a, timezone: resolveAirportTimezone(a.timezone, a.lat, a.lon) }])
+  );
 
   // "New Castle County (ILG)" — reads fine stacked on its own line per
   // Departs/Arrives column, unlike the single shared route line an earlier

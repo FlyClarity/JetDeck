@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDateIso, findConflictingBooking } from "@/lib/itinerary";
 import { computeDutyPeriod, checkDutyCompliance, dutyComplianceIssueLabel } from "@/lib/duty-time";
 import { PILOT_ROLES, crewQualificationStatus, QUALIFICATION_STATUS_LABELS } from "@/lib/crew";
+import { resolveAirportTimezone } from "@/lib/geo";
 
 export type OpsReviewCheck = {
   label: string;
@@ -139,7 +140,9 @@ export async function evaluateOpsReview(tripId: string, operatorId: string): Pro
     }
   }
   const airportRows = allCodes.size ? await prisma.airport.findMany({ where: { icao: { in: [...allCodes] } } }) : [];
-  const tzByIcao = Object.fromEntries(airportRows.map((a) => [a.icao, a.timezone]));
+  const tzByIcao = Object.fromEntries(
+    airportRows.map((a) => [a.icao, resolveAirportTimezone(a.timezone, a.lat, a.lon)])
+  );
 
   const thisDuty = computeDutyPeriod(itinerary, tzByIcao);
   const dutyNotes: string[] = [];

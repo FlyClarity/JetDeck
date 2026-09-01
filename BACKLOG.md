@@ -3293,3 +3293,35 @@ check read those as if they were still accurate.
   `tzAbbreviation`, same helpers the client pages use) plus a flight-
   time caption, so what's shown always matches what the itinerary
   actually has stored.
+
+## Real bug: timezone-aware time math was silently a no-op everywhere except quoting
+
+User reported the ops itinerary editor's arrival time still wasn't
+shifting across time zones despite the previous round porting over
+the Quote Builder's exact logic. Root cause was much bigger than the
+one page — `Airport.timezone` has **never actually been populated** in
+the database (the OurAirports import never included it); the only
+place that ever worked was `lib/airport-server.ts`'s
+`getAirportsByIcao`/`searchAirports`, which already had a fallback
+(`tz-lookup` on lat/lon) precisely because of this — but every other
+place that needed timezone data queried `Airport` directly and used
+the (always-null) stored column, silently getting "same zone" naive
+math with no error.
+
+- ~~**`resolveAirportTimezone` extracted to `lib/geo.ts` — fixed**~~:
+  the same lat/lon fallback `lib/airport-server.ts` already had,
+  pulled out as a plain, auth-free function (no `"use server"`/tenant
+  context) so it's usable from public client-facing pages too, not
+  just authenticated ops code. `airport-server.ts` now delegates to
+  it instead of keeping its own copy.
+- ~~**Every direct `Airport` query that does time math now resolves
+  through it — fixed**~~: `app/(ops)/ops/trips/[id]/page.tsx`
+  (`updateLegDetails`'s recompute, and the Arrival Time display),
+  `lib/ops-review.ts` (the duty-time engine's `tzByIcao` — this one
+  matters most: `computeDutyPeriod` was silently using naive UTC-as-
+  local-time math for every duty period, which could have produced
+  wrong compliance results for any cross-timezone trip), `/q/[token]`
+  and `/manifest/[token]` (the "time zone change" line and per-
+  endpoint zone abbreviation on the itinerary cards, which had been
+  silently coming up empty this whole time rather than visibly wrong
+  — no error, just nothing shown).
