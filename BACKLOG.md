@@ -3325,3 +3325,20 @@ math with no error.
   endpoint zone abbreviation on the itinerary cards, which had been
   silently coming up empty this whole time rather than visibly wrong
   — no error, just nothing shown).
+
+## Flight time in the ops itinerary editor: pass-through, not auto-computed
+
+Follow-up correction: the previous round's flight-time recompute
+(distance/cruise-speed based) was the wrong direction — user wants it
+to just carry over from whatever the quote used and be directly
+editable, same as the Quote Builder's own flight-time field.
+
+- ~~**`flightHours` is now a real editable input, not a derived value
+  — fixed**~~: `updateLegDetails` reads a new `flightHours-{index}`
+  form field directly (falling back to the leg's existing stored
+  value if left blank/invalid) instead of recalculating it from
+  `estimateFlightHours`/`greatCircleDistanceNm` whenever an airport
+  changes. Arrival time still auto-derives from departure time +
+  flight time via `addHoursAcrossTimezones` (timezone-aware) — that
+  part of the previous round stands; only where flightHours itself
+  comes from changed.
