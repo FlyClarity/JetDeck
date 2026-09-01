@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
-import { crewRoleLabel } from "@/lib/crew";
+import { crewRoleLabel, crewQualificationStatus, QUALIFICATION_STATUS_LABELS } from "@/lib/crew";
 import { Button } from "@/components/ui/button";
 
 export default async function CrewPage() {
@@ -40,11 +40,14 @@ export default async function CrewPage() {
                 <th className="py-2 pr-4 font-medium">Role</th>
                 <th className="py-2 pr-4 font-medium">Email</th>
                 <th className="py-2 pr-4 font-medium">Phone</th>
+                <th className="py-2 pr-4 font-medium">Qualified</th>
                 <th className="py-2 pr-4 font-medium">Status</th>
               </tr>
             </thead>
             <tbody>
-              {crew.map((c) => (
+              {crew.map((c) => {
+                const qualStatus = crewQualificationStatus(c);
+                return (
                 <tr key={c.id} className="border-b border-border last:border-0">
                   <td className="py-3 pr-4">
                     <Link href={`/ops/crew/${c.id}`} className="font-medium hover:underline hover:underline-offset-4">
@@ -55,6 +58,17 @@ export default async function CrewPage() {
                   <td className="py-3 pr-4 text-muted-foreground">{c.email ?? "—"}</td>
                   <td className="py-3 pr-4 text-muted-foreground">{c.phone ?? "—"}</td>
                   <td className="py-3 pr-4">
+                    {qualStatus === "n/a" ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : qualStatus === "qualified" ? (
+                      <span className="text-xs text-muted-foreground">{QUALIFICATION_STATUS_LABELS[qualStatus]}</span>
+                    ) : (
+                      <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+                        {QUALIFICATION_STATUS_LABELS[qualStatus]}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-3 pr-4">
                     {c.active ? (
                       <span className="text-xs text-muted-foreground">Active</span>
                     ) : (
@@ -64,7 +78,8 @@ export default async function CrewPage() {
                     )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

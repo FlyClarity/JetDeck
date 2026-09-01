@@ -28,6 +28,9 @@ async function updateCrewMember(id: string, formData: FormData) {
   const existing = await prisma.crewMember.findFirst({ where: { id, operatorId } });
   if (!existing) return;
 
+  const medicalExpiryRaw = String(formData.get("medicalExpiry") ?? "");
+  const trainingExpiryRaw = String(formData.get("trainingExpiry") ?? "");
+
   await prisma.crewMember.update({
     where: { id },
     data: {
@@ -36,6 +39,9 @@ async function updateCrewMember(id: string, formData: FormData) {
       email: formData.get("email") ? String(formData.get("email")) : null,
       phone: formData.get("phone") ? String(formData.get("phone")) : null,
       active: formData.get("active") === "on",
+      qualified: formData.get("qualified") === "on",
+      medicalExpiry: medicalExpiryRaw ? new Date(`${medicalExpiryRaw}T00:00:00`) : null,
+      trainingExpiry: trainingExpiryRaw ? new Date(`${trainingExpiryRaw}T00:00:00`) : null,
     },
   });
 
@@ -136,6 +142,50 @@ export default async function CrewMemberPage({
           <Label htmlFor="active" className="font-normal">
             Active (available to assign to trips)
           </Label>
+        </div>
+
+        <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+          <div>
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Qualification (Chief Pilot)
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Only meaningful for Captain/First Officer — flight attendants and other crew aren&apos;t
+              subject to flight/duty rules and aren&apos;t checked by Ops Review.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              id="qualified"
+              name="qualified"
+              type="checkbox"
+              defaultChecked={crew.qualified}
+              className="size-4 rounded border-input"
+            />
+            <Label htmlFor="qualified" className="font-normal">
+              Qualified to fly (currency, training, and company requirements reviewed)
+            </Label>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="medicalExpiry">Medical expires</Label>
+              <Input
+                id="medicalExpiry"
+                name="medicalExpiry"
+                type="date"
+                defaultValue={crew.medicalExpiry ? crew.medicalExpiry.toISOString().slice(0, 10) : ""}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="trainingExpiry">Training due</Label>
+              <Input
+                id="trainingExpiry"
+                name="trainingExpiry"
+                type="date"
+                defaultValue={crew.trainingExpiry ? crew.trainingExpiry.toISOString().slice(0, 10) : ""}
+              />
+            </div>
+          </div>
         </div>
 
         <Button type="submit" className="self-start">

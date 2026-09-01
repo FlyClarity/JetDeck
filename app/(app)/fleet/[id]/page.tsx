@@ -66,6 +66,47 @@ async function updateAircraft(id: string, formData: FormData) {
   redirect("/fleet");
 }
 
+// Maintenance/downtime windows — read by the Ops Review checklist's
+// "aircraft available" check alongside the existing booking-conflict
+// check, which only ever knew about other trips, never actual
+// maintenance. Dated as a range so a future window can be entered ahead
+// of time ("down next Tuesday for a 100-hour") and checked against a
+// specific trip's dates.
+async function addDowntime(aircraftId: string, formData: FormData) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+  const aircraft = await prisma.aircraft.findFirst({ where: { id: aircraftId, operatorId } });
+  if (!aircraft) return;
+
+  const startDate = String(formData.get("startDate") ?? "");
+  const endDate = String(formData.get("endDate") ?? "");
+  if (!startDate || !endDate) return;
+
+  await prisma.aircraftDowntime.create({
+    data: {
+      operatorId,
+      aircraftId,
+      startDate,
+      endDate,
+      reason: String(formData.get("reason") ?? "").trim() || null,
+    },
+  });
+
+  revalidatePath(`/fleet/${aircraftId}`);
+}
+
+async function removeDowntime(aircraftId: string, downtimeId: string) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+
+  await prisma.aircraftDowntime.deleteMany({ where: { id: downtimeId, aircraftId, operatorId } });
+  revalidatePath(`/fleet/${aircraftId}`);
+}
+
 async function deleteAircraft(id: string) {
   "use server";
 
@@ -190,6 +231,7 @@ export default async function EditAircraftPage({
 
   const aircraft = await prisma.aircraft.findFirst({
     where: { id, operatorId: operator.id },
+    include: { downtimes: { orderBy: { startDate: "asc" } } },
   });
 
   if (!aircraft) {
@@ -201,6 +243,7 @@ export default async function EditAircraftPage({
   const uploadPhotosWithId = uploadPhotos.bind(null, aircraft.id);
   const removePhotoWithId = removePhoto.bind(null, aircraft.id);
   const setCoverPhotoWithId = setCoverPhoto.bind(null, aircraft.id);
+  const addDowntimeWithId = addDowntime.bind(null, aircraft.id);
 
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-10">
@@ -413,6 +456,52 @@ export default async function EditAircraftPage({
           <Button type="submit">Save Changes</Button>
         </div>
       </form>
+
+      <div className="mt-8 flex flex-col gap-3 rounded-md border border-border p-4">
+        <div>
+          <p className="text-sm font-medium">Maintenance / Downtime</p>
+          <p className="text-xs text-muted-foreground">
+            Windows when this aircraft is unavailable — checked by the Ops Review checklist
+            alongside other trip conflicts.
+          </p>
+        </div>
+
+        {aircraft.downtimes.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {aircraft.downtimes.map((d) => (
+              <div key={d.id} className="flex items-center justify-between gap-3 rounded-md border border-border p-3 text-sm">
+                <span>
+                  {d.startDate} – {d.endDate}
+                  {d.reason && <span className="text-muted-foreground"> — {d.reason}</span>}
+                </span>
+                <form action={removeDowntime.bind(null, aircraft.id, d.id)}>
+                  <Button type="submit" size="sm" variant="ghost">
+                    Remove
+                  </Button>
+                </form>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <form action={addDowntimeWithId} className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="startDate">From</Label>
+            <Input id="startDate" name="startDate" type="date" required className="h-9" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="endDate">Through</Label>
+            <Input id="endDate" name="endDate" type="date" required className="h-9" />
+          </div>
+          <div className="flex flex-1 flex-col gap-1.5">
+            <Label htmlFor="reason">Reason</Label>
+            <Input id="reason" name="reason" placeholder="e.g. 100-hour inspection" className="h-9" />
+          </div>
+          <Button type="submit" size="sm" variant="outline">
+            Add
+          </Button>
+        </form>
+      </div>
 
       <form action={deleteWithId} className="mt-4">
         <Button type="submit" variant="outline">

@@ -3206,3 +3206,67 @@ operator:**
 - Whether §135.273 (flight attendants) matters — `CrewMember.role`
   already has a `flight_attendant` option; need to know if it's
   actually used before deciding whether to build FA duty rules.
+  **Resolved**: flight attendants are listed under Crew on the
+  manifest, but are operationally "no different than a passenger" —
+  no duty-time or qualification rules apply to them. §135.273 skipped
+  entirely; `PILOT_ROLES` (captain/first_officer only) gates every
+  qualification and duty-time check.
+- **Resolved**: don't build a Chief Pilot permission tier yet — the
+  new qualification fields are editable by anyone who can already
+  edit Crew today (`/ops/crew/[id]`), same access as always.
+
+## Ops Review checklist — automated aircraft/crew/duty-time gate (Round 1)
+
+First buildable slice of the Ops Build Brief v2 flow above: the
+automated Ops Review checklist itself, gating a new `ops_approved`
+stage. Ops Approved/Released (FBO-gated manifest release, crew app,
+payment-gated release) are follow-up rounds, not built yet.
+
+- ~~**`CrewMember` qualification fields — shipped**~~: `qualified`
+  (Chief Pilot's manual sign-off — deliberately not derived purely
+  from dates, per the operator's own framing: "the Chief Pilot is
+  responsible for marking crew as qualified"), `medicalExpiry`,
+  `trainingExpiry` — editable on `/ops/crew/[id]`, surfaced as a
+  Qualified column on `/ops/crew`. `PILOT_ROLES`/`crewQualificationStatus`/
+  `QUALIFICATION_STATUS_LABELS` added to `lib/crew.ts` — an expired
+  date overrides a stale "qualified" checkbox so a lapsed certificate
+  can't silently pass.
+- ~~**`AircraftDowntime` model — shipped**~~: dated maintenance windows
+  (not a status flag) so a future window can be entered ahead of time
+  and checked against a specific trip's dates, not just "is it down
+  right now." Small add/remove UI on `/fleet/[id]`.
+- ~~**`lib/duty-time.ts`: §135.263 + §135.267 compliance engine —
+  shipped**~~: `computeDutyPeriod` (report 90 min before first
+  scheduled departure, released 60 min after last scheduled arrival —
+  exact numbers given directly, not a guess; arrival derived from
+  departure + flight hours rather than trusting a stored `arrTime`
+  with no day-offset attached) and `checkDutyCompliance` (24-hour
+  flight-time cap — 8hr solo/10hr two-pilot —, the 14-hour duty-period
+  limit, and >=10 hours rest immediately before/after against a
+  pilot's other trip assignments). Deliberately scoped to what a
+  single trip can verify from JetDeck's own data — the quarterly/
+  annual flight-hour caps and "13 rest periods of >=24 hours per
+  quarter" need a full rolling history (including any commercial
+  flying outside JetDeck, which this system can't see) and are
+  explicitly deferred to the future crew compliance dashboard, not
+  built as a gate here.
+- ~~**`lib/ops-review.ts` + checklist panel + "Approve for Ops" —
+  shipped**~~: `evaluateOpsReview()` runs all three checks (aircraft
+  availability — booking conflicts via the existing
+  `findConflictingBooking` plus the new downtime windows; crew
+  qualification; duty-time compliance for every assigned pilot) and
+  is called both to render the checklist and, again, server-side
+  inside the `approveForOps` action before it actually flips the
+  trip's status — so the button being enabled and what the action
+  actually enforces can never drift apart. Brokered-aircraft trips
+  skip the availability check with a note rather than failing it
+  outright — JetDeck has no visibility into a third-party operator's
+  maintenance schedule to check in the first place.
+- ~~**New `ops_approved` stage, inserted after `crew_assigned` —
+  shipped**~~: `TRIP_STAGES` in `lib/trip.ts`. The Ops Board's generic
+  "Next →" arrow (previously the only thing that moved a trip through
+  any stage) now explicitly refuses to make this one specific jump —
+  it's disabled with an explanatory tooltip whenever the next stage
+  would be `ops_approved`, forcing that transition through the gated
+  action on the trip detail page instead. Every other stage
+  transition is untouched.

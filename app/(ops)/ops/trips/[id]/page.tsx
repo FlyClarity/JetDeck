@@ -8,6 +8,7 @@ import { revenueLegsOf, revenueLegsWithIndex, mapsSearchUrl, type StoredLeg } fr
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { createManifestForTrip } from "@/lib/manifest";
+import { evaluateOpsReview } from "@/lib/ops-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
@@ -300,6 +301,25 @@ async function unassignCrew(tripId: string, assignmentId: string) {
   revalidatePath(`/ops/trips/${tripId}`);
 }
 
+// Re-verifies the Ops Review checklist server-side before actually
+// advancing the stage — never trusts that the button was disabled
+// correctly client-side, since this is the one transition in the trip
+// lifecycle that's actually gated (see the Board's moveTripStage, which
+// deliberately refuses to make this same jump).
+async function approveForOps(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+  if (!["ops_review", "crew_assigned"].includes(scoped.trip.status)) return;
+
+  const result = await evaluateOpsReview(tripId, scoped.operator.id);
+  if (!result.passed) return;
+
+  await prisma.trip.update({ where: { id: tripId }, data: { status: "ops_approved" } });
+  revalidatePath(`/ops/trips/${tripId}`);
+}
+
 export default async function TripDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const scoped = await getScopedTrip(id);
@@ -371,6 +391,14 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
   const paid = isTripPaid(trip.quote);
   const stageIndex = TRIP_STAGES.findIndex((s) => s === trip.status);
 
+  // The checklist only matters before the trip has actually been approved
+  // — once past that gate, it stays approved (nothing here re-litigates
+  // an approval if, say, a crew member's medical lapses afterward; that's
+  // the future crew compliance dashboard's job, not this one-time gate).
+  const showOpsReview = ["confirmed", "ops_review", "crew_assigned"].includes(trip.status);
+  const opsReview = showOpsReview ? await evaluateOpsReview(trip.id, scoped.operator.id) : null;
+  const approveWithId = approveForOps.bind(null, trip.id);
+
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
       <div className="flex items-center justify-between gap-4">
@@ -430,6 +458,48 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
               </div>
             );
           })}
+        </div>
+      )}
+
+      {opsReview && (
+        <div className="mt-6 rounded-md border border-border p-4">
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Ops Review Checklist
+            </h2>
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-medium",
+                opsReview.passed ? "bg-accent/10 text-accent" : "bg-destructive/10 text-destructive"
+              )}
+            >
+              {opsReview.passed ? "Ops Approved — ready" : "Needs Further Review"}
+            </span>
+          </div>
+
+          <div className="mt-3 flex flex-col gap-3">
+            {opsReview.checks.map((check) => (
+              <div key={check.label} className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className={check.passed ? "text-accent" : "text-destructive"}>
+                    {check.passed ? "✓" : "✗"}
+                  </span>
+                  <span className="font-medium">{check.label}</span>
+                </div>
+                {check.notes.map((note, i) => (
+                  <p key={i} className="pl-6 text-xs text-muted-foreground">
+                    {note}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          <form action={approveWithId} className="mt-4">
+            <Button type="submit" size="sm" disabled={!opsReview.passed}>
+              Approve for Ops
+            </Button>
+          </form>
         </div>
       )}
 

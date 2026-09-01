@@ -7,6 +7,7 @@ export const TRIP_STAGES = [
   "confirmed",
   "ops_review",
   "crew_assigned",
+  "ops_approved",
   "pre_flight",
   "in_flight",
   "completed",
@@ -21,6 +22,7 @@ export const STATUS_SHORT_LABELS: Record<string, string> = {
   confirmed: "C",
   ops_review: "O",
   crew_assigned: "W", // creW — "C" already taken by Confirmed
+  ops_approved: "A",
   pre_flight: "P",
   in_flight: "I",
   completed: "D", // Done
@@ -31,6 +33,7 @@ export const STATUS_LABELS: Record<string, string> = {
   awaiting_payment: "Awaiting Payment", // legacy value, predates payment leaving the pipeline
   ops_review: "Ops Review",
   crew_assigned: "Crew Assigned",
+  ops_approved: "Ops Approved",
   pre_flight: "Pre-Flight",
   in_flight: "In Flight",
   completed: "Completed",

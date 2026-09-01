@@ -70,6 +70,7 @@ model Operator {
   preferredOperators PreferredOperator[]
   inboundEmails      InboundEmail[]
   crewMembers        CrewMember[]
+  aircraftDowntimes  AircraftDowntime[]
 }
 
 model Contact {
@@ -126,6 +127,28 @@ model Aircraft {
   amenities String[] @default([])
 
   quoteOptions QuoteOption[]
+  downtimes    AircraftDowntime[]
+}
+
+// A scheduled or ongoing maintenance window — the Ops Review checklist's
+// "aircraft available" check reads this alongside the existing booking-
+// conflict check (findConflictingBooking), which only ever knew about
+// other trips, never actual maintenance. Dated as a range (not a simple
+// Aircraft.status flag) so a future window can be entered in advance
+// ("down next Tuesday for a 100-hour") and checked against a specific
+// trip's dates, not just "is it down right now."
+model AircraftDowntime {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  aircraftId String
+  aircraft   Aircraft @relation(fields: [aircraftId], references: [id])
+
+  startDate String // ISO date (YYYY-MM-DD), same convention as leg dates
+  endDate   String // inclusive
+  reason    String?
+
+  createdAt DateTime @default(now())
 }
 
 // Reference data for flight-time/distance calculations. Empty until a real
@@ -521,6 +544,20 @@ model CrewMember {
   email String?
   phone String?
   active Boolean @default(true)
+
+  // Only meaningful for pilot roles (captain/first_officer) — a flight
+  // attendant or "other" crew member isn't subject to FAR 135 Subpart F
+  // flight/duty rules and isn't gated by the Ops Review checklist (per the
+  // operator: cabin attendants are "no different than a passenger" for
+  // compliance purposes). "qualified" is a deliberate manual sign-off by
+  // the Chief Pilot — not derived purely from the expiry dates below —
+  // since it's meant to capture their actual judgment (company-required
+  // training, overall currency), with the dates serving as an automatic
+  // safety net so an expired certificate still blocks Ops Review even if
+  // nobody remembered to uncheck this.
+  qualified      Boolean   @default(false)
+  medicalExpiry  DateTime?
+  trainingExpiry DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

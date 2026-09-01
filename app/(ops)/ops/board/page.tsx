@@ -29,6 +29,13 @@ async function moveTripStage(tripId: string, direction: "forward" | "backward") 
   const nextIdx = direction === "forward" ? idx + 1 : idx - 1;
   if (nextIdx < 0 || nextIdx >= TRIP_STAGES.length) return;
 
+  // "ops_approved" is the one transition this generic arrow can't make —
+  // it's gated behind the Ops Review checklist (aircraft availability,
+  // crew qualification, duty-time compliance) on the trip detail page's
+  // "Approve for Ops" action. Letting this button skip straight there
+  // would bypass every check that stage exists to enforce.
+  if (TRIP_STAGES[nextIdx] === "ops_approved") return;
+
   await prisma.trip.update({ where: { id: tripId }, data: { status: TRIP_STAGES[nextIdx] } });
   revalidatePath("/ops/board");
 }
@@ -111,7 +118,15 @@ export default async function OpsBoardPage() {
                             type="submit"
                             size="sm"
                             variant="ghost"
-                            disabled={stageIdx === TRIP_STAGES.length - 1}
+                            disabled={
+                              stageIdx === TRIP_STAGES.length - 1 ||
+                              TRIP_STAGES[stageIdx + 1] === "ops_approved"
+                            }
+                            title={
+                              TRIP_STAGES[stageIdx + 1] === "ops_approved"
+                                ? "Approve from the trip detail page once the Ops Review checklist passes"
+                                : undefined
+                            }
                           >
                             Next →
                           </Button>
