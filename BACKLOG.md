@@ -3134,3 +3134,75 @@ like a quote (terms, raw status) and start reading like an itinerary
   pricing from it as well i forgot") — the whole Pricing section
   (line items, tax, total, deposit) now sits behind the same
   `!isConfirmed` check as Charter Terms.
+
+## Ops Build Brief v2 — full post-booking flow (design discussion, not started)
+
+User course-corrected the ops build order: rather than the brief's
+original module list (Checklist, etc. in isolation), the real target
+is a full flight-management flow for everything after booking —
+Ops Review → Ops Approved → Ops Released — with an automated
+compliance checklist doing most of the work at Ops Review. Captured
+here before any of it is built, since it's a multi-round initiative:
+
+**The flow, as specified directly:**
+1. **Ops Review** (sales hands off, ops notified) — system
+   automatically checks: aircraft availability (not in maintenance,
+   no conflicting trip/hold), qualified crew available (flight
+   currency, training currency, company-required training — tracked
+   by the Chief Pilot) and assigned, aircraft performance/runway
+   (dropped per operator — dataset floor is 5,000', not worth
+   checking), and crew duty-day limits under FAR 135 Subpart F.
+   Outcome: "Ops Approved" or "Needs Further Review" with a reason.
+2. **Ops Approved** — FBO assigned for all segments; passenger
+   information collection becomes available to the client (today it
+   goes out immediately at booking — this is a real behavior change,
+   delaying it to this gate); passenger + crew manifests generated,
+   ops sends the client their itinerary; crew notified via "their
+   crew app" (doesn't exist yet — see below).
+3. **Ops Released** — once everything above plus payment is
+   confirmed, ops releases the trip to the crew (an FAA-significant
+   moment) — must be clearly visible to crew as released.
+
+**Duty-time rule (FAR 135 Subpart F), scoped directly by the
+operator:**
+- §135.263 (general, all ops) + §135.267 (unscheduled 1–2 pilot
+  crews) are what apply — this is on-demand charter, not scheduled
+  service, so §135.265 doesn't apply. §135.269 (3/4-pilot crews),
+  §135.271 (HEMES), and §135.273 (flight attendants) are skipped
+  unless the operator confirms they actually crew trips that way.
+- "Total flight time in all commercial flying" (500/qtr, 800/2 qtrs,
+  1,400/yr) — JetDeck only sees hours flown on JetDeck-booked trips.
+  Operator's answer: crew self-report any other commercial flying to
+  the Chief Pilot — so the system needs a Chief-Pilot-maintained
+  baseline/adjustment per crew member that JetDeck-tracked trip hours
+  accrue on top of, not an assumption that all flying goes through
+  JetDeck.
+- Duty period = first leg's scheduled departure **minus 90 minutes**
+  through last leg's scheduled arrival **plus 60 minutes** — exact
+  numbers given directly, not a guess.
+- The quarterly/annual hour caps and "13 rest periods of ≥24 hours
+  per quarter" need a full rolling duty-period history to mean
+  anything, not just the trip under review — proposed as a **crew
+  compliance dashboard** (continuous monitoring/flags) rather than a
+  hard gate on one trip's checklist. Operator confirmed this is the
+  right call and explicitly wants it built eventually — "that is
+  something to add to the backlog" — but not now. The per-trip checks
+  (24-hour flight time cap, required rest immediately before, the
+  14-hour duty period option) are a hard Ops Review gate; the
+  quarter/year/13-rest-periods rules feed the future dashboard
+  instead.
+
+**Not yet resolved / still needs a decision before building:**
+- Whether crew qualification fields and the "other commercial hours"
+  baseline are editable by anyone who can already edit Crew today, or
+  need a real Chief-Pilot-restricted permission — JetDeck has no
+  role system below "operator admin" yet, so a proper Chief Pilot
+  role is its own small project.
+- The "crew app" mentioned in Ops Approved/Released doesn't exist —
+  crew have no login at all today. Whether to substitute an email
+  notification for now (same pattern as the print-manifest standing
+  in for real PDF generation) or treat the crew app as a prerequisite
+  hasn't been decided.
+- Whether §135.273 (flight attendants) matters — `CrewMember.role`
+  already has a `flight_attendant` option; need to know if it's
+  actually used before deciding whether to build FA duty rules.
