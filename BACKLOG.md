@@ -3381,3 +3381,39 @@ throughout. Fixed to match exactly: the field now displays
 `leg.flightHours.toFixed(1)` instead of the raw number, and
 `updateLegDetails` rounds whatever's typed to the nearest tenth
 (`Math.round(x * 10) / 10`) before storing it.
+
+## Ops passenger inline edit, confirm-before-send, and save confirmations
+
+Three related fixes from one feedback round — all about reducing
+friction/mistakes on the ops side.
+
+- ~~**Inline passenger editing on the ops trip page — shipped**~~: no
+  more copy-pasting the manifest link into a browser to fix a
+  passenger's info. `PassengerForm` (the actual field UI) extracted
+  from `/manifest/[token]` into a shared
+  `components/manifest/passenger-form.tsx`, parameterized by an
+  `action` prop instead of an internal token-bound action — so the
+  client self-service page and the new ops-side editor render
+  identical fields without duplicating the JSX. The actual write
+  logic (name/DOB/weight/ID/legs/notes, photo upload) similarly
+  extracted to `applyPassengerFormUpdate` in `lib/manifest.ts`, called
+  by both the client-facing `savePassengerInfo` (its own token-based
+  "who can edit whom" check first) and the new ops-side
+  `updatePassengerOps` (operator/trip ownership check instead) — one
+  write path, two authorization models. Each passenger row on the
+  trip page is now a `<details>` that expands to the same form inline.
+- ~~**"Send Itinerary to Client" needs confirmation — fixed**~~: new
+  shared `ConfirmSubmitButton` (`components/ui/confirm-submit-button.tsx`)
+  wraps it with a native `window.confirm()` — a plain, dependency-free
+  pattern for any button whose action is hard to undo (an email
+  already sent can't be unsent), reusable anywhere else this comes up.
+- ~~**Save actions show no confirmation — first pass shipped**~~: new
+  shared `SavedBanner` (`components/ui/saved-banner.tsx`) plus the
+  established `?saved=<key>&redirect` pattern (already used on
+  `/manifest/[token]`) applied to the ops trip page's highest-value
+  saves — itinerary details, aircraft swap, Ops Approval, itinerary
+  sent, and the new passenger editor. Toggle-style actions (Verify,
+  Remove) were left alone — their own visible state change already
+  confirms the click registered. This is the first page of what the
+  operator asked for "across the app" — rolling the same pattern out
+  everywhere else is real remaining work, not done yet.

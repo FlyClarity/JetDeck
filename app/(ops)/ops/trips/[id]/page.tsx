@@ -1,18 +1,21 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
-import { revenueLegsOf, revenueLegsWithIndex, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
+import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
 import { resolveAirportTimezone } from "@/lib/geo";
 import { addHoursAcrossTimezones, to12Hour, tzAbbreviation } from "@/lib/time";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
-import { createManifestForTrip } from "@/lib/manifest";
+import { createManifestForTrip, applyPassengerFormUpdate } from "@/lib/manifest";
+import { PassengerForm } from "@/components/manifest/passenger-form";
 import { evaluateOpsReview } from "@/lib/ops-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmSubmitButton } from "@/components/ui/confirm-submit-button";
+import { SavedBanner } from "@/components/ui/saved-banner";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import {
   Select,
@@ -158,7 +161,7 @@ async function updateLegDetails(tripId: string, formData: FormData) {
     data: { itinerary: updated },
   });
 
-  revalidatePath(`/ops/trips/${tripId}`);
+  redirect(`/ops/trips/${tripId}?saved=itinerary`);
 }
 
 // A pure tail swap within the same sourcing lane (own fleet <-> own fleet,
@@ -197,7 +200,7 @@ async function updateAircraft(tripId: string, formData: FormData) {
     });
   }
 
-  revalidatePath(`/ops/trips/${tripId}`);
+  redirect(`/ops/trips/${tripId}?saved=aircraft`);
 }
 
 async function verifyPassenger(tripId: string, passengerId: string) {
@@ -236,6 +239,24 @@ async function removePassenger(tripId: string, passengerId: string) {
   await prisma.passenger.delete({ where: { id: passengerId } });
 
   revalidatePath(`/ops/trips/${tripId}`);
+}
+
+// Same field-level write the client self-service page uses
+// (applyPassengerFormUpdate, in lib/manifest.ts) — lets ops edit a
+// passenger directly instead of needing to copy the manifest link into a
+// browser themselves just to fix a typo.
+async function updatePassengerOps(tripId: string, passengerId: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+
+  const passenger = scoped.trip.passengers.find((p) => p.id === passengerId);
+  if (!passenger) return;
+
+  await applyPassengerFormUpdate(passengerId, formData);
+
+  redirect(`/ops/trips/${tripId}?saved=passenger`);
 }
 
 // Ops-side entry point for a trip that never got a manifest automatically
@@ -307,6 +328,8 @@ async function sendItinerary(tripId: string) {
     from: operator.fromEmail,
     fromName: operator.name,
   });
+
+  redirect(`/ops/trips/${tripId}?saved=itinerary-sent`);
 }
 
 async function assignCrew(tripId: string, formData: FormData) {
@@ -373,17 +396,33 @@ async function approveForOps(tripId: string) {
   if (!result.passed) return;
 
   await prisma.trip.update({ where: { id: tripId }, data: { status: "ops_approved" } });
-  revalidatePath(`/ops/trips/${tripId}`);
+  redirect(`/ops/trips/${tripId}?saved=approved`);
 }
 
-export default async function TripDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function TripDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ saved?: string }>;
+}) {
   const { id } = await params;
+  const { saved } = await searchParams;
   const scoped = await getScopedTrip(id);
   if (!scoped) notFound();
   const { trip } = scoped;
 
   const legs = revenueLegsOf(trip.quote.selectedOption?.itinerary);
   const legsIndexed = revenueLegsWithIndex(trip.quote.selectedOption?.itinerary);
+  // Only worth asking "which legs" when there's more than one — mirrors
+  // the same computation on /manifest/[token].
+  const legOptions =
+    legsIndexed.length > 1
+      ? legsIndexed.map(({ leg, index }) => ({
+          index,
+          label: `${leg.depAirport} → ${leg.arrAirport} (${legDate(leg)})`,
+        }))
+      : [];
 
   const legAirportCodes = [
     ...new Set(legs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))),
@@ -558,6 +597,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
               Approve for Ops
             </Button>
           </form>
+          <SavedBanner show={saved === "approved"} message="Approved for Ops." />
         </div>
       )}
 
@@ -566,12 +606,17 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
           <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>
           {trip.quote.tripRequest?.requestorEmail && (
             <form action={sendItinerary.bind(null, trip.id)}>
-              <Button type="submit" size="sm" variant="outline">
+              <ConfirmSubmitButton
+                size="sm"
+                variant="outline"
+                confirmMessage={`Send the itinerary to ${trip.quote.tripRequest.requestorEmail}? This emails the client right away.`}
+              >
                 Send Itinerary to Client
-              </Button>
+              </ConfirmSubmitButton>
             </form>
           )}
         </div>
+        <SavedBanner show={saved === "itinerary-sent"} message="Itinerary sent to client." />
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 p-3">
           <p className="text-sm">
@@ -598,6 +643,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
             </form>
           )}
         </div>
+        <SavedBanner show={saved === "aircraft"} message="Aircraft swapped." />
 
         <form action={updateLegDetailsWithId} className="mt-3 flex flex-col gap-4">
           {legsIndexed.map(({ leg, index }) => (
@@ -744,6 +790,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
             Save Itinerary
           </Button>
         </form>
+        <SavedBanner show={saved === "itinerary"} message="Itinerary saved." />
 
         {hasNotes && (
           <div className="mt-4 flex flex-col gap-1 border-t border-border pt-3 text-sm">
@@ -854,50 +901,68 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
           {trip.passengers.map((p) => {
             const verifyWithIds = verifyPassenger.bind(null, trip.id, p.id);
             return (
-              <div key={p.id} className="flex items-center justify-between gap-3 rounded-md border border-border p-3 text-sm">
-                <div>
-                  <p className="font-medium">
+              <details key={p.id} className="rounded-md border border-border text-sm">
+                <summary className="cursor-pointer list-none p-3 marker:content-none">
+                  <span className="font-medium">
                     {p.firstName || p.lastName ? `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() : "Not yet submitted"}
-                    {p.isLead && <span className="ml-1.5 text-xs text-muted-foreground">(Lead)</span>}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {p.dateOfBirth ? `DOB ${p.dateOfBirth.toLocaleDateString()}` : "DOB —"}
-                    {" · "}
-                    {p.weightLbs ? `${p.weightLbs} lbs` : "Weight —"}
-                    {" · "}
-                    {p.idNumber ? `ID on file (${p.idType ?? "type unknown"})` : "ID missing"}
-                  </p>
-                  {legsIndexed.length > 1 && p.legIndexes.length > 0 && (
+                  </span>
+                  {p.isLead && <span className="ml-1.5 text-xs text-muted-foreground">(Lead)</span>}
+                  <span className="ml-2 text-xs text-muted-foreground underline underline-offset-4">
+                    Click to edit
+                  </span>
+                </summary>
+
+                <div className="flex items-center justify-between gap-3 border-t border-border p-3">
+                  <div>
                     <p className="text-xs text-muted-foreground">
-                      Legs:{" "}
-                      {p.legIndexes
-                        .map((i) => legsIndexed.find((l) => l.index === i))
-                        .filter((l): l is (typeof legsIndexed)[number] => Boolean(l))
-                        .map((l) => `${l.leg.depAirport} → ${l.leg.arrAirport}`)
-                        .join(", ")}
+                      {p.dateOfBirth ? `DOB ${p.dateOfBirth.toLocaleDateString()}` : "DOB —"}
+                      {" · "}
+                      {p.weightLbs ? `${p.weightLbs} lbs` : "Weight —"}
+                      {" · "}
+                      {p.idNumber ? `ID on file (${p.idType ?? "type unknown"})` : "ID missing"}
                     </p>
-                  )}
+                    {legsIndexed.length > 1 && p.legIndexes.length > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Legs:{" "}
+                        {p.legIndexes
+                          .map((i) => legsIndexed.find((l) => l.index === i))
+                          .filter((l): l is (typeof legsIndexed)[number] => Boolean(l))
+                          .map((l) => `${l.leg.depAirport} → ${l.leg.arrAirport}`)
+                          .join(", ")}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {p.submittedAt ? (
+                      <form action={verifyWithIds}>
+                        <Button type="submit" size="sm" variant={p.verifiedAt ? "default" : "outline"}>
+                          {p.verifiedAt ? "Verified ✓" : "Verify"}
+                        </Button>
+                      </form>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Awaiting submission</span>
+                    )}
+                    <CopyLinkButton link={`${appUrl}/manifest/${p.token}`} />
+                    {!p.isLead && (
+                      <form action={removePassenger.bind(null, trip.id, p.id)}>
+                        <Button type="submit" size="sm" variant="ghost" className="text-destructive hover:text-destructive">
+                          Remove
+                        </Button>
+                      </form>
+                    )}
+                  </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {p.submittedAt ? (
-                    <form action={verifyWithIds}>
-                      <Button type="submit" size="sm" variant={p.verifiedAt ? "default" : "outline"}>
-                        {p.verifiedAt ? "Verified ✓" : "Verify"}
-                      </Button>
-                    </form>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">Awaiting submission</span>
-                  )}
-                  <CopyLinkButton link={`${appUrl}/manifest/${p.token}`} />
-                  {!p.isLead && (
-                    <form action={removePassenger.bind(null, trip.id, p.id)}>
-                      <Button type="submit" size="sm" variant="ghost" className="text-destructive hover:text-destructive">
-                        Remove
-                      </Button>
-                    </form>
-                  )}
+
+                <div className="border-t border-border p-3">
+                  <PassengerForm
+                    passenger={p}
+                    action={updatePassengerOps.bind(null, trip.id, p.id)}
+                    title="Edit Passenger"
+                    legOptions={legOptions}
+                  />
+                  <SavedBanner show={saved === "passenger"} message="Passenger info saved." />
                 </div>
-              </div>
+              </details>
             );
           })}
         </div>

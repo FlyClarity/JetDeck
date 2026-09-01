@@ -1,25 +1,13 @@
 import { notFound, redirect } from "next/navigation";
-import { randomUUID } from "node:crypto";
-import { put } from "@vercel/blob";
 import { prisma } from "@/lib/prisma";
+import { applyPassengerFormUpdate } from "@/lib/manifest";
 import { revenueLegsOf, revenueLegsWithIndex, legDate, legDateIso, flightTimeLabel } from "@/lib/itinerary";
 import { greatCircleDistanceNm, resolveAirportTimezone } from "@/lib/geo";
 import { to12Hour, tzAbbreviation, tzChangeLabel } from "@/lib/time";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { SectionHeading, LegItineraryCard, aircraftLabelFor } from "@/components/quote/client-page-ui";
+import { PassengerForm } from "@/components/manifest/passenger-form";
 import { getAppUrl } from "@/lib/url";
-
-const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
-
-const ID_TYPES = [
-  { value: "passport", label: "Passport" },
-  { value: "drivers_license", label: "Driver's License" },
-  { value: "government_id", label: "Government ID" },
-] as const;
 
 async function getPassengerByToken(token: string) {
   return prisma.passenger.findUnique({
@@ -55,68 +43,7 @@ async function savePassengerInfo(actingToken: string, targetId: string, formData
   if (!target || target.tripId !== acting.tripId) return;
   if (target.id !== acting.id && !acting.isLead) return;
 
-  const firstName = String(formData.get("firstName") ?? "").trim();
-  const lastName = String(formData.get("lastName") ?? "").trim();
-  const dobRaw = String(formData.get("dateOfBirth") ?? "");
-  const weightRaw = String(formData.get("weightLbs") ?? "");
-  const idType = String(formData.get("idType") ?? "") || null;
-  const idNumber = String(formData.get("idNumber") ?? "").trim() || null;
-  const idExpiryRaw = String(formData.get("idExpiry") ?? "");
-  const specialRequests = String(formData.get("specialRequests") ?? "").trim() || null;
-
-  // Empty means "every leg" — only worth storing a specific subset when the
-  // trip actually has more than one and the passenger isn't checked into
-  // all of them.
-  const trip = await prisma.trip.findUnique({
-    where: { id: target.tripId },
-    select: { quote: { select: { selectedOption: { select: { itinerary: true } } } } },
-  });
-  const allLegIndexes = revenueLegsWithIndex(trip?.quote.selectedOption?.itinerary).map((l) => l.index);
-  const checkedLegIndexes = formData
-    .getAll("legs")
-    .map((v) => Number(v))
-    .filter((n) => allLegIndexes.includes(n));
-  const legIndexes =
-    allLegIndexes.length > 1 && checkedLegIndexes.length > 0 && checkedLegIndexes.length < allLegIndexes.length
-      ? checkedLegIndexes.sort((a, b) => a - b)
-      : [];
-
-  let idImageUrl = target.idImageUrl;
-  const photo = formData.get("idImage");
-  if (photo instanceof File && photo.size > 0) {
-    if (photo.type.startsWith("image/") && photo.size <= MAX_PHOTO_BYTES) {
-      try {
-        const blob = await put(`manifest/${target.tripId}/${randomUUID()}-${photo.name}`, photo, {
-          access: "public",
-        });
-        idImageUrl = blob.url;
-      } catch (err) {
-        console.error(`Failed to upload ID photo for passenger ${target.id}`, err);
-      }
-    }
-  }
-
-  // Only name and DOB are actually required — everything else (weight, ID,
-  // special requests) is nice-to-have but shouldn't block a passenger from
-  // being considered "done."
-  const complete = Boolean(firstName && lastName && dobRaw);
-
-  await prisma.passenger.update({
-    where: { id: target.id },
-    data: {
-      firstName: firstName || null,
-      lastName: lastName || null,
-      dateOfBirth: dobRaw ? new Date(`${dobRaw}T00:00:00`) : null,
-      weightLbs: weightRaw ? Number(weightRaw) : null,
-      idType,
-      idNumber,
-      idExpiry: idExpiryRaw ? new Date(`${idExpiryRaw}T00:00:00`) : null,
-      idImageUrl,
-      specialRequests,
-      legIndexes,
-      submittedAt: complete ? new Date() : target.submittedAt,
-    },
-  });
+  await applyPassengerFormUpdate(targetId, formData);
 
   redirect(`/manifest/${actingToken}?saved=1`);
 }
@@ -148,159 +75,6 @@ async function addPassenger(actingToken: string) {
   });
 
   redirect(`/manifest/${actingToken}`);
-}
-
-function PassengerForm({
-  passenger,
-  actingToken,
-  title,
-  shareLink,
-  legOptions,
-}: {
-  passenger: { id: string; firstName: string | null; lastName: string | null; dateOfBirth: Date | null; weightLbs: number | null; idType: string | null; idNumber: string | null; idExpiry: Date | null; idImageUrl: string | null; specialRequests: string | null; submittedAt: Date | null; legIndexes: number[] };
-  actingToken: string;
-  title: string;
-  shareLink?: string;
-  legOptions: { index: number; label: string }[];
-}) {
-  const saveWithIds = savePassengerInfo.bind(null, actingToken, passenger.id);
-  const toDateInput = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : "");
-
-  return (
-    <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
-      {shareLink && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-accent">Let them fill this out themselves</p>
-            <p className="text-xs text-muted-foreground">Send this passenger their own private link</p>
-          </div>
-          <CopyLinkButton link={shareLink} />
-        </div>
-      )}
-
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {passenger.submittedAt && (
-          <span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent">
-            Submitted
-          </span>
-        )}
-      </div>
-
-      <form action={saveWithIds} className="mt-4 flex flex-col gap-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`firstName-${passenger.id}`}>First name</Label>
-            <Input id={`firstName-${passenger.id}`} name="firstName" defaultValue={passenger.firstName ?? ""} required />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`lastName-${passenger.id}`}>Last name</Label>
-            <Input id={`lastName-${passenger.id}`} name="lastName" defaultValue={passenger.lastName ?? ""} required />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`dob-${passenger.id}`}>Date of birth</Label>
-            <Input
-              id={`dob-${passenger.id}`}
-              name="dateOfBirth"
-              type="date"
-              defaultValue={toDateInput(passenger.dateOfBirth)}
-              required
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`weight-${passenger.id}`}>Weight (lbs)</Label>
-            <Input
-              id={`weight-${passenger.id}`}
-              name="weightLbs"
-              type="number"
-              min={1}
-              placeholder="Optional"
-              defaultValue={passenger.weightLbs ?? ""}
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`idType-${passenger.id}`}>ID type</Label>
-            <select
-              id={`idType-${passenger.id}`}
-              name="idType"
-              defaultValue={passenger.idType ?? ""}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">Select...</option>
-              {ID_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`idNumber-${passenger.id}`}>ID number</Label>
-            <Input id={`idNumber-${passenger.id}`} name="idNumber" defaultValue={passenger.idNumber ?? ""} />
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`idExpiry-${passenger.id}`}>ID expiry</Label>
-          <Input
-            id={`idExpiry-${passenger.id}`}
-            name="idExpiry"
-            type="date"
-            defaultValue={toDateInput(passenger.idExpiry)}
-          />
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`idImage-${passenger.id}`}>ID photo</Label>
-          <Input id={`idImage-${passenger.id}`} name="idImage" type="file" accept="image/*" />
-          {passenger.idImageUrl && (
-            <p className="text-xs text-muted-foreground">A photo is already on file — upload again to replace it.</p>
-          )}
-        </div>
-
-        {legOptions.length > 0 && (
-          <div className="flex flex-col gap-1.5">
-            <Label>Which legs is this passenger on?</Label>
-            <div className="flex flex-col gap-2 rounded-md border border-input p-3">
-              {legOptions.map((opt) => (
-                <label key={opt.index} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    name="legs"
-                    value={opt.index}
-                    defaultChecked={passenger.legIndexes.length === 0 || passenger.legIndexes.includes(opt.index)}
-                    className="h-4 w-4 rounded border-input"
-                  />
-                  {opt.label}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`special-${passenger.id}`}>Special requests</Label>
-          <Textarea
-            id={`special-${passenger.id}`}
-            name="specialRequests"
-            rows={2}
-            placeholder="Dietary, mobility, medical — optional"
-            defaultValue={passenger.specialRequests ?? ""}
-          />
-        </div>
-
-        <Button type="submit" className="self-start">
-          Save
-        </Button>
-      </form>
-    </div>
-  );
 }
 
 export default async function ManifestPage({
@@ -477,7 +251,7 @@ export default async function ManifestPage({
         <div className="mt-6 flex flex-col gap-4">
           <PassengerForm
             passenger={passenger}
-            actingToken={token}
+            action={savePassengerInfo.bind(null, token, passenger.id)}
             title={passenger.isLead ? "Your Information" : "Your Information"}
             legOptions={legOptions}
           />
@@ -488,7 +262,7 @@ export default async function ManifestPage({
                 <PassengerForm
                   key={p.id}
                   passenger={p}
-                  actingToken={token}
+                  action={savePassengerInfo.bind(null, token, p.id)}
                   title={p.firstName ? `${p.firstName} ${p.lastName ?? ""}`.trim() : `Passenger ${i + 2}`}
                   shareLink={appUrl ? `${appUrl}/manifest/${p.token}` : undefined}
                   legOptions={legOptions}
