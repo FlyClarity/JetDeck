@@ -3270,3 +3270,26 @@ payment-gated release) are follow-up rounds, not built yet.
   would be `ops_approved`, forcing that transition through the gated
   action on the trip detail page instead. Every other stage
   transition is untouched.
+
+## Ops itinerary editor gets the Quote Builder's flight-time/arrival-time logic
+
+User caught a real gap: editing an airport or departure time in the
+new ops itinerary editor (previous round) left `flightHours`/`arrTime`
+stale — both the client-facing pages and the new duty-time compliance
+check read those as if they were still accurate.
+
+- ~~**`updateLegDetails` recomputes flight time and arrival time on
+  save — fixed**~~: ported the exact same logic the Quote Builder uses
+  live — `estimateFlightHours(greatCircleDistanceNm(...), cruiseSpeedKts,
+  defaultBlockTimeBufferHours)` for flight time, `addHoursAcrossTimezones`
+  for arrival time — so editing an airport or time now keeps both in
+  sync instead of silently drifting. Only recomputable for an owned-
+  fleet aircraft (`BrokeredAircraft` has no cruise-speed data); a
+  brokered trip keeps whatever flight time it was quoted with.
+- ~~**Arrival Time is no longer a free-text input — fixed**~~: since
+  it's always derived now, a manually-typed value would just look
+  like an override that silently gets discarded on the next save —
+  replaced with a read-only computed display (`to12Hour` +
+  `tzAbbreviation`, same helpers the client pages use) plus a flight-
+  time caption, so what's shown always matches what the itinerary
+  actually has stored.

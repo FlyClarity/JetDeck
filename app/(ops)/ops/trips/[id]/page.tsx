@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
-import { revenueLegsOf, revenueLegsWithIndex, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
+import { revenueLegsOf, revenueLegsWithIndex, mapsSearchUrl, flightTimeLabel, type StoredLeg } from "@/lib/itinerary";
+import { greatCircleDistanceNm, estimateFlightHours } from "@/lib/geo";
+import { addHoursAcrossTimezones, to12Hour, tzAbbreviation } from "@/lib/time";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { createManifestForTrip } from "@/lib/manifest";
@@ -79,17 +81,67 @@ async function updateLegDetails(tripId: string, formData: FormData) {
   if (!scoped || !scoped.trip.quote.selectedOptionId) return;
 
   const itinerary = (scoped.trip.quote.selectedOption?.itinerary as StoredLeg[] | null) ?? [];
-  const updated = itinerary.map((leg, index) => {
-    if ((leg.billAs ?? "revenue") !== "revenue") return leg;
+
+  const edits = itinerary.map((leg, index) => {
+    if ((leg.billAs ?? "revenue") !== "revenue") return null;
     const depTimeTBD = formData.get(`depTimeTBD-${index}`) === "on";
     return {
-      ...leg,
-      depAirport: String(formData.get(`depAirport-${index}`) ?? "").trim().toUpperCase() || leg.depAirport,
-      arrAirport: String(formData.get(`arrAirport-${index}`) ?? "").trim().toUpperCase() || leg.arrAirport,
-      date: String(formData.get(`date-${index}`) ?? "").trim() || leg.date,
+      index,
+      depAirport: String(formData.get(`depAirport-${index}`) ?? "").trim().toUpperCase() || leg.depAirport || null,
+      arrAirport: String(formData.get(`arrAirport-${index}`) ?? "").trim().toUpperCase() || leg.arrAirport || null,
+      date: String(formData.get(`date-${index}`) ?? "").trim() || leg.date || null,
       depTimeTBD,
       depTime: depTimeTBD ? null : String(formData.get(`depTime-${index}`) ?? "").trim() || null,
-      arrTime: String(formData.get(`arrTime-${index}`) ?? "").trim() || null,
+    };
+  });
+
+  // Recompute flight time and arrival time the same way the Quote
+  // Builder does live — otherwise editing an airport or departure time
+  // here would silently leave a stale flightHours/arrTime behind, which
+  // both the client-facing pages and the duty-time compliance check read
+  // as if it were still accurate.
+  const codes = new Set<string>();
+  for (const e of edits) {
+    if (e?.depAirport) codes.add(e.depAirport);
+    if (e?.arrAirport) codes.add(e.arrAirport);
+  }
+  const airportRows = codes.size ? await prisma.airport.findMany({ where: { icao: { in: [...codes] } } }) : [];
+  const airportByCode = Object.fromEntries(airportRows.map((a) => [a.icao, a]));
+
+  // Only ever recomputable for an owned-fleet aircraft — BrokeredAircraft
+  // has no cruise-speed performance data, so a brokered trip keeps
+  // whatever flight time it was quoted with.
+  const cruiseSpeedKts = scoped.trip.quote.selectedOption?.aircraft?.cruiseSpeedKts ?? null;
+  const blockTimeBufferHours = scoped.operator.defaultBlockTimeBufferHours;
+
+  const updated = itinerary.map((leg, index) => {
+    const edit = edits.find((e) => e?.index === index);
+    if (!edit) return leg;
+
+    const dep = edit.depAirport ? airportByCode[edit.depAirport] : undefined;
+    const arr = edit.arrAirport ? airportByCode[edit.arrAirport] : undefined;
+
+    const recomputedFlightHours =
+      dep && arr && cruiseSpeedKts
+        ? estimateFlightHours(greatCircleDistanceNm(dep.lat, dep.lon, arr.lat, arr.lon), cruiseSpeedKts, blockTimeBufferHours)
+        : null;
+    const flightHours = recomputedFlightHours ?? leg.flightHours;
+
+    const arrTime =
+      edit.depTimeTBD || !edit.depTime || !edit.date
+        ? null
+        : addHoursAcrossTimezones(edit.date, edit.depTime, flightHours ?? 0, dep?.timezone ?? null, arr?.timezone ?? null)
+            .time || null;
+
+    return {
+      ...leg,
+      depAirport: edit.depAirport,
+      arrAirport: edit.arrAirport,
+      date: edit.date,
+      depTimeTBD: edit.depTimeTBD,
+      depTime: edit.depTime,
+      flightHours,
+      arrTime,
       depFboName: String(formData.get(`depFboName-${index}`) ?? "").trim() || null,
       depFboAddress: String(formData.get(`depFboAddress-${index}`) ?? "").trim() || null,
       arrFboName: String(formData.get(`arrFboName-${index}`) ?? "").trim() || null,
@@ -603,7 +655,15 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Arrival Time</p>
-                  <Input name={`arrTime-${index}`} type="time" defaultValue={leg.arrTime ?? ""} className="h-8 text-sm" />
+                  <div className="flex h-8 items-center text-sm">
+                    {leg.arrTime
+                      ? `${to12Hour(leg.arrTime)} ${tzAbbreviation(airportByIcao[leg.arrAirport ?? ""]?.timezone, leg.date)}`.trim()
+                      : "—"}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Auto-computed from departure time + flight time
+                    {leg.flightHours ? ` (${flightTimeLabel(leg.flightHours)})` : ""} — save to recalculate.
+                  </p>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
