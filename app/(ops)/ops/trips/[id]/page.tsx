@@ -96,7 +96,13 @@ async function updateLegDetails(tripId: string, formData: FormData) {
       // Carries over from whatever the quote used, edited directly here —
       // same as the Quote Builder's own flight-time field — rather than
       // silently recalculated from distance whenever an airport changes.
-      flightHours: flightHoursRaw && !Number.isNaN(Number(flightHoursRaw)) ? Number(flightHoursRaw) : leg.flightHours,
+      // Rounded to the nearest tenth, matching the Quote Builder's own
+      // toFixed(1) convention, so a typed value like "3.456" doesn't
+      // persist with more precision than the rest of the app ever shows.
+      flightHours:
+        flightHoursRaw && !Number.isNaN(Number(flightHoursRaw))
+          ? Math.round(Number(flightHoursRaw) * 10) / 10
+          : leg.flightHours,
     };
   });
 
@@ -662,7 +668,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ id:
                     type="number"
                     step="0.1"
                     min="0"
-                    defaultValue={leg.flightHours ?? ""}
+                    defaultValue={leg.flightHours != null ? leg.flightHours.toFixed(1) : ""}
                     className="h-8 text-sm"
                   />
                 </div>

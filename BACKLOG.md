@@ -3371,3 +3371,13 @@ continuously on the clock.
   round trip split close enough to land as two periods but still short
   of real rest previously only ever got compared against unrelated
   other trips and never against itself.
+
+## Flight Time field: round to the nearest tenth, matching the Quote Builder
+
+The new editable Flight Time field in the ops itinerary editor showed
+and stored raw values with no rounding, while the Quote Builder has
+always kept flight time formatted to one decimal (`toFixed(1)`)
+throughout. Fixed to match exactly: the field now displays
+`leg.flightHours.toFixed(1)` instead of the raw number, and
+`updateLegDetails` rounds whatever's typed to the nearest tenth
+(`Math.round(x * 10) / 10`) before storing it.
