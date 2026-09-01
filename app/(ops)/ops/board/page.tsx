@@ -4,14 +4,23 @@ import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf } from "@/lib/itinerary";
+import { resolveAirportTimezone } from "@/lib/geo";
+import { departureInstantUtc } from "@/lib/time";
 import { STATUS_LABELS, TRIP_STAGES } from "@/lib/trip";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
-// Nothing else in the app moves a trip through ops_review/pre_flight/
-// in_flight/completed — this board is the only place those transitions
-// happen. crew_assigned can also be set here (skipping the roster) or from
-// the trip detail page's actual crew picker; either way lands on the same
-// status.
+const RELEASE_FLAG_MINUTES = 45;
+
+// Every stage from "In Review" onward is a crew-app event in the
+// operator's eventual vision (checklist+release, at the aircraft,
+// departing, landed) — each one has its own named, gated action on the
+// trip detail page (see app/(ops)/ops/trips/[id]) instead of this bare
+// next/back arrow, so the arrow explicitly refuses to make any of these
+// jumps rather than silently bypassing whatever that stage's action
+// actually checks or records.
+const GATED_STAGES = new Set(["ready_for_release", "pre_flight", "in_flight", "completed"]);
+
 async function moveTripStage(tripId: string, direction: "forward" | "backward") {
   "use server";
 
@@ -28,13 +37,7 @@ async function moveTripStage(tripId: string, direction: "forward" | "backward") 
 
   const nextIdx = direction === "forward" ? idx + 1 : idx - 1;
   if (nextIdx < 0 || nextIdx >= TRIP_STAGES.length) return;
-
-  // "ops_approved" is the one transition this generic arrow can't make —
-  // it's gated behind the Ops Review checklist (aircraft availability,
-  // crew qualification, duty-time compliance) on the trip detail page's
-  // "Approve for Ops" action. Letting this button skip straight there
-  // would bypass every check that stage exists to enforce.
-  if (TRIP_STAGES[nextIdx] === "ops_approved") return;
+  if (GATED_STAGES.has(TRIP_STAGES[nextIdx])) return;
 
   await prisma.trip.update({ where: { id: tripId }, data: { status: TRIP_STAGES[nextIdx] } });
   revalidatePath("/ops/board");
@@ -64,6 +67,21 @@ export default async function OpsBoardPage() {
     orderBy: { createdAt: "asc" },
   });
 
+  // Batched once for every trip's first leg rather than per-card, so the
+  // "flagged if released and not yet Preflight 45 minutes before
+  // departure" check doesn't turn into an N+1 query.
+  const firstLegDepCodes = new Set<string>();
+  for (const t of trips) {
+    const dep = revenueLegsOf(t.quote.selectedOption?.itinerary)[0]?.depAirport;
+    if (dep) firstLegDepCodes.add(dep);
+  }
+  const depAirportRows = firstLegDepCodes.size
+    ? await prisma.airport.findMany({ where: { icao: { in: [...firstLegDepCodes] } } })
+    : [];
+  const tzByIcao = Object.fromEntries(
+    depAirportRows.map((a) => [a.icao, resolveAirportTimezone(a.timezone, a.lat, a.lon)])
+  );
+
   return (
     <div className="w-full px-6 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Ops Board</h1>
@@ -88,17 +106,44 @@ export default async function OpsBoardPage() {
                   const route = firstLeg
                     ? `${firstLeg.depAirport ?? "?"} → ${lastLeg?.arrAirport ?? "?"}`
                     : "Route unknown";
-                  const crewNames = t.crewAssignments.map((a) => a.crew.name).join(", ");
+                  // A brokered trip has no CrewMember assignment to show —
+                  // fall back to the free-text crew note instead.
+                  const crewNames = t.crewAssignments.map((a) => a.crew.name).join(", ") || t.crewNotes;
                   const moveForward = moveTripStage.bind(null, t.id, "forward");
                   const moveBackward = moveTripStage.bind(null, t.id, "backward");
+
+                  const firstLegDeparture =
+                    firstLeg?.date && !firstLeg.depTimeTBD && firstLeg.depTime
+                      ? departureInstantUtc(firstLeg.date, firstLeg.depTime, tzByIcao[firstLeg.depAirport ?? ""])
+                      : null;
+                  const minutesToDeparture = firstLegDeparture
+                    ? (firstLegDeparture.getTime() - new Date().getTime()) / 60000
+                    : null;
+                  const flagged =
+                    t.status === "ready_for_release" &&
+                    minutesToDeparture !== null &&
+                    minutesToDeparture <= RELEASE_FLAG_MINUTES;
+
+                  const nextStage = TRIP_STAGES[stageIdx + 1];
                   return (
-                    <div key={t.id} className="rounded-md border border-border p-3 text-sm">
+                    <div
+                      key={t.id}
+                      className={cn(
+                        "rounded-md border p-3 text-sm",
+                        flagged ? "border-destructive/50 bg-destructive/5" : "border-border"
+                      )}
+                    >
                       <Link
                         href={`/ops/trips/${t.id}`}
                         className="font-medium hover:underline hover:underline-offset-4"
                       >
                         {t.tripNumber}
                       </Link>
+                      {flagged && (
+                        <span className="ml-2 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
+                          Not yet Preflight
+                        </span>
+                      )}
                       <p className="mt-1 text-xs text-muted-foreground">{route}</p>
                       <p className="mt-1 text-xs text-muted-foreground">{firstLeg?.date ?? "—"}</p>
                       <p className="mt-1 text-xs text-muted-foreground">Crew: {crewNames || "Unassigned"}</p>
@@ -118,13 +163,10 @@ export default async function OpsBoardPage() {
                             type="submit"
                             size="sm"
                             variant="ghost"
-                            disabled={
-                              stageIdx === TRIP_STAGES.length - 1 ||
-                              TRIP_STAGES[stageIdx + 1] === "ops_approved"
-                            }
+                            disabled={stageIdx === TRIP_STAGES.length - 1 || GATED_STAGES.has(nextStage)}
                             title={
-                              TRIP_STAGES[stageIdx + 1] === "ops_approved"
-                                ? "Approve from the trip detail page once the Ops Review checklist passes"
+                              GATED_STAGES.has(nextStage)
+                                ? "Use the named action on the trip detail page for this stage"
                                 : undefined
                             }
                           >

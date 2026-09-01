@@ -3,40 +3,47 @@
 // columns here (matches /ops/trips' existing filter). "awaiting_payment"
 // used to be the first stage here — removed, since payment is no longer a
 // pipeline stage (see isTripPaid below and Trip.status's schema comment).
+//
+// Six stages, specified directly by the operator: Confirmed (just sent
+// from sales) -> In Review (ops works the checklist — aircraft/crew/duty-
+// time compliance, passenger manifest, FBOs; crew is assigned during this
+// stage, not as its own separate one) -> Ready for Release (checklist
+// passed, itinerary sent, payment secured, crew acknowledged) -> Preflight
+// (crew at the aircraft) -> Inflight (crew departed) -> Landed (crew
+// landed, block/flight time recorded). Every transition from Ready for
+// Release onward is a crew-app event in the operator's eventual vision;
+// since that app doesn't exist yet, each one has an explicit ops-side
+// "Mark ..." override action instead of a bare next/back arrow — see
+// app/(ops)/ops/trips/[id]/page.tsx.
 export const TRIP_STAGES = [
   "confirmed",
   "ops_review",
-  "crew_assigned",
-  "ops_approved",
+  "ready_for_release",
   "pre_flight",
   "in_flight",
   "completed",
 ] as const;
 
 // One-letter stage badges for tight spaces (the Fleet Calendar's tiles).
-// Explicitly provisional — the user is still actively reworking the trip
-// lifecycle's stage names/definitions, so this is deliberately a single,
-// easy-to-edit map rather than baked into every place that shows a stage,
-// so it's a one-line change per stage once that taxonomy settles.
 export const STATUS_SHORT_LABELS: Record<string, string> = {
   confirmed: "C",
-  ops_review: "O",
-  crew_assigned: "W", // creW — "C" already taken by Confirmed
-  ops_approved: "A",
+  ops_review: "R",
+  ready_for_release: "D", // reaDy — "R" already taken by Review
   pre_flight: "P",
   in_flight: "I",
-  completed: "D", // Done
+  completed: "L", // Landed
 };
 
 export const STATUS_LABELS: Record<string, string> = {
   confirmed: "Confirmed",
   awaiting_payment: "Awaiting Payment", // legacy value, predates payment leaving the pipeline
-  ops_review: "Ops Review",
-  crew_assigned: "Crew Assigned",
-  ops_approved: "Ops Approved",
-  pre_flight: "Pre-Flight",
-  in_flight: "In Flight",
-  completed: "Completed",
+  ops_review: "In Review",
+  crew_assigned: "In Review", // legacy value, folded into In Review — see Trip.status's schema comment
+  ready_for_release: "Ready for Release",
+  ops_approved: "Ready for Release", // legacy value, renamed — see Trip.status's schema comment
+  pre_flight: "Preflight",
+  in_flight: "Inflight",
+  completed: "Landed",
   invoiced: "Invoiced",
   closed: "Closed",
   cancelled_by_operator: "Cancelled",
@@ -46,10 +53,8 @@ export const STATUS_LABELS: Record<string, string> = {
 // Whether the flight has actually been paid for — derived from the same
 // signals the sales side already tracks (captured card hold, confirmed
 // wire, confirmed ACH, or cash-on-account) rather than a separate field to
-// keep in sync by hand. Not enforced as a gate anywhere yet: the user's
-// intent is that a future "released" action should require this, but
-// "release" itself doesn't exist as a real stage/action yet — documented
-// here so the requirement isn't lost before that gets built.
+// keep in sync by hand. Gates "ready_for_release" — see
+// evaluateReleaseReadiness in lib/ops-review.ts.
 export function isTripPaid(quote: {
   paymentMethod: string | null;
   cardHoldStatus: string | null;

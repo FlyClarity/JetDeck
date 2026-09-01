@@ -9,6 +9,7 @@ import { revenueLegsOf, legDateIso, findConflictingBooking } from "@/lib/itinera
 import { computeDutyPeriods, checkDutyCompliance, dutyComplianceIssueLabel } from "@/lib/duty-time";
 import { PILOT_ROLES, crewQualificationStatus, QUALIFICATION_STATUS_LABELS } from "@/lib/crew";
 import { resolveAirportTimezone } from "@/lib/geo";
+import { isTripPaid } from "@/lib/trip";
 
 export type OpsReviewCheck = {
   label: string;
@@ -207,6 +208,48 @@ export async function evaluateOpsReview(tripId: string, operatorId: string): Pro
     }
   }
   checks.push({ label: "Duty Time Compliance", passed: dutyNotes.length === 0, notes: dutyNotes });
+
+  return { passed: checks.every((c) => c.passed), checks };
+}
+
+// "Ready for Release" needs more than the Ops Review checklist passing —
+// the operator's own spec: checklist complete, itinerary sent, payment
+// secured, and crew has acknowledged the trip. The last one has no crew
+// app to source it from yet, so it's an explicit ops override
+// (Trip.crewAcknowledgedAt) standing in for that event.
+export async function evaluateReleaseReadiness(
+  tripId: string,
+  operatorId: string,
+  opsReview: OpsReviewResult
+): Promise<OpsReviewResult> {
+  const trip = await prisma.trip.findFirst({
+    where: { id: tripId, operatorId },
+    include: { quote: { include: { contact: true } } },
+  });
+  if (!trip) {
+    return { passed: false, checks: [{ label: "Trip", passed: false, notes: ["Trip not found."] }] };
+  }
+
+  const checks: OpsReviewCheck[] = [
+    { label: "Ops Review Checklist", passed: opsReview.passed, notes: opsReview.passed ? [] : ["See Ops Review Checklist above."] },
+    {
+      label: "Itinerary Sent",
+      passed: Boolean(trip.itinerarySentAt),
+      notes: trip.itinerarySentAt ? [] : ["Send the itinerary to the client first."],
+    },
+    {
+      label: "Payment Secured",
+      passed: isTripPaid(trip.quote),
+      notes: isTripPaid(trip.quote) ? [] : ["Payment hasn't been confirmed yet."],
+    },
+    {
+      label: "Crew Acknowledged",
+      passed: Boolean(trip.crewAcknowledgedAt),
+      notes: trip.crewAcknowledgedAt
+        ? []
+        : ["Stand-in for the crew app — mark this once crew has confirmed the trip."],
+    },
+  ];
 
   return { passed: checks.every((c) => c.passed), checks };
 }

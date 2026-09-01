@@ -3438,3 +3438,57 @@ operatorType branch).
   `Trip.crewNotes` — for a brokered trip, the ops Crew section shows a
   plain textarea instead of the CrewMember assign/unassign picker,
   since there's no real roster entry for a source operator's pilots.
+
+## Ops Board redesigned: six stages, specified directly by the operator
+
+Full replacement of the trip pipeline's stage list and gating, per the
+operator's own spec: Confirmed -> In Review -> Ready for Release ->
+Preflight -> Inflight -> Landed. Every stage from Ready for Release
+onward is a crew-app event in the operator's stated eventual vision
+(crew acknowledging, marking at the aircraft, departing, landed with
+block/flight times) — since that app doesn't exist yet, "for now,
+operations can override the crew input requirements," so each one got
+an explicit ops-side "Mark ..." action instead.
+
+- ~~**`TRIP_STAGES` down to six, matching the spec exactly — shipped**~~
+  (`lib/trip.ts`): `crew_assigned` removed as its own stage — the
+  operator's description of "In Review" explicitly folds crew
+  assignment into it ("Ops still reviewing compliance, crew
+  assignment, performance and passenger manifest, FBOs") rather than
+  keeping it a separate pipeline step. `ops_approved` renamed
+  `ready_for_release` now that reaching it needs more than the Ops
+  Review checklist alone. Migration backfills existing `crew_assigned`
+  rows to `ops_review` and `ops_approved` rows to `ready_for_release`
+  — both old string values kept in `STATUS_LABELS` mapped to their new
+  display name so historical data still reads sensibly.
+- ~~**`evaluateReleaseReadiness` — shipped**~~ (`lib/ops-review.ts`):
+  the real gate for Ready for Release, checking all four of the
+  operator's stated conditions — the existing Ops Review checklist
+  (passed in, not recomputed, to avoid a duplicate query), new
+  `Trip.itinerarySentAt` (stamped by the existing Send Itinerary
+  action), `isTripPaid` (already existed, now actually wired to gate
+  something), and new `Trip.crewAcknowledgedAt` (ops-side stand-in for
+  the crew app, via a new "Mark Crew Acknowledged" button). Same
+  pattern as the original Ops Review gate: one function renders the
+  checklist AND re-verifies server-side before the status actually
+  changes, so the button's enabled state can't drift from what's
+  enforced.
+- ~~**Named "Mark ..." actions for every remaining stage — shipped**~~:
+  `markAtAircraft`, `markDeparted`, and `markLanded` (the last one
+  also collects `actualBlockHours`/`actualFlightHours` — new Trip
+  columns — since there's no crew app to enter them). The Ops Board's
+  generic next/back arrow now refuses every one of these transitions
+  (`GATED_STAGES`), same treatment the original ops_review gate got,
+  so there's no way to skip a stage's actual requirements by clicking
+  the bare arrow.
+- ~~**Crew gets an assignment email — shipped**~~: `assignCrew` no
+  longer bumps the trip's stage (crew assignment isn't its own stage
+  anymore) but now emails the assigned crew member — a stand-in for
+  the crew app surfacing the trip on their end. "Flight added to their
+  calendar" is not built — that's real crew-app territory, not
+  something worth faking with a one-off feature.
+- ~~**"Flagged if released and not yet Preflight 45 minutes before
+  departure" — shipped**~~: computed live (not stored) on both the
+  trip detail page and the Ops Board card, batched across all board
+  trips in one query rather than N+1. Exact wording and threshold from
+  the operator's own spec.

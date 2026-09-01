@@ -6,12 +6,12 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
 import { resolveAirportTimezone } from "@/lib/geo";
-import { addHoursAcrossTimezones, to12Hour, tzAbbreviation } from "@/lib/time";
+import { addHoursAcrossTimezones, departureInstantUtc, to12Hour, tzAbbreviation } from "@/lib/time";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { createManifestForTrip, applyPassengerFormUpdate } from "@/lib/manifest";
 import { PassengerForm } from "@/components/manifest/passenger-form";
-import { evaluateOpsReview } from "@/lib/ops-review";
+import { evaluateOpsReview, evaluateReleaseReadiness } from "@/lib/ops-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,10 +28,11 @@ import {
 import { getAppUrl } from "@/lib/url";
 import { cn } from "@/lib/utils";
 
-// Crew assignment only ever moves a trip forward out of the pre-crew
-// statuses — never regresses a trip that's already further along (e.g.
-// re-assigning crew on an in-flight trip shouldn't knock it back a stage).
-const PRE_CREW_STATUSES = ["confirmed", "ops_review"];
+// A trip is considered "released" from the moment Ops has cleared it for
+// flight — the 45-minutes-before-departure flag (see releaseFlag) only
+// makes sense once the trip is actually sitting in this stage waiting on
+// the crew to move it along.
+const RELEASE_FLAG_MINUTES = 45;
 
 async function getScopedTrip(id: string) {
   const { clerkOrgId } = await getTenantContext();
@@ -330,9 +331,18 @@ async function sendItinerary(tripId: string) {
     fromName: operator.name,
   });
 
+  // One of the four prerequisites for Ready for Release — see
+  // evaluateReleaseReadiness.
+  await prisma.trip.update({ where: { id: tripId }, data: { itinerarySentAt: new Date() } });
+
   redirect(`/ops/trips/${tripId}?saved=itinerary-sent`);
 }
 
+// Crew assignment happens during "In Review" and no longer moves the
+// trip to its own stage (the operator folded that into In Review) — it's
+// just data the Ops Review checklist reads. What it does do is notify the
+// crew member by email — a stand-in for the not-yet-built crew app
+// actually surfacing this trip on their end.
 async function assignCrew(tripId: string, formData: FormData) {
   "use server";
 
@@ -351,8 +361,16 @@ async function assignCrew(tripId: string, formData: FormData) {
     update: {},
   });
 
-  if (PRE_CREW_STATUSES.includes(scoped.trip.status)) {
-    await prisma.trip.update({ where: { id: tripId }, data: { status: "crew_assigned" } });
+  if (crew.email) {
+    const legs = revenueLegsOf(scoped.trip.quote.selectedOption?.itinerary);
+    const routeText = legs.length ? `${legs[0].depAirport} → ${legs[legs.length - 1].arrAirport}` : "";
+    await sendEmail({
+      to: crew.email,
+      subject: `You're assigned — ${scoped.trip.tripNumber}${routeText ? ` (${routeText})` : ""}`,
+      html: `<p>Hi ${crew.name},</p><p>You've been assigned to ${scoped.trip.tripNumber}${routeText ? ` (${routeText})` : ""}${legs[0]?.date ? `, departing ${legDate(legs[0])}` : ""}.</p><p>— ${scoped.operator.name}</p>`,
+      from: scoped.operator.fromEmail,
+      fromName: scoped.operator.name,
+    });
   }
 
   revalidatePath(`/ops/trips/${tripId}`);
@@ -367,16 +385,6 @@ async function unassignCrew(tripId: string, assignmentId: string) {
   await prisma.tripCrewAssignment.deleteMany({
     where: { id: assignmentId, tripId, operatorId: scoped.operator.id },
   });
-
-  // Mirrors assignCrew's forward bump: removing the last crew member off a
-  // trip that's only at "crew_assigned" because crew was assigned (not
-  // further along in the pipeline) drops it back a stage on the board
-  // rather than leaving a crewless trip stuck showing as staffed.
-  const remaining = await prisma.tripCrewAssignment.count({ where: { tripId } });
-  if (remaining === 0 && scoped.trip.status === "crew_assigned") {
-    const idx = TRIP_STAGES.findIndex((s) => s === "crew_assigned");
-    await prisma.trip.update({ where: { id: tripId }, data: { status: TRIP_STAGES[idx - 1] } });
-  }
 
   revalidatePath(`/ops/trips/${tripId}`);
 }
@@ -404,18 +412,83 @@ async function updateCrewNotes(tripId: string, formData: FormData) {
 // correctly client-side, since this is the one transition in the trip
 // lifecycle that's actually gated (see the Board's moveTripStage, which
 // deliberately refuses to make this same jump).
-async function approveForOps(tripId: string) {
+// Ops-side stand-in for the crew app's acknowledgment — one of the four
+// Ready for Release prerequisites (see evaluateReleaseReadiness).
+async function markCrewAcknowledged(tripId: string) {
   "use server";
 
   const scoped = await getScopedTrip(tripId);
   if (!scoped) return;
-  if (!["ops_review", "crew_assigned"].includes(scoped.trip.status)) return;
+  if (scoped.trip.status !== "ops_review") return;
 
-  const result = await evaluateOpsReview(tripId, scoped.operator.id);
+  await prisma.trip.update({ where: { id: tripId }, data: { crewAcknowledgedAt: new Date() } });
+  redirect(`/ops/trips/${tripId}?saved=crew-ack`);
+}
+
+// Re-verifies release readiness server-side before actually advancing the
+// stage — never trusts that the button was disabled correctly
+// client-side, since this is the one transition in the trip lifecycle
+// that's actually gated (see the Board's moveTripStage, which
+// deliberately refuses to make this same jump).
+async function markReadyForRelease(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+  if (scoped.trip.status !== "ops_review") return;
+
+  const opsReview = await evaluateOpsReview(tripId, scoped.operator.id);
+  const result = await evaluateReleaseReadiness(tripId, scoped.operator.id, opsReview);
   if (!result.passed) return;
 
-  await prisma.trip.update({ where: { id: tripId }, data: { status: "ops_approved" } });
-  redirect(`/ops/trips/${tripId}?saved=approved`);
+  await prisma.trip.update({ where: { id: tripId }, data: { status: "ready_for_release" } });
+  redirect(`/ops/trips/${tripId}?saved=released`);
+}
+
+// The remaining three stages are each a crew-app event in the operator's
+// eventual vision (at the aircraft / departing / landed with block-and-
+// flight times) — until that app exists, ops marks them directly. Kept as
+// named, single-purpose actions rather than the Board's generic next/back
+// arrow (which explicitly refuses these same three jumps) so each one can
+// carry its own meaning — and, for Landed, its own data entry.
+async function markAtAircraft(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped || scoped.trip.status !== "ready_for_release") return;
+
+  await prisma.trip.update({ where: { id: tripId }, data: { status: "pre_flight" } });
+  redirect(`/ops/trips/${tripId}?saved=preflight`);
+}
+
+async function markDeparted(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped || scoped.trip.status !== "pre_flight") return;
+
+  await prisma.trip.update({ where: { id: tripId }, data: { status: "in_flight" } });
+  redirect(`/ops/trips/${tripId}?saved=inflight`);
+}
+
+async function markLanded(tripId: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped || scoped.trip.status !== "in_flight") return;
+
+  const blockHoursRaw = String(formData.get("actualBlockHours") ?? "").trim();
+  const flightHoursRaw = String(formData.get("actualFlightHours") ?? "").trim();
+
+  await prisma.trip.update({
+    where: { id: tripId },
+    data: {
+      status: "completed",
+      actualBlockHours: blockHoursRaw && !Number.isNaN(Number(blockHoursRaw)) ? Number(blockHoursRaw) : null,
+      actualFlightHours: flightHoursRaw && !Number.isNaN(Number(flightHoursRaw)) ? Number(flightHoursRaw) : null,
+    },
+  });
+  redirect(`/ops/trips/${tripId}?saved=landed`);
 }
 
 export default async function TripDetailPage({
@@ -507,13 +580,37 @@ export default async function TripDetailPage({
   const paid = isTripPaid(trip.quote);
   const stageIndex = TRIP_STAGES.findIndex((s) => s === trip.status);
 
-  // The checklist only matters before the trip has actually been approved
-  // — once past that gate, it stays approved (nothing here re-litigates
-  // an approval if, say, a crew member's medical lapses afterward; that's
-  // the future crew compliance dashboard's job, not this one-time gate).
-  const showOpsReview = ["confirmed", "ops_review", "crew_assigned"].includes(trip.status);
+  // The checklist only matters before the trip has actually reached Ready
+  // for Release — once past that gate, it stays there (nothing here
+  // re-litigates it if, say, a crew member's medical lapses afterward;
+  // that's the future crew compliance dashboard's job, not this one-time
+  // gate).
+  const showOpsReview = ["confirmed", "ops_review"].includes(trip.status);
   const opsReview = showOpsReview ? await evaluateOpsReview(trip.id, scoped.operator.id) : null;
-  const approveWithId = approveForOps.bind(null, trip.id);
+  const releaseReadiness =
+    trip.status === "ops_review" && opsReview
+      ? await evaluateReleaseReadiness(trip.id, scoped.operator.id, opsReview)
+      : null;
+  const markCrewAcknowledgedWithId = markCrewAcknowledged.bind(null, trip.id);
+  const markReadyForReleaseWithId = markReadyForRelease.bind(null, trip.id);
+  const markAtAircraftWithId = markAtAircraft.bind(null, trip.id);
+  const markDepartedWithId = markDeparted.bind(null, trip.id);
+  const markLandedWithId = markLanded.bind(null, trip.id);
+
+  // "Flagged if released [sitting in Ready for Release] and the flight
+  // hasn't entered Preflight 45 minutes prior to departure" — per the
+  // operator's own spec. Computed live rather than stored, so it's always
+  // accurate to the current time regardless of when the page loads.
+  const firstLeg = legs[0];
+  const firstLegDeparture =
+    firstLeg?.date && !firstLeg.depTimeTBD && firstLeg.depTime
+      ? departureInstantUtc(firstLeg.date, firstLeg.depTime, airportByIcao[firstLeg.depAirport ?? ""]?.timezone)
+      : null;
+  const minutesToDeparture = firstLegDeparture
+    ? (firstLegDeparture.getTime() - new Date().getTime()) / 60000
+    : null;
+  const releaseFlagged =
+    trip.status === "ready_for_release" && minutesToDeparture !== null && minutesToDeparture <= RELEASE_FLAG_MINUTES;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
@@ -589,7 +686,7 @@ export default async function TripDetailPage({
                 opsReview.passed ? "bg-accent/10 text-accent" : "bg-destructive/10 text-destructive"
               )}
             >
-              {opsReview.passed ? "Ops Approved — ready" : "Needs Further Review"}
+              {opsReview.passed ? "Checklist passed" : "Needs Further Review"}
             </span>
           </div>
 
@@ -610,13 +707,136 @@ export default async function TripDetailPage({
               </div>
             ))}
           </div>
+        </div>
+      )}
 
-          <form action={approveWithId} className="mt-4">
-            <Button type="submit" size="sm" disabled={!opsReview.passed}>
-              Approve for Ops
+      {releaseReadiness && (
+        <div className="mt-6 rounded-md border border-border p-4">
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Ready for Release
+            </h2>
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-medium",
+                releaseReadiness.passed ? "bg-accent/10 text-accent" : "bg-destructive/10 text-destructive"
+              )}
+            >
+              {releaseReadiness.passed ? "Ready" : "Not yet"}
+            </span>
+          </div>
+
+          <div className="mt-3 flex flex-col gap-3">
+            {releaseReadiness.checks.map((check) => (
+              <div key={check.label} className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className={check.passed ? "text-accent" : "text-destructive"}>
+                    {check.passed ? "✓" : "✗"}
+                  </span>
+                  <span className="font-medium">{check.label}</span>
+                </div>
+                {check.notes.map((note, i) => (
+                  <p key={i} className="pl-6 text-xs text-muted-foreground">
+                    {note}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 flex items-center gap-2">
+            {!trip.crewAcknowledgedAt && (
+              <form action={markCrewAcknowledgedWithId}>
+                <Button type="submit" size="sm" variant="outline">
+                  Mark Crew Acknowledged
+                </Button>
+              </form>
+            )}
+            <form action={markReadyForReleaseWithId}>
+              <Button type="submit" size="sm" disabled={!releaseReadiness.passed}>
+                Mark Ready for Release
+              </Button>
+            </form>
+          </div>
+          <SavedBanner show={saved === "crew-ack"} message="Crew acknowledgment recorded." />
+          <SavedBanner show={saved === "released"} message="Marked Ready for Release." />
+        </div>
+      )}
+
+      {trip.status === "ready_for_release" && (
+        <div className="mt-6 rounded-md border border-border p-4">
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Release</h2>
+            {releaseFlagged && (
+              <span className="rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
+                {minutesToDeparture !== null && minutesToDeparture >= 0
+                  ? `Departs in ${Math.round(minutesToDeparture)} min — not yet Preflight`
+                  : "Departure has passed — not yet Preflight"}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Stand-in for the crew app marking themselves at the aircraft.
+          </p>
+          <form action={markAtAircraftWithId} className="mt-3">
+            <Button type="submit" size="sm">
+              Mark At Aircraft
             </Button>
           </form>
-          <SavedBanner show={saved === "approved"} message="Approved for Ops." />
+          <SavedBanner show={saved === "preflight"} message="Marked Preflight." />
+        </div>
+      )}
+
+      {trip.status === "pre_flight" && (
+        <div className="mt-6 rounded-md border border-border p-4">
+          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Preflight</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Stand-in for the crew app marking themselves as departing.
+          </p>
+          <form action={markDepartedWithId} className="mt-3">
+            <Button type="submit" size="sm">
+              Mark Departed
+            </Button>
+          </form>
+          <SavedBanner show={saved === "inflight"} message="Marked Inflight." />
+        </div>
+      )}
+
+      {trip.status === "in_flight" && (
+        <div className="mt-6 rounded-md border border-border p-4">
+          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Inflight</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Stand-in for the crew app marking landed and recording block/flight time.
+          </p>
+          <form action={markLandedWithId} className="mt-3 flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Block Time (hrs)
+              </label>
+              <Input name="actualBlockHours" type="number" step="0.1" min="0" className="h-8 w-32 text-sm" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Flight Time (hrs)
+              </label>
+              <Input name="actualFlightHours" type="number" step="0.1" min="0" className="h-8 w-32 text-sm" />
+            </div>
+            <Button type="submit" size="sm">
+              Mark Landed
+            </Button>
+          </form>
+          <SavedBanner show={saved === "landed"} message="Marked Landed." />
+        </div>
+      )}
+
+      {trip.status === "completed" && (trip.actualBlockHours || trip.actualFlightHours) && (
+        <div className="mt-6 rounded-md border border-border p-4 text-sm">
+          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Landed</h2>
+          <p className="mt-1 text-muted-foreground">
+            {trip.actualBlockHours ? `Block: ${trip.actualBlockHours.toFixed(1)} hrs` : null}
+            {trip.actualBlockHours && trip.actualFlightHours ? " · " : null}
+            {trip.actualFlightHours ? `Flight: ${trip.actualFlightHours.toFixed(1)} hrs` : null}
+          </p>
         </div>
       )}
 
