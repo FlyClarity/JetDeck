@@ -3342,3 +3342,32 @@ editable, same as the Quote Builder's own flight-time field.
   flight time via `addHoursAcrossTimezones` (timezone-aware) — that
   part of the previous round stands; only where flightHours itself
   comes from changed.
+
+## Real bug: duty-time engine merged a whole round trip into one 7-day duty period
+
+User: "the system is not looking at crew duty correctly, it is
+batching an entire round trip into one duty day that spans 7 days."
+Correct — `computeDutyPeriod` folded every revenue leg in the
+itinerary into one min-departure-to-max-arrival span regardless of how
+many days apart they were, so a Monday-out/Sunday-back round trip
+became a single supposed "duty period" spanning nearly a week. Obviously
+wrong — the crew is off duty (home, resting) in the days between, not
+continuously on the clock.
+
+- ~~**`computeDutyPeriod` → `computeDutyPeriods`, now clusters legs
+  into separate duty periods — fixed**~~ (`lib/duty-time.ts`): legs
+  sort by departure time and split into a new duty period whenever the
+  gap since the previous leg's arrival is >=6 hours
+  (`SAME_DUTY_PERIOD_GAP_HOURS`) — comfortably longer than a normal
+  connection/turn, comfortably shorter than the 10-hour rest minimum
+  itself. There's no FAR-defined "still the same duty period" gap —
+  this is a deliberate schedule-only heuristic standing in for whether
+  a real rest period was actually given, documented as such in code.
+- ~~**`lib/ops-review.ts` checks every one of a trip's duty periods
+  independently — fixed**~~: a multi-period trip gets each period
+  checked against flight-time/duty-length limits and rest before/
+  after separately (day-labeled in the notes when there's more than
+  one), including rest between the trip's *own* other periods — a
+  round trip split close enough to land as two periods but still short
+  of real rest previously only ever got compared against unrelated
+  other trips and never against itself.

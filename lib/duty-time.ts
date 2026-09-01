@@ -26,47 +26,85 @@ const RELEASE_BUFFER_MIN = 60;
 const MAX_DUTY_PERIOD_HOURS = 14;
 const MIN_REST_HOURS = 10;
 
+// How long a gap between one leg's arrival and the next leg's departure
+// has to be before it counts as a break between two separate duty
+// periods, rather than just ground time within the same one (a normal
+// turn, a same-day layover). FAR doesn't define this threshold — whether
+// a real rest period was given is an operational fact, not something
+// derivable purely from a schedule — so this is a deliberate heuristic:
+// comfortably longer than any ordinary connection, comfortably shorter
+// than the 10-hour minimum rest requirement itself (a gap that size or
+// larger is unambiguously a break either way).
+const SAME_DUTY_PERIOD_GAP_HOURS = 6;
+
 export type DutyPeriod = {
   start: Date;
   end: Date;
   flightHours: number;
 };
 
+// A trip's revenue legs split into one duty period per cluster of legs
+// close together in time — a same-day multi-stop trip (or a late-night-
+// to-early-morning connection) is one duty period; a round trip with
+// days between the outbound and return legs is two. The earlier version
+// of this folded every leg in the itinerary into a single min-departure-
+// to-max-arrival span regardless of how far apart they were, which
+// turned a week-apart round trip into one supposed multi-day duty
+// period — obviously wrong, since the crew is off duty (and presumably
+// resting/home) in between, not continuously on the clock.
+//
 // Arrival is derived from departure + flight time rather than the leg's
 // own arrTime/arrival timezone — StoredLeg doesn't persist which calendar
 // day an overnight arrival lands on, so recomputing from flight duration
 // (which is already timezone-independent) is more reliable than trusting
 // a stored arrTime string with no day-offset attached.
-export function computeDutyPeriod(
+export function computeDutyPeriods(
   itinerary: unknown,
   timezoneByIcao: Record<string, string | null | undefined>
-): DutyPeriod | null {
+): DutyPeriod[] {
   const legs = revenueLegsOf(itinerary);
-  if (legs.length === 0) return null;
+  if (legs.length === 0) return [];
 
-  let earliestStart: Date | null = null;
-  let latestEnd: Date | null = null;
-  let flightHours = 0;
-
+  const spans: { dep: Date; arr: Date; flightHours: number }[] = [];
   for (const leg of legs) {
-    if (!leg.date || leg.depTimeTBD || !leg.depTime) return null;
+    if (!leg.date || leg.depTimeTBD || !leg.depTime) return [];
     const depTz = leg.depAirport ? timezoneByIcao[leg.depAirport] : null;
     const dep = departureInstantUtc(leg.date, leg.depTime, depTz);
-    if (!dep) return null;
+    if (!dep) return [];
 
-    const hours = leg.flightHours ?? 0;
-    const arr = new Date(dep.getTime() + hours * 3600000);
-    if (!earliestStart || dep < earliestStart) earliestStart = dep;
-    if (!latestEnd || arr > latestEnd) latestEnd = arr;
-    flightHours += hours;
+    const flightHours = leg.flightHours ?? 0;
+    spans.push({ dep, arr: new Date(dep.getTime() + flightHours * 3600000), flightHours });
   }
-  if (!earliestStart || !latestEnd) return null;
+  spans.sort((a, b) => a.dep.getTime() - b.dep.getTime());
 
-  return {
-    start: new Date(earliestStart.getTime() - REPORT_BUFFER_MIN * 60000),
-    end: new Date(latestEnd.getTime() + RELEASE_BUFFER_MIN * 60000),
-    flightHours,
+  const periods: DutyPeriod[] = [];
+  let clusterStart = spans[0].dep;
+  let clusterEnd = spans[0].arr;
+  let clusterFlightHours = spans[0].flightHours;
+
+  const closeCluster = () => {
+    periods.push({
+      start: new Date(clusterStart.getTime() - REPORT_BUFFER_MIN * 60000),
+      end: new Date(clusterEnd.getTime() + RELEASE_BUFFER_MIN * 60000),
+      flightHours: clusterFlightHours,
+    });
   };
+
+  for (let i = 1; i < spans.length; i++) {
+    const gapHours = (spans[i].dep.getTime() - clusterEnd.getTime()) / 3600000;
+    if (gapHours >= SAME_DUTY_PERIOD_GAP_HOURS) {
+      closeCluster();
+      clusterStart = spans[i].dep;
+      clusterEnd = spans[i].arr;
+      clusterFlightHours = spans[i].flightHours;
+    } else {
+      if (spans[i].arr > clusterEnd) clusterEnd = spans[i].arr;
+      clusterFlightHours += spans[i].flightHours;
+    }
+  }
+  closeCluster();
+
+  return periods;
 }
 
 export type DutyComplianceIssue =

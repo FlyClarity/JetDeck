@@ -6,7 +6,7 @@
 // apart.
 import { prisma } from "@/lib/prisma";
 import { revenueLegsOf, legDateIso, findConflictingBooking } from "@/lib/itinerary";
-import { computeDutyPeriod, checkDutyCompliance, dutyComplianceIssueLabel } from "@/lib/duty-time";
+import { computeDutyPeriods, checkDutyCompliance, dutyComplianceIssueLabel } from "@/lib/duty-time";
 import { PILOT_ROLES, crewQualificationStatus, QUALIFICATION_STATUS_LABELS } from "@/lib/crew";
 import { resolveAirportTimezone } from "@/lib/geo";
 
@@ -144,9 +144,13 @@ export async function evaluateOpsReview(tripId: string, operatorId: string): Pro
     airportRows.map((a) => [a.icao, resolveAirportTimezone(a.timezone, a.lat, a.lon)])
   );
 
-  const thisDuty = computeDutyPeriod(itinerary, tzByIcao);
+  // A trip's own legs can split into more than one duty period (e.g. a
+  // round trip with days between the outbound and return legs) — each
+  // one is checked independently, since they're separate days of flying
+  // with rest in between, not one continuous multi-day duty period.
+  const thisDutyPeriods = computeDutyPeriods(itinerary, tzByIcao);
   const dutyNotes: string[] = [];
-  if (!thisDuty) {
+  if (thisDutyPeriods.length === 0) {
     dutyNotes.push("Can't verify — one or more legs is missing a departure date/time.");
   } else {
     // A flight crewmember qualified under this part flying alongside
@@ -154,18 +158,36 @@ export async function evaluateOpsReview(tripId: string, operatorId: string): Pro
     // else (solo, or more crew than that) defaults to the stricter 1-pilot
     // cap, since §135.269's 3/4-pilot provisions aren't implemented here.
     const pilotCount = pilots.length === 2 ? 2 : 1;
+    const multiDay = thisDutyPeriods.length > 1;
     for (const p of pilots) {
       const others = otherAssignmentsByPilot.get(p.crewId) ?? [];
-      const otherDutyPeriods = others
-        .map((a) => {
-          const dp = computeDutyPeriod(a.trip.quote.selectedOption?.itinerary, tzByIcao);
-          return dp ? { tripId: a.tripId, start: dp.start, end: dp.end } : null;
-        })
-        .filter((d): d is { tripId: string; start: Date; end: Date } => Boolean(d));
+      const otherTripDutyPeriods = others.flatMap((a) =>
+        computeDutyPeriods(a.trip.quote.selectedOption?.itinerary, tzByIcao).map((dp) => ({
+          tripId: a.tripId,
+          start: dp.start,
+          end: dp.end,
+        }))
+      );
 
-      const dutyIssues = checkDutyCompliance(thisDuty, pilotCount, otherDutyPeriods);
-      for (const issue of dutyIssues) {
-        dutyNotes.push(`${p.crew.name}: ${dutyComplianceIssueLabel(issue)}`);
+      for (let i = 0; i < thisDutyPeriods.length; i++) {
+        const period = thisDutyPeriods[i];
+        // Rest between this trip's own other duty periods matters too —
+        // a round trip split close enough to land as two periods (but
+        // still short of real rest) would otherwise only ever get
+        // compared against unrelated other trips and never against
+        // itself.
+        const sameTripOtherPeriods = thisDutyPeriods
+          .filter((_, j) => j !== i)
+          .map((dp) => ({ tripId, start: dp.start, end: dp.end }));
+
+        const dutyIssues = checkDutyCompliance(period, pilotCount, [
+          ...otherTripDutyPeriods,
+          ...sameTripOtherPeriods,
+        ]);
+        const dayLabel = multiDay ? ` (${period.start.toISOString().slice(0, 10)})` : "";
+        for (const issue of dutyIssues) {
+          dutyNotes.push(`${p.crew.name}${dayLabel}: ${dutyComplianceIssueLabel(issue)}`);
+        }
       }
     }
   }
