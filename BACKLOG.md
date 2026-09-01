@@ -3417,3 +3417,24 @@ friction/mistakes on the ops side.
   confirms the click registered. This is the first page of what the
   operator asked for "across the app" — rolling the same pattern out
   everywhere else is real remaining work, not done yet.
+
+## Brokered trips: no compliance checks, free-text crew
+
+Operator: "for brokered flights and broker users there should not be
+compliance, crew assignment should just be typable fields." Correct —
+a brokered aircraft flies with the source operator's own crew, not
+this operator's roster, so checking JetDeck's own crew qualification/
+duty-time rules against it was checking the wrong people entirely
+(and a pure broker operator, with no owned fleet, is *always*
+brokered — the same fix covers both cases without a separate
+operatorType branch).
+
+- ~~**`evaluateOpsReview` skips crew/duty-time checks for brokered
+  trips — fixed**~~: short-circuits to a single informational "Crew"
+  check (passed, with a note) whenever `fleetSource === "brokered"` —
+  mirrors the existing brokered exemption already in place for the
+  Aircraft Availability check.
+- ~~**Free-text crew field for brokered trips — shipped**~~: new
+  `Trip.crewNotes` — for a brokered trip, the ops Crew section shows a
+  plain textarea instead of the CrewMember assign/unassign picker,
+  since there's no real roster entry for a source operator's pilots.

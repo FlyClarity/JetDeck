@@ -100,6 +100,21 @@ export async function evaluateOpsReview(tripId: string, operatorId: string): Pro
     checks.push({ label: "Aircraft Availability", passed: notes.length === 0, notes });
   }
 
+  // Brokered trips fly with the source operator's own crew, not this
+  // operator's roster — there's nothing here to check qualification or
+  // duty-time compliance against, and doing so would be checking the
+  // wrong people entirely. Compliance is the source operator's
+  // responsibility; ops just records who's flying as free text
+  // (Trip.crewNotes) instead of a real CrewMember assignment.
+  if (trip.quote.selectedOption?.fleetSource === "brokered") {
+    checks.push({
+      label: "Crew",
+      passed: true,
+      notes: ["Brokered aircraft — crew is the source operator's own; not tracked or checked here."],
+    });
+    return { passed: checks.every((c) => c.passed), checks };
+  }
+
   // --- Crew qualification ---
   const pilots = trip.crewAssignments.filter((a) => PILOT_ROLES.includes(a.crew.role));
   if (pilots.length === 0) {

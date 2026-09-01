@@ -14,6 +14,7 @@ import { PassengerForm } from "@/components/manifest/passenger-form";
 import { evaluateOpsReview } from "@/lib/ops-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { ConfirmSubmitButton } from "@/components/ui/confirm-submit-button";
 import { SavedBanner } from "@/components/ui/saved-banner";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
@@ -378,6 +379,24 @@ async function unassignCrew(tripId: string, assignmentId: string) {
   }
 
   revalidatePath(`/ops/trips/${tripId}`);
+}
+
+// Brokered trips fly with the source operator's own crew — there's no
+// CrewMember row to assign and no compliance to check (see
+// evaluateOpsReview's brokered short-circuit), so this is just a plain
+// note ops can type into, not a real assignment.
+async function updateCrewNotes(tripId: string, formData: FormData) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+
+  await prisma.trip.update({
+    where: { id: tripId },
+    data: { crewNotes: String(formData.get("crewNotes") ?? "").trim() || null },
+  });
+
+  redirect(`/ops/trips/${tripId}?saved=crew`);
 }
 
 // Re-verifies the Ops Review checklist server-side before actually
@@ -808,53 +827,76 @@ export default async function TripDetailPage({
 
       <div className="mt-6 rounded-md border border-border p-4">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Crew</h2>
-        {trip.crewAssignments.length === 0 ? (
-          <p className="mt-2 text-sm text-muted-foreground">No crew assigned yet.</p>
+        {trip.quote.selectedOption?.fleetSource === "brokered" ? (
+          <>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Brokered aircraft — crew is the source operator&apos;s own, not tracked on this roster or
+              checked for compliance. Just a note for reference.
+            </p>
+            <form action={updateCrewNotes.bind(null, trip.id)} className="mt-3 flex flex-col gap-2">
+              <Textarea
+                name="crewNotes"
+                rows={2}
+                placeholder="e.g. Capt. Jane Smith, FO John Doe — East Coast Jets"
+                defaultValue={trip.crewNotes ?? ""}
+              />
+              <Button type="submit" size="sm" variant="outline" className="self-start">
+                Save
+              </Button>
+            </form>
+            <SavedBanner show={saved === "crew"} message="Crew note saved." />
+          </>
         ) : (
-          <div className="mt-2 flex flex-col gap-2">
-            {trip.crewAssignments.map((a) => {
-              const unassignWithIds = unassignCrew.bind(null, trip.id, a.id);
-              return (
-                <div key={a.id} className="flex items-center justify-between gap-3 text-sm">
-                  <span>
-                    {a.crew.name} <span className="text-muted-foreground">({crewRoleLabel(a.roleOnTrip)})</span>
-                  </span>
-                  <form action={unassignWithIds}>
-                    <Button type="submit" size="sm" variant="ghost">
-                      Remove
-                    </Button>
-                  </form>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {availableCrew.length > 0 ? (
-          <form action={assignWithId} className="mt-3 flex items-center gap-2">
-            <Select name="crewId">
-              <SelectTrigger className="w-64 overflow-hidden">
-                <SelectValue placeholder="Select crew member" className="min-w-0 flex-1 truncate" />
-              </SelectTrigger>
-              <SelectContent>
-                {availableCrew.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name} ({crewRoleLabel(c.role)})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button type="submit" size="sm" variant="outline">
-              Assign
-            </Button>
-          </form>
-        ) : (
-          <p className="mt-3 text-xs text-muted-foreground">
-            {trip.crewAssignments.length === 0 ? "No" : "No more"} active crew available to assign —{" "}
-            <Link href="/ops/crew/new" className="underline underline-offset-4">
-              add crew
-            </Link>
-            .
-          </p>
+          <>
+            {trip.crewAssignments.length === 0 ? (
+              <p className="mt-2 text-sm text-muted-foreground">No crew assigned yet.</p>
+            ) : (
+              <div className="mt-2 flex flex-col gap-2">
+                {trip.crewAssignments.map((a) => {
+                  const unassignWithIds = unassignCrew.bind(null, trip.id, a.id);
+                  return (
+                    <div key={a.id} className="flex items-center justify-between gap-3 text-sm">
+                      <span>
+                        {a.crew.name} <span className="text-muted-foreground">({crewRoleLabel(a.roleOnTrip)})</span>
+                      </span>
+                      <form action={unassignWithIds}>
+                        <Button type="submit" size="sm" variant="ghost">
+                          Remove
+                        </Button>
+                      </form>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {availableCrew.length > 0 ? (
+              <form action={assignWithId} className="mt-3 flex items-center gap-2">
+                <Select name="crewId">
+                  <SelectTrigger className="w-64 overflow-hidden">
+                    <SelectValue placeholder="Select crew member" className="min-w-0 flex-1 truncate" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableCrew.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name} ({crewRoleLabel(c.role)})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button type="submit" size="sm" variant="outline">
+                  Assign
+                </Button>
+              </form>
+            ) : (
+              <p className="mt-3 text-xs text-muted-foreground">
+                {trip.crewAssignments.length === 0 ? "No" : "No more"} active crew available to assign —{" "}
+                <Link href="/ops/crew/new" className="underline underline-offset-4">
+                  add crew
+                </Link>
+                .
+              </p>
+            )}
+          </>
         )}
       </div>
 
