@@ -3571,3 +3571,23 @@ signal of whether the form was currently dirty.
   `SavedBanner`/`ConfirmSubmitButton` pass — these were the forms
   touched by this round's other changes, not a full-app sweep.
   Everywhere else keeps its existing plain submit button for now.
+
+## Editable message when sending the itinerary
+
+Operator: "can we edit the email body directly then and there in case
+we need to add a note?" The send-itinerary action previously fired a
+fixed HTML email with no way to say anything extra without leaving
+JetDeck and emailing the client separately.
+
+- ~~**Message textarea on the Send Itinerary form — shipped**~~
+  (`app/(ops)/ops/trips/[id]/page.tsx`): pre-filled with the same
+  sentence the email used to hardcode ("Here's your itinerary for
+  {tripNumber} ({route}).") so sending with no edits looks identical
+  to before — but it's now a real field ops can rewrite or add a note
+  to right there before confirming. The greeting, itinerary link, and
+  operator sign-off stay fixed structurally around it (not exposed as
+  raw HTML) so a typo can't break the actual link the client needs.
+  Free-typed multi-line input is now landing in an email body for the
+  first time in this app, so it's HTML-escaped and newline-converted
+  (`escapeHtml` in the same file) rather than interpolated verbatim
+  the way this file's other, non-free-typed email fields are.

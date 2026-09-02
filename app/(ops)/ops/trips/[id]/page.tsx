@@ -14,6 +14,7 @@ import { PassengerForm } from "@/components/manifest/passenger-form";
 import { evaluateOpsReview, evaluateReleaseReadiness, evaluateBrokeredReleaseReadiness } from "@/lib/ops-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { ConfirmSubmitButton } from "@/components/ui/confirm-submit-button";
 import { SaveButton } from "@/components/ui/save-button";
 import { SavedBanner } from "@/components/ui/saved-banner";
@@ -297,13 +298,36 @@ async function addPassengerOps(tripId: string) {
   revalidatePath(`/ops/trips/${tripId}`);
 }
 
+// Default wording for the editable message paragraph below — shown as the
+// textarea's placeholder-via-defaultValue so ops sees exactly what would
+// send if they touch nothing, and can tweak it (add a note, adjust the
+// tone) right there before sending rather than only after the fact.
+function defaultItineraryMessage(tripNumber: string, routeText: string) {
+  return `Here's your itinerary for ${tripNumber}${routeText ? ` (${routeText})` : ""}.`;
+}
+
+// Free-typed, multi-line ops input landing straight in an HTML email —
+// unlike every other interpolated value here (names, trip numbers), this
+// one isn't just an internal record whose shape is already known, so it's
+// escaped and newline-converted rather than trusted verbatim the way the
+// rest of this file's email bodies are.
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br />");
+}
+
 // On-demand, resendable any time — unlike the one-time automatic booking
 // confirmation (sendBookingConfirmationEmail), this is how ops gets a
 // fresh, polished copy of the itinerary into the client's inbox whenever
 // it changes (FBOs added, times adjusted) or the original email never
 // reached them. Links to the same /q/[token] page the client already
-// uses, which always reflects the trip's current state.
-async function sendItinerary(tripId: string) {
+// uses, which always reflects the trip's current state. The message
+// paragraph is ops-editable at send time (defaultItineraryMessage above is
+// just what's pre-filled) so a one-off note doesn't need its own field.
+async function sendItinerary(tripId: string, formData: FormData) {
   "use server";
 
   const scoped = await getScopedTrip(tripId);
@@ -321,10 +345,13 @@ async function sendItinerary(tripId: string) {
   const appUrl = await getAppUrl();
   const quoteLink = `${appUrl}/q/${trip.quote.token}`;
 
+  const message =
+    String(formData.get("message") ?? "").trim() || defaultItineraryMessage(trip.tripNumber, routeText);
+
   await sendEmail({
     to: requestorEmail,
     subject: `Your Itinerary — ${trip.tripNumber}${routeText ? ` (${routeText})` : ""}`,
-    html: `<p>Hi ${requestorName},</p><p>Here's your itinerary for ${trip.tripNumber}: <a href="${quoteLink}">View Your Itinerary</a></p><p>— ${operator.name}</p>`,
+    html: `<p>Hi ${requestorName},</p><p>${escapeHtml(message)}</p><p><a href="${quoteLink}">View Your Itinerary</a></p><p>— ${operator.name}</p>`,
     replyTo: operator.replyToEmail ?? undefined,
     bcc: operator.replyToEmail ?? undefined,
     from: operator.fromEmail,
@@ -528,6 +555,7 @@ export default async function TripDetailPage({
   const { trip } = scoped;
 
   const legs = revenueLegsOf(trip.quote.selectedOption?.itinerary);
+  const routeText = legs.length ? `${legs[0].depAirport} → ${legs[legs.length - 1].arrAirport}` : "";
   const legsIndexed = revenueLegsWithIndex(trip.quote.selectedOption?.itinerary);
   // Only worth asking "which legs" when there's more than one — mirrors
   // the same computation on /manifest/[token].
@@ -918,20 +946,36 @@ export default async function TripDetailPage({
       )}
 
       <div className="mt-6 rounded-md border border-border p-4">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>
-          {trip.quote.tripRequest?.requestorEmail && (
-            <form action={sendItinerary.bind(null, trip.id)}>
-              <ConfirmSubmitButton
-                size="sm"
-                variant="outline"
-                confirmMessage={`Send the itinerary to ${trip.quote.tripRequest.requestorEmail}? This emails the client right away.`}
-              >
-                Send Itinerary to Client
-              </ConfirmSubmitButton>
-            </form>
-          )}
-        </div>
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Itinerary</h2>
+
+        {trip.quote.tripRequest?.requestorEmail && (
+          <form
+            action={sendItinerary.bind(null, trip.id)}
+            className="mt-3 flex flex-col gap-2 rounded-md border border-border/70 p-3"
+          >
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Message to {trip.quote.tripRequest.requestorEmail}
+            </p>
+            <Textarea
+              name="message"
+              rows={2}
+              defaultValue={defaultItineraryMessage(trip.tripNumber, routeText)}
+              className="text-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              The itinerary link and your sign-off are added automatically — edit the note above if you
+              need to call something out.
+            </p>
+            <ConfirmSubmitButton
+              size="sm"
+              variant="outline"
+              className="self-start"
+              confirmMessage={`Send the itinerary to ${trip.quote.tripRequest.requestorEmail}? This emails the client right away.`}
+            >
+              Send Itinerary to Client
+            </ConfirmSubmitButton>
+          </form>
+        )}
         <SavedBanner show={saved === "itinerary-sent"} message="Itinerary sent to client." />
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 p-3">
