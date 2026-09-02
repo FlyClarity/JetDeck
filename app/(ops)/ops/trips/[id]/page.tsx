@@ -7,15 +7,15 @@ import { sendEmail } from "@/lib/email";
 import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
 import { resolveAirportTimezone } from "@/lib/geo";
 import { addHoursAcrossTimezones, departureInstantUtc, to12Hour, tzAbbreviation } from "@/lib/time";
-import { STATUS_LABELS, STATUS_SHORT_LABELS, TRIP_STAGES, isTripPaid } from "@/lib/trip";
+import { STATUS_LABELS, STATUS_SHORT_LABELS, stagesForFleetSource, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
 import { createManifestForTrip, applyPassengerFormUpdate } from "@/lib/manifest";
 import { PassengerForm } from "@/components/manifest/passenger-form";
-import { evaluateOpsReview, evaluateReleaseReadiness } from "@/lib/ops-review";
+import { evaluateOpsReview, evaluateReleaseReadiness, evaluateBrokeredReleaseReadiness } from "@/lib/ops-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { ConfirmSubmitButton } from "@/components/ui/confirm-submit-button";
+import { SaveButton } from "@/components/ui/save-button";
 import { SavedBanner } from "@/components/ui/saved-banner";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import {
@@ -391,9 +391,9 @@ async function unassignCrew(tripId: string, assignmentId: string) {
 
 // Brokered trips fly with the source operator's own crew — there's no
 // CrewMember row to assign and no compliance to check (see
-// evaluateOpsReview's brokered short-circuit), so this is just a plain
-// note ops can type into, not a real assignment.
-async function updateCrewNotes(tripId: string, formData: FormData) {
+// evaluateOpsReview's brokered short-circuit), so these are just plain
+// free-typed names, not a real assignment.
+async function updateBrokeredCrew(tripId: string, formData: FormData) {
   "use server";
 
   const scoped = await getScopedTrip(tripId);
@@ -401,7 +401,11 @@ async function updateCrewNotes(tripId: string, formData: FormData) {
 
   await prisma.trip.update({
     where: { id: tripId },
-    data: { crewNotes: String(formData.get("crewNotes") ?? "").trim() || null },
+    data: {
+      brokeredCaptainName: String(formData.get("brokeredCaptainName") ?? "").trim() || null,
+      brokeredCoPilotName: String(formData.get("brokeredCoPilotName") ?? "").trim() || null,
+      brokeredCabinHostName: String(formData.get("brokeredCabinHostName") ?? "").trim() || null,
+    },
   });
 
   redirect(`/ops/trips/${tripId}?saved=crew`);
@@ -443,6 +447,25 @@ async function markReadyForRelease(tripId: string) {
 
   await prisma.trip.update({ where: { id: tripId }, data: { status: "ready_for_release" } });
   redirect(`/ops/trips/${tripId}?saved=released`);
+}
+
+// Brokered equivalent of markReadyForRelease above — moves straight to the
+// brokered pipeline's terminal stage instead, since there's no
+// Preflight/Inflight/Landed to track once JetDeck's handed the itinerary
+// off (see evaluateBrokeredReleaseReadiness for what actually gates this).
+async function markReleasedBrokered(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+  if (scoped.trip.status !== "ops_review") return;
+
+  const opsReview = await evaluateOpsReview(tripId, scoped.operator.id);
+  const result = await evaluateBrokeredReleaseReadiness(tripId, scoped.operator.id, opsReview);
+  if (!result.passed) return;
+
+  await prisma.trip.update({ where: { id: tripId }, data: { status: "released_brokered" } });
+  redirect(`/ops/trips/${tripId}?saved=released-brokered`);
 }
 
 // The remaining three stages are each a crew-app event in the operator's
@@ -578,21 +601,30 @@ export default async function TripDetailPage({
         ).map((a) => ({ id: a.id, label: `${a.tailNumber} — ${a.make} ${a.model}` }));
 
   const paid = isTripPaid(trip.quote);
-  const stageIndex = TRIP_STAGES.findIndex((s) => s === trip.status);
+  // Each fleetSource steps through its own (differently-lengthed) stage
+  // list — see stagesForFleetSource — so the stepper only ever shows the
+  // stages this particular trip can actually pass through.
+  const tripStages = stagesForFleetSource(fleetSource);
+  const stageIndex = tripStages.findIndex((s) => s === trip.status);
 
   // The checklist only matters before the trip has actually reached Ready
-  // for Release — once past that gate, it stays there (nothing here
-  // re-litigates it if, say, a crew member's medical lapses afterward;
-  // that's the future crew compliance dashboard's job, not this one-time
-  // gate).
+  // for Release/Released (Brokered) — once past that gate, it stays there
+  // (nothing here re-litigates it if, say, a crew member's medical lapses
+  // afterward; that's the future crew compliance dashboard's job, not this
+  // one-time gate).
   const showOpsReview = ["confirmed", "ops_review"].includes(trip.status);
   const opsReview = showOpsReview ? await evaluateOpsReview(trip.id, scoped.operator.id) : null;
   const releaseReadiness =
-    trip.status === "ops_review" && opsReview
+    trip.status === "ops_review" && opsReview && fleetSource !== "brokered"
       ? await evaluateReleaseReadiness(trip.id, scoped.operator.id, opsReview)
+      : null;
+  const brokeredReleaseReadiness =
+    trip.status === "ops_review" && opsReview && fleetSource === "brokered"
+      ? await evaluateBrokeredReleaseReadiness(trip.id, scoped.operator.id, opsReview)
       : null;
   const markCrewAcknowledgedWithId = markCrewAcknowledged.bind(null, trip.id);
   const markReadyForReleaseWithId = markReadyForRelease.bind(null, trip.id);
+  const markReleasedBrokeredWithId = markReleasedBrokered.bind(null, trip.id);
   const markAtAircraftWithId = markAtAircraft.bind(null, trip.id);
   const markDepartedWithId = markDeparted.bind(null, trip.id);
   const markLandedWithId = markLanded.bind(null, trip.id);
@@ -638,7 +670,7 @@ export default async function TripDetailPage({
 
       {stageIndex !== -1 && (
         <div className="mt-6 flex items-start">
-          {TRIP_STAGES.map((stage, i) => {
+          {tripStages.map((stage, i) => {
             const isDone = stageIndex > i;
             const isCurrent = stageIndex === i;
             return (
@@ -665,7 +697,7 @@ export default async function TripDetailPage({
                     {STATUS_LABELS[stage]}
                   </span>
                 </div>
-                {i < TRIP_STAGES.length - 1 && (
+                {i < tripStages.length - 1 && (
                   <div className={cn("mb-4 h-px flex-1", isDone ? "bg-primary" : "bg-border")} />
                 )}
               </div>
@@ -760,6 +792,51 @@ export default async function TripDetailPage({
           </div>
           <SavedBanner show={saved === "crew-ack"} message="Crew acknowledgment recorded." />
           <SavedBanner show={saved === "released"} message="Marked Ready for Release." />
+        </div>
+      )}
+
+      {brokeredReleaseReadiness && (
+        <div className="mt-6 rounded-md border border-border p-4">
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Released (Brokered)
+            </h2>
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-medium",
+                brokeredReleaseReadiness.passed ? "bg-accent/10 text-accent" : "bg-destructive/10 text-destructive"
+              )}
+            >
+              {brokeredReleaseReadiness.passed ? "Ready" : "Not yet"}
+            </span>
+          </div>
+
+          <div className="mt-3 flex flex-col gap-3">
+            {brokeredReleaseReadiness.checks.map((check) => (
+              <div key={check.label} className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className={check.passed ? "text-accent" : "text-destructive"}>
+                    {check.passed ? "✓" : "✗"}
+                  </span>
+                  <span className="font-medium">{check.label}</span>
+                </div>
+                {check.notes.map((note, i) => (
+                  <p key={i} className="pl-6 text-xs text-muted-foreground">
+                    {note}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 flex items-center gap-2">
+            <form action={markReleasedBrokeredWithId}>
+              <Button type="submit" size="sm" disabled={!brokeredReleaseReadiness.passed}>
+                Mark Released (Brokered)
+              </Button>
+            </form>
+          </div>
+          <SavedBanner show={saved === "released-brokered"} message="Marked Released (Brokered)." />
         </div>
       )}
 
@@ -1025,9 +1102,9 @@ export default async function TripDetailPage({
               </div>
             </div>
           ))}
-          <Button type="submit" size="sm" className="self-start">
+          <SaveButton size="sm" className="self-start">
             Save Itinerary
-          </Button>
+          </SaveButton>
         </form>
         <SavedBanner show={saved === "itinerary"} message="Itinerary saved." />
 
@@ -1051,20 +1128,26 @@ export default async function TripDetailPage({
           <>
             <p className="mt-1 text-xs text-muted-foreground">
               Brokered aircraft — crew is the source operator&apos;s own, not tracked on this roster or
-              checked for compliance. Just a note for reference.
+              checked for compliance. Just free-typed names for reference.
             </p>
-            <form action={updateCrewNotes.bind(null, trip.id)} className="mt-3 flex flex-col gap-2">
-              <Textarea
-                name="crewNotes"
-                rows={2}
-                placeholder="e.g. Capt. Jane Smith, FO John Doe — East Coast Jets"
-                defaultValue={trip.crewNotes ?? ""}
-              />
-              <Button type="submit" size="sm" variant="outline" className="self-start">
-                Save
-              </Button>
+            <form action={updateBrokeredCrew.bind(null, trip.id)} className="mt-3 flex flex-col gap-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Captain</p>
+                  <Input name="brokeredCaptainName" defaultValue={trip.brokeredCaptainName ?? ""} className="h-8 text-sm" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Co-Pilot</p>
+                  <Input name="brokeredCoPilotName" defaultValue={trip.brokeredCoPilotName ?? ""} className="h-8 text-sm" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Cabin Host</p>
+                  <Input name="brokeredCabinHostName" defaultValue={trip.brokeredCabinHostName ?? ""} className="h-8 text-sm" />
+                </div>
+              </div>
+              <SaveButton size="sm" variant="outline" className="self-start" />
             </form>
-            <SavedBanner show={saved === "crew"} message="Crew note saved." />
+            <SavedBanner show={saved === "crew"} message="Crew names saved." />
           </>
         ) : (
           <>

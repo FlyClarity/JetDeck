@@ -1,7 +1,7 @@
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { SaveButton } from "@/components/ui/save-button";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 
 const ID_TYPES = [
@@ -175,9 +175,7 @@ export function PassengerForm({
           />
         </div>
 
-        <Button type="submit" className="self-start">
-          Save
-        </Button>
+        <SaveButton className="self-start">Save</SaveButton>
       </form>
     </div>
   );

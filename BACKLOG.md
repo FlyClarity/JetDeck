@@ -3492,3 +3492,82 @@ an explicit ops-side "Mark ..." action instead.
   trip detail page and the Ops Board card, batched across all board
   trips in one query rather than N+1. Exact wording and threshold from
   the operator's own spec.
+
+## Brokered trips get their own three-stage pipeline
+
+Operator: "I have changed my mind, brokered aircraft should have the
+following steps: Confirmed -> In Review -> Released (Brokered)."
+Correct call — Preflight/Inflight/Landed are the source operator's own
+concern once JetDeck has handed the itinerary to the client; this
+operator's responsibility as broker ends at release, so tracking
+those three stages for a trip it doesn't operate was tracking the
+wrong thing. Replaces last round's approach (brokered trips sharing
+the owned-fleet six-stage pipeline, just skipping the compliance
+checks).
+
+- ~~**New terminal status `released_brokered` — shipped**~~
+  (`lib/trip.ts`): `TRIP_STAGES` is now a flat seven-entry superset of
+  both pipelines' stages (for the Board's column layout only); a new
+  `stagesForFleetSource(fleetSource)` returns each trip's own — three
+  stages for brokered, the existing six for owned fleet — and drives
+  the trip detail page's progress stepper, so a brokered trip's
+  stepper only ever shows Confirmed / In Review / Released (Brokered)
+  instead of all seven columns. `released_brokered` added to
+  `GATED_STAGES` on the Board, same as `ready_for_release`, so the
+  bare next-arrow still refuses this jump in favor of the named action
+  below.
+- ~~**`evaluateBrokeredReleaseReadiness` — shipped**~~
+  (`lib/ops-review.ts`): the brokered gate is narrower than owned
+  fleet's `evaluateReleaseReadiness` — just the Ops Review checklist
+  and itinerary sent to the client, per the operator's own description
+  of the stage ("all details are confirmed and itinerary has been
+  sent to client"). Payment Secured and Crew Acknowledged aren't part
+  of it — neither was mentioned for this stage, and Crew Acknowledged
+  in particular presumes a crew-app event that doesn't apply to a
+  source operator's own crew. New `markReleasedBrokered` action mirrors
+  `markReadyForRelease`'s pattern (re-verify server-side, never trust
+  the disabled button alone) and a matching "Released (Brokered)"
+  checklist panel on the trip detail page.
+- ~~**Separate free-typed Captain/Co-Pilot/Cabin Host fields — shipped**~~:
+  replaces the single `Trip.crewNotes` blob from last round with three
+  named columns (`brokeredCaptainName`, `brokeredCoPilotName`,
+  `brokeredCabinHostName`) per the operator's explicit request for
+  separate fields. Migration best-effort copies the old blob into
+  Captain before dropping the column. `evaluateOpsReview`'s brokered
+  "Crew" check now surfaces whichever of the three are filled in as
+  informational notes (still not gating — compliance is the source
+  operator's responsibility, not tracked here).
+- ~~**Brokered trips highlighted on the Ops Board — shipped**~~
+  (`app/(ops)/ops/board/page.tsx`): a blue border/tint and "Brokered"
+  badge on the card, distinct from the existing red "flagged"
+  (45-minutes-to-departure) styling — the two never actually collide
+  since a brokered trip can't reach `ready_for_release`, the only
+  status flagging applies to.
+
+## Save buttons reflect saved/unsaved state
+
+Operator: "When a change has been saved, the save button should be
+grayed out to indicate it has been saved. When an unsaved change is
+made, the save button should become active again and the saved flag
+should disappear." A `SavedBanner` toast already existed for
+confirming a save happened, but the button itself gave no ongoing
+signal of whether the form was currently dirty.
+
+- ~~**New `SaveButton` primitive — shipped**~~
+  (`components/ui/save-button.tsx`): starts disabled ("Saved") since
+  nothing's changed yet, flips to enabled the moment any field in its
+  enclosing form changes (listening for bubbled `input`/`change`
+  events rather than tracking each field's state individually), and
+  flips back to disabled once a pending submission actually completes
+  — covers both `redirect()`-based actions (which remount the page,
+  resetting the component naturally) and `revalidatePath()`-only ones
+  (which don't, so the pending-to-idle transition explicitly resets
+  it). Renders a native `<button>` styled with the shared
+  `buttonVariants()` helper rather than the `Button` component itself,
+  since `Button` isn't `forwardRef`-wrapped and this needs a real ref
+  to find its enclosing `<form>`.
+- ~~**Rolled out to the itinerary, brokered crew, and passenger
+  forms — shipped**~~: same partial-rollout pattern as last round's
+  `SavedBanner`/`ConfirmSubmitButton` pass — these were the forms
+  touched by this round's other changes, not a full-app sweep.
+  Everywhere else keeps its existing plain submit button for now.

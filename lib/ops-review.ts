@@ -106,12 +106,21 @@ export async function evaluateOpsReview(tripId: string, operatorId: string): Pro
   // duty-time compliance against, and doing so would be checking the
   // wrong people entirely. Compliance is the source operator's
   // responsibility; ops just records who's flying as free text
-  // (Trip.crewNotes) instead of a real CrewMember assignment.
+  // (Trip.brokeredCaptainName/brokeredCoPilotName/brokeredCabinHostName)
+  // instead of a real CrewMember assignment.
   if (trip.quote.selectedOption?.fleetSource === "brokered") {
+    const names = [
+      trip.brokeredCaptainName && `Captain: ${trip.brokeredCaptainName}`,
+      trip.brokeredCoPilotName && `Co-Pilot: ${trip.brokeredCoPilotName}`,
+      trip.brokeredCabinHostName && `Cabin Host: ${trip.brokeredCabinHostName}`,
+    ].filter((n): n is string => Boolean(n));
     checks.push({
       label: "Crew",
       passed: true,
-      notes: ["Brokered aircraft — crew is the source operator's own; not tracked or checked here."],
+      notes: [
+        "Brokered aircraft — crew is the source operator's own; not tracked or checked here.",
+        ...names,
+      ],
     });
     return { passed: checks.every((c) => c.passed), checks };
   }
@@ -248,6 +257,35 @@ export async function evaluateReleaseReadiness(
       notes: trip.crewAcknowledgedAt
         ? []
         : ["Stand-in for the crew app — mark this once crew has confirmed the trip."],
+    },
+  ];
+
+  return { passed: checks.every((c) => c.passed), checks };
+}
+
+// "Released (Brokered)" is the brokered pipeline's terminal stage — the
+// operator's spec for it only names two things: the Ops Review checklist
+// and the itinerary having gone out to the client. Unlike
+// evaluateReleaseReadiness above, payment and crew acknowledgment aren't
+// part of this gate — the operator didn't ask for them here, and crew
+// acknowledgment in particular presumes a JetDeck crew app event that
+// doesn't apply to a source operator's own crew.
+export async function evaluateBrokeredReleaseReadiness(
+  tripId: string,
+  operatorId: string,
+  opsReview: OpsReviewResult
+): Promise<OpsReviewResult> {
+  const trip = await prisma.trip.findFirst({ where: { id: tripId, operatorId } });
+  if (!trip) {
+    return { passed: false, checks: [{ label: "Trip", passed: false, notes: ["Trip not found."] }] };
+  }
+
+  const checks: OpsReviewCheck[] = [
+    { label: "Ops Review Checklist", passed: opsReview.passed, notes: opsReview.passed ? [] : ["See Ops Review Checklist above."] },
+    {
+      label: "Itinerary Sent",
+      passed: Boolean(trip.itinerarySentAt),
+      notes: trip.itinerarySentAt ? [] : ["Send the itinerary to the client first."],
     },
   ];
 

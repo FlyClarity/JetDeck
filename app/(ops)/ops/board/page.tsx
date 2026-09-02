@@ -19,7 +19,7 @@ const RELEASE_FLAG_MINUTES = 45;
 // next/back arrow, so the arrow explicitly refuses to make any of these
 // jumps rather than silently bypassing whatever that stage's action
 // actually checks or records.
-const GATED_STAGES = new Set(["ready_for_release", "pre_flight", "in_flight", "completed"]);
+const GATED_STAGES = new Set(["ready_for_release", "released_brokered", "pre_flight", "in_flight", "completed"]);
 
 async function moveTripStage(tripId: string, direction: "forward" | "backward") {
   "use server";
@@ -106,9 +106,14 @@ export default async function OpsBoardPage() {
                   const route = firstLeg
                     ? `${firstLeg.depAirport ?? "?"} → ${lastLeg?.arrAirport ?? "?"}`
                     : "Route unknown";
+                  const brokered = t.quote.selectedOption?.fleetSource === "brokered";
                   // A brokered trip has no CrewMember assignment to show —
-                  // fall back to the free-text crew note instead.
-                  const crewNames = t.crewAssignments.map((a) => a.crew.name).join(", ") || t.crewNotes;
+                  // fall back to the free-typed names instead.
+                  const crewNames =
+                    t.crewAssignments.map((a) => a.crew.name).join(", ") ||
+                    [t.brokeredCaptainName, t.brokeredCoPilotName, t.brokeredCabinHostName]
+                      .filter(Boolean)
+                      .join(", ");
                   const moveForward = moveTripStage.bind(null, t.id, "forward");
                   const moveBackward = moveTripStage.bind(null, t.id, "backward");
 
@@ -130,7 +135,11 @@ export default async function OpsBoardPage() {
                       key={t.id}
                       className={cn(
                         "rounded-md border p-3 text-sm",
-                        flagged ? "border-destructive/50 bg-destructive/5" : "border-border"
+                        flagged
+                          ? "border-destructive/50 bg-destructive/5"
+                          : brokered
+                            ? "border-blue-500/40 bg-blue-500/5"
+                            : "border-border"
                       )}
                     >
                       <Link
@@ -139,6 +148,11 @@ export default async function OpsBoardPage() {
                       >
                         {t.tripNumber}
                       </Link>
+                      {brokered && (
+                        <span className="ml-2 rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-600">
+                          Brokered
+                        </span>
+                      )}
                       {flagged && (
                         <span className="ml-2 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
                           Not yet Preflight
