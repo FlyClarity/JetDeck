@@ -1,0 +1,341 @@
+import { prisma } from "@/lib/prisma";
+import type { Aircraft, TripRequest } from "@/lib/generated/prisma/client";
+import { greatCircleDistanceNm, estimateFlightHours } from "@/lib/geo";
+import { resolveAirportCodesToIcao } from "@/lib/airport-server";
+import {
+  buildGapsForAircraft,
+  findFittingGap,
+  getActiveLegsByAircraft,
+  type Gap,
+} from "@/lib/aircraft-schedule";
+
+export type OpportunityScoreResult = {
+  opportunityScore: "high" | "medium" | "low" | "pass";
+  scoreReason: string;
+  positioningNote: string | null;
+  historyNote: string | null;
+  recommendedAction: "quote_now" | "review" | "pass";
+};
+
+type Leg = { depAirport?: string; arrAirport?: string; date?: string };
+
+// Repositioning-time tiers, in estimated flight hours (no block-time buffer
+// added — this is a rough scoring heuristic, not a billing calculation).
+// A 20-minute repo and a 3-hour cross-country repo are not the same
+// opportunity and shouldn't both land in the same bucket. Beyond the medium
+// threshold, the trip auto-passes instead of scoring low (see below).
+const REPO_HIGH_HOURS = 0.75;
+const REPO_MEDIUM_HOURS = 2;
+
+function repoLabel(hours: number): string {
+  const minutes = Math.round(hours * 60);
+  return minutes < 60 ? `${minutes}min` : `${hours.toFixed(1)}hr`;
+}
+
+export async function scoreOpportunity(
+  tripRequestId: string
+): Promise<OpportunityScoreResult> {
+  await prisma.tripRequest.update({
+    where: { id: tripRequestId },
+    data: { status: "scoring" },
+  });
+
+  const tripRequest = await prisma.tripRequest.findUniqueOrThrow({
+    where: { id: tripRequestId },
+  });
+
+  const legs = (tripRequest.legs as Leg[] | null) ?? [];
+  const firstLegRaw = legs[0];
+  const lastLegRaw = legs[legs.length - 1];
+
+  if (!firstLegRaw?.depAirport || !firstLegRaw?.date || !lastLegRaw?.arrAirport || !lastLegRaw?.date) {
+    return finalize(tripRequestId, {
+      opportunityScore: "low",
+      scoreReason: "Trip details incomplete — needs manual review",
+      positioningNote: null,
+      historyNote: null,
+      recommendedAction: "review",
+    });
+  }
+
+  // AI-extracted (and some manually entered) legs sometimes carry the
+  // 3-letter IATA code (e.g. "SAN") instead of the 4-letter ICAO code
+  // ("KSAN") this function and the rest of the app assume. Normalize every
+  // leg's codes (not just the first/last) once here so every lookup and
+  // comparison below just works, including the full-itinerary range check
+  // right after this.
+  const codeMap = await resolveAirportCodesToIcao(
+    legs.flatMap((l) => [l.depAirport, l.arrAirport].filter((c): c is string => Boolean(c)))
+  );
+  const resolve = (code?: string) => (code ? (codeMap[code.toUpperCase()] ?? code) : code);
+  const normalizedLegs = legs.map((l) => ({
+    ...l,
+    depAirport: resolve(l.depAirport),
+    arrAirport: resolve(l.arrAirport),
+  }));
+
+  const firstLeg: Leg = normalizedLegs[0];
+  const lastLeg: Leg = normalizedLegs[normalizedLegs.length - 1];
+
+  const historyNote = await buildHistoryNote(tripRequest);
+
+  const allActive = await prisma.aircraft.findMany({
+    where: { operatorId: tripRequest.operatorId, status: "active" },
+  });
+
+  if (allActive.length === 0) {
+    return finalize(tripRequestId, {
+      opportunityScore: "pass",
+      scoreReason: "No active aircraft in fleet",
+      positioningNote: null,
+      historyNote,
+      recommendedAction: "pass",
+    });
+  }
+
+  // Range is a hard constraint — an aircraft either can physically make the
+  // trip or it can't. Category preference (below) is not, and is no longer
+  // treated like one: a good routing/positioning fit on an off-preference
+  // aircraft can still win the business rather than being passed on outright.
+  // Checked across every leg of the itinerary, not just the first — a
+  // multi-leg trip that's fine outbound but exceeds range on a later leg
+  // needs excluding too, not just ones that fail right out of the gate.
+  const legAirportCodes = [
+    ...new Set(
+      normalizedLegs.flatMap((l) => [l.depAirport, l.arrAirport]).filter((c): c is string => Boolean(c))
+    ),
+  ];
+  const legAirportRows = await prisma.airport.findMany({ where: { icao: { in: legAirportCodes } } });
+  const legAirportByIcao = Object.fromEntries(legAirportRows.map((a) => [a.icao, a]));
+
+  const legDistancesNm = normalizedLegs
+    .map((l) => {
+      if (!l.depAirport || !l.arrAirport) return null;
+      const dep = legAirportByIcao[l.depAirport];
+      const arr = legAirportByIcao[l.arrAirport];
+      return dep && arr ? greatCircleDistanceNm(dep.lat, dep.lon, arr.lat, arr.lon) : null;
+    })
+    .filter((d): d is number => d !== null);
+  const maxLegDistanceNm = legDistancesNm.length > 0 ? Math.max(...legDistancesNm) : null;
+
+  const reachable = allActive.filter(
+    (a) => !a.rangeNm || maxLegDistanceNm === null || a.rangeNm >= maxLegDistanceNm
+  );
+
+  if (reachable.length === 0) {
+    return finalize(tripRequestId, {
+      opportunityScore: "pass",
+      scoreReason: `Route (~${Math.round(maxLegDistanceNm ?? 0)}nm on its longest leg) exceeds every active aircraft's range`,
+      positioningNote: null,
+      historyNote,
+      recommendedAction: "pass",
+    });
+  }
+
+  // Every confirmed leg (revenue or repositioning) across every active trip
+  // on each reachable tail — the raw material for each aircraft's gap
+  // timeline below. Grouped by aircraft rather than checked one date at a
+  // time, so a multi-day trip's "sitting" period between two of its own
+  // legs is visible as free time, not lumped in as a blanket conflict.
+  const legsByAircraft = await getActiveLegsByAircraft(
+    tripRequest.operatorId,
+    reachable.map((a) => a.id)
+  );
+
+  // For each reachable aircraft, find whichever gap in its schedule (if
+  // any) cleanly contains this request's whole date range. An aircraft
+  // with no fitting gap is excluded entirely — not "busy that day," but
+  // genuinely unavailable without bumping an existing commitment.
+  const fitted = reachable
+    .map((aircraft) => {
+      const gaps = buildGapsForAircraft(
+        legsByAircraft.get(aircraft.id) ?? [],
+        aircraft.currentBase ?? aircraft.homeBase,
+        aircraft.homeBase
+      );
+      const gap = findFittingGap(gaps, firstLeg.date!, lastLeg.date!);
+      return gap ? { aircraft, gap } : null;
+    })
+    .filter((x): x is { aircraft: Aircraft; gap: Gap } => x !== null);
+
+  if (fitted.length === 0) {
+    return finalize(tripRequestId, {
+      opportunityScore: "pass",
+      scoreReason: "No aircraft has an open slot for these dates — would require rescheduling an existing booking",
+      positioningNote: null,
+      historyNote,
+      recommendedAction: "pass",
+    });
+  }
+
+  // Category is a soft preference: prefer a match, but fall back to the
+  // full available pool instead of passing when nothing matches exactly.
+  const categoryMatches = tripRequest.aircraftPref
+    ? fitted.filter((f) => f.aircraft.category === tripRequest.aircraftPref)
+    : fitted;
+  const pool = categoryMatches.length > 0 ? categoryMatches : fitted;
+  const offCategory = tripRequest.aircraftPref !== null && categoryMatches.length === 0;
+
+  // Must include the trip request's own dep/arr airports, not just each
+  // aircraft's gap boundaries — repoHoursBetween below measures distance
+  // *from* a gap anchor *to* firstLeg.depAirport/lastLeg.arrAirport, so
+  // leaving those two out of the resolved set meant that lookup always
+  // missed, pickup/dropoff hours came back null on every request, and the
+  // 2-hour repositioning cap below (gated on knowing pickupHours) never
+  // actually ran.
+  const anchorsToResolve = [
+    ...new Set([
+      ...pool.flatMap((f) => [f.gap.startAnchor, f.gap.endAnchor]),
+      firstLeg.depAirport!,
+      lastLeg.arrAirport!,
+    ]),
+  ];
+  const anchorAirports = await prisma.airport.findMany({ where: { icao: { in: anchorsToResolve } } });
+  const anchorByIcao = Object.fromEntries(anchorAirports.map((a) => [a.icao, a]));
+
+  function repoHoursBetween(fromIcao: string, toIcao: string, cruiseSpeedKts: number | null): number | null {
+    if (fromIcao === toIcao) return 0;
+    const from = anchorByIcao[fromIcao];
+    const to = anchorByIcao[toIcao];
+    if (!from || !to || !cruiseSpeedKts) return null;
+    const distanceNm = greatCircleDistanceNm(from.lat, from.lon, to.lat, to.lon);
+    return estimateFlightHours(distanceNm, cruiseSpeedKts, 0);
+  }
+
+  const scored = pool.map(({ aircraft, gap }) => ({
+    aircraft,
+    gap,
+    pickupHours: repoHoursBetween(gap.startAnchor, firstLeg.depAirport!, aircraft.cruiseSpeedKts),
+    dropoffHours: repoHoursBetween(lastLeg.arrAirport!, gap.endAnchor, aircraft.cruiseSpeedKts),
+  }));
+
+  function categoryNoteFor(aircraft: Aircraft): string {
+    return offCategory
+      ? ` (${aircraft.tailNumber} is ${aircraft.category}, not the requested ${tripRequest.aircraftPref} — flagged as a good fit anyway rather than passed)`
+      : "";
+  }
+
+  // The 2-hour pickup-repositioning cap is a hard eligibility filter, not
+  // just a tiebreaker on top of it — an aircraft too far out of position to
+  // reach the client at all shouldn't be able to win the ranking below just
+  // because it happens to end up well-positioned for whatever's next.
+  // Unknown pickup distance (no cruise speed / airport data) is kept rather
+  // than excluded, same as always — scored medium further down instead of
+  // silently dropped.
+  const withinPickupRange = scored.filter((s) => s.pickupHours === null || s.pickupHours <= REPO_MEDIUM_HOURS);
+
+  if (withinPickupRange.length === 0) {
+    const nearest = scored.reduce((best, s) =>
+      (s.pickupHours ?? Infinity) < (best.pickupHours ?? Infinity) ? s : best
+    );
+    return finalize(tripRequestId, {
+      opportunityScore: "pass",
+      scoreReason: `Nearest open aircraft (${nearest.aircraft.tailNumber}) requires a ${repoLabel(nearest.pickupHours ?? 0)} repositioning to pick up — too far out of position${categoryNoteFor(nearest.aircraft)}`,
+      positioningNote: null,
+      historyNote,
+      recommendedAction: "pass",
+    });
+  }
+
+  // Among aircraft close enough to actually take the trip, productive
+  // repositioning matters more than cheap pickup — one that ends up
+  // well-positioned for whatever's next outranks one that's merely
+  // convenient to grab, even if that one's pickup leg is shorter.
+  const ranked = withinPickupRange.sort((a, b) => {
+    const dropoffDiff = (a.dropoffHours ?? Infinity) - (b.dropoffHours ?? Infinity);
+    if (dropoffDiff !== 0) return dropoffDiff;
+    return (a.pickupHours ?? Infinity) - (b.pickupHours ?? Infinity);
+  });
+
+  const chosen = ranked[0];
+  const categoryNote = categoryNoteFor(chosen.aircraft);
+
+  const pickupPhrase =
+    chosen.pickupHours === null
+      ? "pickup distance unknown"
+      : chosen.pickupHours === 0
+        ? `already at ${firstLeg.depAirport}`
+        : `${repoLabel(chosen.pickupHours)} repositioning from ${chosen.gap.startAnchor} to pick up`;
+  const dropoffPhrase =
+    chosen.dropoffHours === null
+      ? "repositioning fit for what's next is unknown"
+      : chosen.dropoffHours === 0
+        ? chosen.gap.endDate
+          ? `lands exactly where it needs to be for its ${chosen.gap.endDate} departure`
+          : "lands right at home base"
+        : chosen.gap.endDate
+          ? `then ${repoLabel(chosen.dropoffHours)} short of where it needs to be for its ${chosen.gap.endDate} departure from ${chosen.gap.endAnchor}`
+          : `then ${repoLabel(chosen.dropoffHours)} from home base (${chosen.gap.endAnchor})`;
+  const positioningNote = `${chosen.aircraft.tailNumber}: ${pickupPhrase}, ${dropoffPhrase}`;
+
+  if (chosen.pickupHours === null) {
+    return finalize(tripRequestId, {
+      opportunityScore: "medium",
+      scoreReason: `${chosen.aircraft.tailNumber} has an open slot for these dates but positioning distance is unknown${categoryNote}`,
+      positioningNote,
+      historyNote,
+      recommendedAction: "quote_now",
+    });
+  }
+
+  // chosen is drawn from withinPickupRange, so pickupHours here is
+  // guaranteed <= REPO_MEDIUM_HOURS (the null case already returned above)
+  // — the >REPO_MEDIUM_HOURS auto-pass already happened earlier, before
+  // ranking, when no aircraft made it into withinPickupRange at all.
+  return finalize(tripRequestId, {
+    opportunityScore: chosen.pickupHours <= REPO_HIGH_HOURS ? "high" : "medium",
+    scoreReason: `${positioningNote}${categoryNote}`,
+    positioningNote,
+    historyNote,
+    recommendedAction: "quote_now",
+  });
+}
+
+async function buildHistoryNote(tripRequest: TripRequest): Promise<string | null> {
+  const domain = tripRequest.requestorEmail.split("@")[1];
+  if (!domain) return null;
+
+  const priorRequestCount = await prisma.tripRequest.count({
+    where: {
+      operatorId: tripRequest.operatorId,
+      requestorEmail: { endsWith: `@${domain}` },
+      id: { not: tripRequest.id },
+    },
+  });
+
+  if (priorRequestCount === 0) return null;
+
+  const recentQuote = await prisma.quote.findFirst({
+    where: {
+      operatorId: tripRequest.operatorId,
+      contact: { email: { endsWith: `@${domain}` } },
+    },
+    orderBy: { createdAt: "desc" },
+    include: { selectedOption: true },
+  });
+
+  if (recentQuote?.selectedOption) {
+    return `Quoted this broker before — most recent quote ${recentQuote.quoteNumber} (${recentQuote.status}) at $${recentQuote.selectedOption.total.toLocaleString()}`;
+  }
+
+  return `${priorRequestCount} prior request${priorRequestCount === 1 ? "" : "s"} from this domain`;
+}
+
+async function finalize(
+  tripRequestId: string,
+  score: OpportunityScoreResult
+): Promise<OpportunityScoreResult> {
+  await prisma.tripRequest.update({
+    where: { id: tripRequestId },
+    data: {
+      opportunityScore: score.opportunityScore,
+      scoreReason: score.scoreReason,
+      positioningNote: score.positioningNote,
+      historyNote: score.historyNote,
+      recommendedAction: score.recommendedAction,
+      aiProcessedAt: new Date(),
+      status: score.recommendedAction === "pass" ? "passed" : "ready",
+    },
+  });
+  return score;
+}

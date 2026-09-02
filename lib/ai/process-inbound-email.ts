@@ -1,0 +1,291 @@
+import { Prisma } from "@/lib/generated/prisma/client";
+import { prisma } from "@/lib/prisma";
+import { sendEmail } from "@/lib/email";
+import { classifyAndExtractEmail, type EmailClassificationResult } from "@/lib/ai/classify-email";
+import { parseEmailToTripRequest, type ExtractedTripData } from "@/lib/ai/parse-email";
+import { scoreOpportunity } from "@/lib/ai/score-opportunity";
+import { resolveAirportCodesToIcao } from "@/lib/airport-server";
+
+export type InboundEmailWithOperator = Prisma.InboundEmailGetPayload<{
+  include: { operator: true };
+}>;
+
+// Broker blast feeds (NBAA Air Mail and similar aggregators like Charter
+// Airmail/FlyEasy) use a HAVE:/NEED: subject convention — HAVE: is another
+// operator advertising empty-leg availability, the mirror image of the
+// NEED:/LOOKING FOR: request shorthand the classifier already knows about.
+// A HAVE: listing is never a trip request (there's nothing to quote), so
+// it's filtered out here before spending any AI tokens on it, rather than
+// relying on the model to reliably tell the two apart — they use nearly
+// identical shorthand (route, date, aircraft type). Add more prefixes here
+// as other non-request patterns show up in real feed traffic.
+//
+// Tolerates an optional forwarding prefix (Fwd:, FW:, Re:, any repeated
+// combination — real feed traffic gets re-forwarded and these stack up)
+// before HAVE:, since the anchored match would otherwise silently miss
+// "Fwd: HAVE: ..." and let it through to the (more expensive, less
+// reliable) AI classification path instead.
+const NON_REQUEST_SUBJECT_PREFIXES = [/^(\s*(fwd?|re)\s*:\s*)*\s*HAVE\s*:/i];
+
+function isAvailabilityListing(subject: string | null): boolean {
+  return Boolean(subject && NON_REQUEST_SUBJECT_PREFIXES.some((re) => re.test(subject)));
+}
+
+// Relay/blast feeds (e.g. NBAA Air Mail) send From a shared address but set
+// Reply-To to the real client/broker — that's who a reply, a Contact match,
+// or a requestor record should actually point at, not the relay.
+function senderEmailOf(inboundEmail: InboundEmailWithOperator): string {
+  return inboundEmail.replyToEmail || inboundEmail.fromEmail;
+}
+
+export async function processInboundEmail(inboundEmailId: string) {
+  const inboundEmail = await prisma.inboundEmail.findUnique({
+    where: { id: inboundEmailId },
+    include: { operator: true },
+  });
+  if (!inboundEmail) return;
+
+  if (isAvailabilityListing(inboundEmail.subject)) {
+    await prisma.inboundEmail.update({
+      where: { id: inboundEmail.id },
+      data: {
+        classification: "availability_listing",
+        classificationConfidence: "high",
+        classificationReason:
+          'Subject starts with "HAVE:" — a supply-side empty-leg listing, not a trip request. Filtered before the AI ran to avoid billing for it.',
+        aiProcessedAt: new Date(),
+        status: "discarded",
+      },
+    });
+    return;
+  }
+
+  const result = await classifyAndExtractEmail({
+    fromEmail: senderEmailOf(inboundEmail),
+    fromName: inboundEmail.fromName,
+    subject: inboundEmail.subject,
+    bodyText: inboundEmail.bodyText,
+  });
+
+  await prisma.inboundEmail.update({
+    where: { id: inboundEmail.id },
+    data: {
+      classification: result.classification,
+      classificationConfidence: result.confidence,
+      classificationReason: result.reason,
+      aiProcessedAt: new Date(),
+    },
+  });
+
+  switch (result.classification) {
+    case "spam_or_auto_reply":
+      await prisma.inboundEmail.update({
+        where: { id: inboundEmail.id },
+        data: { status: "discarded" },
+      });
+      return;
+
+    case "general_inquiry":
+      await logInboundEmailAsInquiry(inboundEmail);
+      return;
+
+    case "new_trip_request":
+      // Already extracted in the same call as classification above — pass
+      // it straight through instead of re-extracting from scratch.
+      await createTripRequestFromInboundEmail(inboundEmail, result.extraction);
+      return;
+
+    case "quote_response_accepted":
+    case "quote_response_questions":
+    case "quote_response_declined":
+      await handleQuoteResponse(inboundEmail, result);
+      return;
+
+    case "unclassifiable":
+    default:
+      await prisma.inboundEmail.update({
+        where: { id: inboundEmail.id },
+        data: { status: "needs_review" },
+      });
+  }
+}
+
+/**
+ * Matches/creates a Contact and logs the inquiry against it. Shared by the
+ * automatic AI-routing path and the manual "Log as Inquiry" review action.
+ */
+export async function logInboundEmailAsInquiry(inboundEmail: InboundEmailWithOperator) {
+  const senderEmail = senderEmailOf(inboundEmail);
+
+  const existing = await prisma.contact.findFirst({
+    where: { operatorId: inboundEmail.operatorId, email: senderEmail },
+  });
+
+  const noteLine = `[${new Date().toISOString()}] General inquiry: ${inboundEmail.subject ?? "(no subject)"}`;
+
+  if (existing) {
+    await prisma.contact.update({
+      where: { id: existing.id },
+      data: { notes: existing.notes ? `${existing.notes}\n${noteLine}` : noteLine },
+    });
+  } else {
+    const displayName = inboundEmail.fromName ?? senderEmail;
+    const [firstName, ...rest] = displayName.split(" ");
+    await prisma.contact.create({
+      data: {
+        operatorId: inboundEmail.operatorId,
+        firstName: firstName || "Unknown",
+        lastName: rest.join(" "),
+        email: senderEmail,
+        type: "direct",
+        notes: noteLine,
+      },
+    });
+  }
+
+  await prisma.inboundEmail.update({
+    where: { id: inboundEmail.id },
+    data: { status: "logged_as_inquiry" },
+  });
+
+  if (inboundEmail.operator.notifyEmail) {
+    await sendEmail({
+      to: inboundEmail.operator.notifyEmail,
+      subject: `General inquiry — ${senderEmail}`,
+      html: `<p>New general inquiry from ${inboundEmail.fromName ?? senderEmail} (${senderEmail}).</p><p>Subject: ${inboundEmail.subject ?? "(no subject)"}</p>`,
+      replyTo: senderEmail,
+      from: inboundEmail.operator.fromEmail,
+      fromName: inboundEmail.operator.name,
+    });
+  }
+}
+
+/**
+ * Extracts trip data and creates + scores a TripRequest from an inbound
+ * email. Shared by the automatic AI-routing path and the manual "Create
+ * Trip Request" review action. Extraction runs when ANTHROPIC_API_KEY is
+ * configured; when it's not (or parsing fails), this still creates a
+ * bare-bones TripRequest from the raw email fields rather than failing —
+ * a human explicitly asked for this one, so it should always produce
+ * something to work with, even if AI couldn't fill in the details.
+ *
+ * `preExtracted` lets the automatic pipeline pass through the extraction
+ * it already got as part of classification (see classifyAndExtractEmail)
+ * instead of paying for a second AI call here. Omit it (as the manual
+ * "Create Trip Request" review action does) to have this run extraction
+ * itself.
+ */
+export async function createTripRequestFromInboundEmail(
+  inboundEmail: InboundEmailWithOperator,
+  preExtracted?: ExtractedTripData | null
+) {
+  const extracted =
+    preExtracted !== undefined
+      ? preExtracted
+      : await parseEmailToTripRequest(inboundEmail.subject, inboundEmail.bodyText);
+
+  // The AI sometimes returns the 3-letter IATA code (e.g. "SAN") instead
+  // of the 4-letter ICAO code ("KSAN") the rest of the app assumes for
+  // airport lookups — normalize once here so scoring, the quote builder,
+  // and everything else downstream can just trust TripRequest.legs.
+  const legCodes = (extracted?.legs ?? []).flatMap((l) => [l.depAirport, l.arrAirport]);
+  const codeMap = await resolveAirportCodesToIcao(legCodes);
+  const normalizedLegs = (extracted?.legs ?? []).map((l) => ({
+    ...l,
+    depAirport: codeMap[l.depAirport?.toUpperCase()] ?? l.depAirport,
+    arrAirport: codeMap[l.arrAirport?.toUpperCase()] ?? l.arrAirport,
+  }));
+
+  const senderEmail = senderEmailOf(inboundEmail);
+
+  const tripRequest = await prisma.tripRequest.create({
+    data: {
+      operatorId: inboundEmail.operatorId,
+      source: "email_inbound",
+      rawEmailBody: inboundEmail.bodyText,
+      rawEmailFrom: inboundEmail.fromEmail,
+      requestorName: extracted?.requestorName || inboundEmail.fromName || senderEmail,
+      requestorEmail: extracted?.requestorEmail || senderEmail,
+      requestorPhone: extracted?.requestorPhone ?? null,
+      requestorCompany: extracted?.requestorCompany ?? null,
+      requestorType: extracted?.requestorType || "direct",
+      tripType: extracted?.tripType || "one_way",
+      legs: normalizedLegs,
+      aircraftPref: extracted?.aircraftCategory ?? null,
+      budgetMentioned: extracted?.budgetMentioned ?? null,
+      specialRequests: extracted?.specialRequests ?? inboundEmail.bodyText,
+      urgency: extracted?.urgency ?? null,
+    },
+  });
+
+  await prisma.inboundEmail.update({
+    where: { id: inboundEmail.id },
+    data: { status: "trip_request_created", tripRequestId: tripRequest.id },
+  });
+
+  await scoreOpportunity(tripRequest.id);
+
+  return tripRequest;
+}
+
+async function handleQuoteResponse(
+  inboundEmail: InboundEmailWithOperator,
+  result: EmailClassificationResult
+) {
+  // Priority 1: explicit quote number in the email
+  let quote = result.quoteNumber
+    ? await prisma.quote.findFirst({
+        where: { operatorId: inboundEmail.operatorId, quoteNumber: result.quoteNumber },
+      })
+    : null;
+
+  // Priority 2: sender email matches the contact on a quote that's been sent
+  if (!quote) {
+    quote = await prisma.quote.findFirst({
+      where: {
+        operatorId: inboundEmail.operatorId,
+        status: "sent",
+        contact: { email: senderEmailOf(inboundEmail) },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  if (!quote) {
+    await prisma.inboundEmail.update({
+      where: { id: inboundEmail.id },
+      data: { status: "needs_review" },
+    });
+    return;
+  }
+
+  if (result.classification === "quote_response_declined") {
+    await prisma.quote.update({
+      where: { id: quote.id },
+      data: { status: "declined", declinedAt: new Date() },
+    });
+  }
+
+  // "Accepted" needs the real click-to-accept record (timestamp, IP, terms hash —
+  // Step 16). Auto-accepting off an email reply would skip that entirely, so this
+  // flags it for a human instead of faking acceptance.
+  const status =
+    result.classification === "quote_response_accepted" ? "needs_review" : "attached_to_quote";
+
+  await prisma.inboundEmail.update({
+    where: { id: inboundEmail.id },
+    data: { status, quoteId: quote.id },
+  });
+
+  if (inboundEmail.operator.notifyEmail) {
+    const action = result.classification.replace("quote_response_", "");
+    await sendEmail({
+      to: inboundEmail.operator.notifyEmail,
+      subject: `Quote ${quote.quoteNumber} — ${action}`,
+      html: `<p>${inboundEmail.fromName ?? senderEmailOf(inboundEmail)} replied to quote ${quote.quoteNumber} (${action}).</p>`,
+      replyTo: senderEmailOf(inboundEmail),
+      from: inboundEmail.operator.fromEmail,
+      fromName: inboundEmail.operator.name,
+    });
+  }
+}

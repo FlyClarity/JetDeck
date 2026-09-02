@@ -1,0 +1,1802 @@
+"use client";
+
+import { Suspense, useMemo, useState } from "react";
+import { ArrowRight, ChevronUp, ChevronDown, ChevronRight } from "lucide-react";
+import type { Aircraft } from "@/lib/generated/prisma/client";
+import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
+import { greatCircleDistanceNm, estimateFlightHours, nightsBetween } from "@/lib/geo";
+import { addHoursAcrossTimezones, type TimeWithDayOffset } from "@/lib/time";
+import {
+  findConflictingBooking,
+  revenueLegsOf,
+  legDate,
+  formatIsoDate,
+  type ConflictCandidate,
+} from "@/lib/itinerary";
+import type { AirportOption } from "@/lib/airport-server";
+import { AirportCombobox } from "@/components/quote/airport-combobox";
+import {
+  PriceSuggestionCard,
+  PriceSuggestionSkeleton,
+  type PriceSuggestion,
+} from "@/components/quote/price-suggestion-card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+
+export type QuoteLegInput = {
+  dep: AirportOption | { icao: string } | null;
+  arr: AirportOption | { icao: string } | null;
+  date: string;
+  flightHours?: number;
+  depTime?: string | null;
+  depTimeTBD?: boolean;
+  arrTime?: string | null;
+};
+
+// A tail sourced from a preferred operator rather than the account's own
+// fleet — no cruise speed/rate on file (a broker doesn't operate the plane,
+// they were quoted an all-in price by whoever does), so flight hours are
+// always entered by hand and pricing is a flat number instead of hours ×
+// rate. See BrokeredAircraft in prisma/schema.prisma.
+export type BrokeredAircraftOption = {
+  id: string;
+  tailNumber: string;
+  make: string | null;
+  model: string | null;
+  category: string | null;
+  seats: number | null;
+  homeBase: string | null;
+  preferredOperator: { name: string };
+};
+
+export type SavedLegInput = {
+  billAs: "revenue" | "repositioning";
+  dep: AirportOption | { icao: string } | null;
+  arr: AirportOption | { icao: string } | null;
+  date: string;
+  flightHours: number;
+  depTime?: string | null;
+  depTimeTBD?: boolean;
+  arrTime?: string | null;
+};
+
+// One "Options" tab's worth of data — a single priced itinerary variation.
+// A quote always has at least one; "label" only matters once there's more
+// than one to tell apart.
+export type QuoteOptionValues = {
+  label?: string;
+  aircraftId: string | null;
+  // "own_fleet" (default) uses aircraftId; "brokered" uses
+  // brokeredAircraftId + wholesaleCost instead, and skips auto
+  // repositioning legs entirely — see the fleet-source toggle below.
+  fleetSource: "own_fleet" | "brokered";
+  brokeredAircraftId: string | null;
+  // What the source operator quoted for this trip — tracked for margin
+  // reporting only, never shown to the client and not part of the total
+  // charged (see calculateQuoteTotals's flatRate mode).
+  wholesaleCost: number | null;
+  // For a brand-new quote: only the customer-requested legs are known, and
+  // repositioning legs get derived (home base + aircraft cruise speed) —
+  // only for an own-fleet option; a brokered one never gets auto
+  // repositioning legs (see buildInitialLegs).
+  requestedLegs: QuoteLegInput[];
+  // For an existing quote: the full previously-saved leg breakdown, loaded
+  // as-is instead of re-derived. Takes precedence over requestedLegs.
+  legs?: SavedLegInput[];
+  hourlyRate: number;
+  repoRate: number;
+  returnsToHomeBase: boolean;
+  extraNightsAway: number;
+  landingFees: number;
+  handlingFees: number;
+  additionalFees: AdditionalFee[];
+  fetTax: boolean;
+  discount: number;
+  discountNote: string;
+  // Shown on the client-facing quote page for this specific option — e.g.
+  // catering, ground transport. Distinct from the quote-wide, operator-only
+  // internalNotes field on QuoteBuilderForm itself.
+  clientNotes: string;
+};
+
+type LegAirport = {
+  icao: string;
+  iata?: string | null;
+  name?: string;
+  lat?: number;
+  lon?: number;
+  timezone?: string | null;
+};
+
+type LegRow = {
+  id: string;
+  billAs: "revenue" | "repositioning";
+  auto: boolean;
+  // Which side of an auto repositioning leg is home base — lets the
+  // aircraft-change resync effect update the right endpoint no matter how
+  // many repositioning legs exist or where they sit (leading, trailing, or
+  // one of potentially several "between legs" pairs). Null for revenue
+  // legs and any repositioning leg the user added by hand.
+  homeSide: "dep" | "arr" | null;
+  // Only true for repositioning legs inserted by the "returns to base
+  // between legs" toggle — distinguishes them from the permanent leading/
+  // trailing repositioning legs (and anything added by hand) so switching
+  // the toggle back off removes exactly the right ones.
+  betweenLegs: boolean;
+  dep: LegAirport | null;
+  arr: LegAirport | null;
+  date: string;
+  flightHours: string;
+  dirty: boolean;
+  collapsed: boolean;
+  depTime: string;
+  depTimeTBD: boolean;
+  arrTime: string;
+  // false = arrTime is auto-derived from depTime + flightHours; true = the
+  // user typed an arrival time directly, so stop overwriting it.
+  arrTimeDirty: boolean;
+  // 0 unless auto-derived from a firm departure time — a manually-typed
+  // arrival time (or one reloaded from a saved quote) has no reliable date
+  // to compare against, since the field only ever stores a time of day.
+  arrDayOffset: number;
+};
+
+// Best-effort arrival time: only fills in when we actually have a firm
+// departure time and a flight-hours estimate to add to it. Converts across
+// timezones when both airports' zones are known (see addHoursAcrossTimezones)
+// instead of just adding hours on the departure airport's clock.
+function computeArrTime(
+  date: string,
+  depTime: string,
+  depTimeTBD: boolean,
+  flightHours: string,
+  dep: LegAirport | null,
+  arr: LegAirport | null
+): TimeWithDayOffset {
+  if (depTimeTBD || !depTime) return { time: "", dayOffset: 0 };
+  const hrs = Number(flightHours);
+  if (!Number.isFinite(hrs) || hrs <= 0) return { time: "", dayOffset: 0 };
+  return addHoursAcrossTimezones(date, depTime, hrs, dep?.timezone ?? null, arr?.timezone ?? null);
+}
+
+function rowId() {
+  return Math.random().toString(36).slice(2);
+}
+
+function computeLegHours(
+  dep: LegAirport | null,
+  arr: LegAirport | null,
+  cruiseSpeedKts: number | null | undefined,
+  blockTimeBufferHours: number
+): number | null {
+  if (!dep?.lat || !dep?.lon || !arr?.lat || !arr?.lon || !cruiseSpeedKts) return null;
+  const distanceNm = greatCircleDistanceNm(dep.lat, dep.lon, arr.lat, arr.lon);
+  return estimateFlightHours(distanceNm, cruiseSpeedKts, blockTimeBufferHours);
+}
+
+function needsRepositioning(a: LegAirport | null, b: LegAirport | null) {
+  if (!a || !b) return true;
+  return a.icao !== b.icao;
+}
+
+function makeRepoLeg(
+  dep: LegAirport | null,
+  arr: LegAirport | null,
+  date: string,
+  homeSide: "dep" | "arr",
+  betweenLegs: boolean,
+  cruiseSpeedKts: number | null | undefined,
+  blockTimeBufferHours: number
+): LegRow {
+  const hrs = computeLegHours(dep, arr, cruiseSpeedKts, blockTimeBufferHours);
+  return {
+    id: rowId(),
+    billAs: "repositioning",
+    auto: true,
+    homeSide,
+    betweenLegs,
+    dep,
+    arr,
+    date,
+    flightHours: hrs !== null ? hrs.toFixed(1) : "",
+    dirty: false,
+    collapsed: true,
+    depTime: "",
+    depTimeTBD: true,
+    arrTime: "",
+    arrTimeDirty: false,
+    arrDayOffset: 0,
+  };
+}
+
+// The aircraft always ends the trip back at a "home" position — that
+// repositioning leg is unconditional, same as the leading one. Whether it
+// also comes home *between* legs (instead of sitting overnight) is a
+// separate, later choice (see toggleReturnsToHomeBase) that a brand-new
+// quote never starts with.
+//
+// Both the leading and trailing legs use a schedule-derived position rather
+// than always the aircraft's permanent home base: the leading leg starts
+// from startingPosition (where the aircraft actually is on this trip's first
+// date — it can be away on another trip when this one begins), and the
+// trailing leg goes to endingPosition (wherever the aircraft's next
+// confirmed commitment departs from, if close enough to be worth holding
+// position for — see findTrailingAnchorForDate). Both fall back to homeBase
+// when no schedule-derived position applies.
+function buildInitialLegs(
+  requestedLegs: QuoteLegInput[],
+  cruiseSpeedKts: number | null | undefined,
+  startingPosition: LegAirport | null,
+  endingPosition: LegAirport | null,
+  blockTimeBufferHours: number
+): LegRow[] {
+  const rows: LegRow[] = [];
+  const firstLeg = requestedLegs[0];
+  const lastLeg = requestedLegs[requestedLegs.length - 1];
+
+  if (startingPosition && firstLeg?.dep && needsRepositioning(startingPosition, firstLeg.dep)) {
+    rows.push(
+      makeRepoLeg(startingPosition, firstLeg.dep, firstLeg.date, "dep", false, cruiseSpeedKts, blockTimeBufferHours)
+    );
+  }
+
+  requestedLegs.forEach((leg) => {
+    const hrs =
+      leg.flightHours ?? computeLegHours(leg.dep, leg.arr, cruiseSpeedKts, blockTimeBufferHours);
+    const flightHours = hrs !== null && hrs !== undefined ? Number(hrs).toFixed(1) : "";
+    const depTime = leg.depTime ?? "";
+    const depTimeTBD = leg.depTimeTBD ?? !leg.depTime;
+    const computedArr = computeArrTime(leg.date, depTime, depTimeTBD, flightHours, leg.dep, leg.arr);
+    const arrTimeDirty = Boolean(leg.arrTime);
+    rows.push({
+      id: rowId(),
+      billAs: "revenue",
+      auto: true,
+      homeSide: null,
+      betweenLegs: false,
+      dep: leg.dep,
+      arr: leg.arr,
+      date: leg.date,
+      flightHours,
+      dirty: false,
+      collapsed: false,
+      depTime,
+      depTimeTBD,
+      arrTime: leg.arrTime || computedArr.time,
+      arrTimeDirty,
+      arrDayOffset: arrTimeDirty ? 0 : computedArr.dayOffset,
+    });
+  });
+
+  if (endingPosition && lastLeg?.arr && needsRepositioning(lastLeg.arr, endingPosition)) {
+    rows.push(
+      makeRepoLeg(lastLeg.arr, endingPosition, lastLeg.date, "arr", false, cruiseSpeedKts, blockTimeBufferHours)
+    );
+  }
+
+  return rows;
+}
+
+// One option's worth of aircraft/itinerary/pricing fields — everything that
+// varies between "Options" on the same quote. Owns its own state entirely
+// (no lifting to the parent) so switching tabs never loses in-progress
+// edits: the outer QuoteBuilderForm keeps every option's QuoteOptionFields
+// instance mounted at once and only toggles which one is visible via CSS —
+// hidden form fields still submit normally either way.
+function QuoteOptionFields({
+  namePrefix,
+  aircraftList,
+  brokeredAircraftList,
+  airportsByIcao,
+  positionByAircraftId,
+  trailingPositionByAircraftId,
+  existingBookings,
+  initialValues,
+  priceSuggestionPromise,
+  depositPercent,
+  defaultOvernightFee,
+  defaultBlockTimeBufferHours,
+  locked,
+}: {
+  namePrefix: string;
+  aircraftList: Aircraft[];
+  brokeredAircraftList: BrokeredAircraftOption[];
+  airportsByIcao: Record<string, AirportOption>;
+  // Where each aircraft is actually expected to be on this trip's first
+  // date, derived server-side from its own schedule (see
+  // lib/aircraft-schedule.ts) — not always the same as its permanent home
+  // base if it's away on another trip when this one starts. Missing entry
+  // (or no data at all) falls back to home base, same as before this
+  // existed. Own-fleet aircraft only — a brokered tail isn't on a schedule
+  // JetDeck controls.
+  positionByAircraftId?: Record<string, string>;
+  // Where the aircraft should reposition to right after this trip ends —
+  // its next confirmed commitment's departure airport, but only when that's
+  // close enough to be worth holding position for (see
+  // MAX_PRODUCTIVE_IDLE_DAYS in lib/aircraft-schedule.ts). Missing entry
+  // falls back to home base, same as positionByAircraftId.
+  trailingPositionByAircraftId?: Record<string, string>;
+  existingBookings: ConflictCandidate[];
+  initialValues: QuoteOptionValues;
+  priceSuggestionPromise?: Promise<PriceSuggestion>;
+  depositPercent: number;
+  defaultOvernightFee: number;
+  defaultBlockTimeBufferHours: number;
+  locked: boolean;
+}) {
+  const [fleetSource, setFleetSource] = useState<"own_fleet" | "brokered">(
+    initialValues.fleetSource
+  );
+  const [aircraftId, setAircraftId] = useState(initialValues.aircraftId ?? "");
+  const [brokeredAircraftId, setBrokeredAircraftId] = useState(
+    initialValues.brokeredAircraftId ?? ""
+  );
+  const [wholesaleCost, setWholesaleCost] = useState(String(initialValues.wholesaleCost || ""));
+  // Reload default: back out a flat-dollar margin from the two saved
+  // numbers (hourlyRate holds the flat client price for a brokered option —
+  // see the flatRate mode below) rather than persisting which entry mode
+  // the operator originally typed in. The dollar amount is exact either
+  // way; only "% vs $" is forgotten across a reload, which doesn't change
+  // what gets charged.
+  const [marginType, setMarginType] = useState<"flat" | "percent">("flat");
+  const [marginValue, setMarginValue] = useState(
+    String(
+      Math.max(0, (initialValues.hourlyRate || 0) - (initialValues.wholesaleCost || 0)) || ""
+    )
+  );
+  const [hourlyRate, setHourlyRate] = useState(String(initialValues.hourlyRate || ""));
+  const [repoRate, setRepoRate] = useState(String(initialValues.repoRate || ""));
+  const [returnsToHomeBase, setReturnsToHomeBase] = useState(initialValues.returnsToHomeBase);
+  const [extraNightsAway, setExtraNightsAway] = useState(
+    String(initialValues.extraNightsAway || "")
+  );
+  const [landingFees, setLandingFees] = useState(String(initialValues.landingFees || ""));
+  const [handlingFees, setHandlingFees] = useState(String(initialValues.handlingFees || ""));
+  const [additionalFees, setAdditionalFees] = useState<AdditionalFee[]>(
+    initialValues.additionalFees
+  );
+  const [fetTax, setFetTax] = useState(initialValues.fetTax);
+  const [discount, setDiscount] = useState(String(initialValues.discount || ""));
+  const [discountNote, setDiscountNote] = useState(initialValues.discountNote);
+
+  const selectedAircraft = aircraftList.find((a) => a.id === aircraftId);
+  const selectedBrokeredAircraft = brokeredAircraftList.find((a) => a.id === brokeredAircraftId);
+  const isBrokered = fleetSource === "brokered";
+  const homeBaseAirport: LegAirport | null = selectedAircraft
+    ? airportsByIcao[selectedAircraft.homeBase] ?? { icao: selectedAircraft.homeBase }
+    : null;
+  const expectedPositionIcao = selectedAircraft ? positionByAircraftId?.[selectedAircraft.id] : undefined;
+  // A brokered option never gets auto repositioning legs — the wholesale
+  // price already covers however the source operator gets their own
+  // aircraft to and from the client, and a broker isn't tracking a
+  // third-party tail's schedule to reason about it anyway.
+  const startingPositionAirport: LegAirport | null = isBrokered
+    ? null
+    : expectedPositionIcao
+      ? airportsByIcao[expectedPositionIcao] ?? { icao: expectedPositionIcao }
+      : homeBaseAirport;
+  const expectedTrailingIcao = selectedAircraft
+    ? trailingPositionByAircraftId?.[selectedAircraft.id]
+    : undefined;
+  const endingPositionAirport: LegAirport | null = isBrokered
+    ? null
+    : expectedTrailingIcao
+      ? airportsByIcao[expectedTrailingIcao] ?? { icao: expectedTrailingIcao }
+      : homeBaseAirport;
+
+  const [legs, setLegs] = useState<LegRow[]>(() => {
+    if (initialValues.legs && initialValues.legs.length > 0) {
+      const savedLegs = initialValues.legs;
+      return savedLegs.map((leg, idx) => {
+        const isBoundary = idx === 0 || idx === savedLegs.length - 1;
+        const auto = leg.billAs === "repositioning";
+        // Every repositioning leg is auto-managed on reload, not just the
+        // leading/trailing ones — the "between legs" toggle only ever
+        // inserts a repositioning leg internally (bracketing a gap between
+        // two revenue legs), so any repositioning leg that isn't the very
+        // first or last row is one of those pairs. betweenLegs marks that,
+        // so toggling the checkbox back off on a reopened quote correctly
+        // removes exactly the legs it would have inserted, same as on a
+        // freshly-built quote.
+        const betweenLegs = auto && !isBoundary;
+        const homeSide: "dep" | "arr" | null = !auto
+          ? null
+          : isBoundary
+            ? idx === 0
+              ? "dep"
+              : "arr"
+            // Internal pair: whichever endpoint matches the current
+            // aircraft's home base is the "home" side — mirrors how
+            // makeRepoLeg constructs these (one leg going home, one
+            // leaving it) rather than assuming a fixed position.
+            : leg.dep && homeBaseAirport && leg.dep.icao === homeBaseAirport.icao
+              ? "dep"
+              : leg.arr && homeBaseAirport && leg.arr.icao === homeBaseAirport.icao
+                ? "arr"
+                : null;
+        return {
+          id: rowId(),
+          billAs: leg.billAs,
+          auto,
+          homeSide,
+          betweenLegs,
+          dep: leg.dep,
+          arr: leg.arr,
+          date: leg.date,
+          flightHours: leg.flightHours ? leg.flightHours.toFixed(1) : "",
+          dirty: false,
+          collapsed: auto,
+          depTime: leg.depTime ?? "",
+          depTimeTBD: leg.depTimeTBD ?? !leg.depTime,
+          arrTime: leg.arrTime ?? "",
+          // Reloaded from a saved time-of-day string with no date attached
+          // to compare against — no way to know if it crossed a day.
+          arrTimeDirty: Boolean(leg.arrTime),
+          arrDayOffset: 0,
+        };
+      });
+    }
+    return buildInitialLegs(
+      initialValues.requestedLegs,
+      selectedAircraft?.cruiseSpeedKts,
+      startingPositionAirport,
+      endingPositionAirport,
+      defaultBlockTimeBufferHours
+    );
+  });
+
+  // Re-derive flight hours for non-dirty legs (new cruise speed), and refresh
+  // auto repositioning legs' airports (new home base), whenever the selected
+  // aircraft changes. homeSide says which endpoint is home for a given
+  // repositioning leg, since there can now be several of them (leading,
+  // trailing, and any "between legs" pairs) rather than just one at index 0.
+  // The leading leg (betweenLegs: false, homeSide: "dep") resyncs to the new
+  // aircraft's expected starting position, and the trailing leg (betweenLegs:
+  // false, homeSide: "arr") to its expected ending position — same reasoning
+  // as buildInitialLegs above. A "between legs" pair (betweenLegs: true)
+  // still resyncs to true home base either way — that's the aircraft
+  // returning to its permanent base mid-trip, unrelated to where it's headed
+  // once the whole trip is over.
+  const [syncedAircraftId, setSyncedAircraftId] = useState(aircraftId);
+  if (aircraftId !== syncedAircraftId) {
+    setSyncedAircraftId(aircraftId);
+    setLegs((prev) =>
+      prev
+        .map((leg) => {
+          let dep = leg.dep;
+          let arr = leg.arr;
+          if (leg.auto && leg.billAs === "repositioning" && leg.homeSide) {
+            dep =
+              leg.homeSide === "dep"
+                ? !leg.betweenLegs
+                  ? startingPositionAirport
+                  : homeBaseAirport
+                : leg.dep;
+            arr =
+              leg.homeSide === "arr"
+                ? !leg.betweenLegs
+                  ? endingPositionAirport
+                  : homeBaseAirport
+                : leg.arr;
+          }
+          if (leg.dirty) return { ...leg, dep, arr };
+          const hrs = computeLegHours(
+            dep,
+            arr,
+            selectedAircraft?.cruiseSpeedKts,
+            defaultBlockTimeBufferHours
+          );
+          const flightHours = hrs !== null ? hrs.toFixed(1) : leg.flightHours;
+          if (leg.arrTimeDirty) return { ...leg, dep, arr, flightHours };
+          const computedArr = computeArrTime(leg.date, leg.depTime, leg.depTimeTBD, flightHours, dep, arr);
+          return {
+            ...leg,
+            dep,
+            arr,
+            flightHours,
+            arrTime: computedArr.time,
+            arrDayOffset: computedArr.dayOffset,
+          };
+        })
+        // Dropping the aircraft onto a plane already based at this leg's
+        // airport makes an auto repositioning leg redundant (0nm).
+        .filter(
+          (leg) =>
+            !(leg.auto && leg.billAs === "repositioning" && !needsRepositioning(leg.dep, leg.arr))
+        )
+    );
+  }
+
+  // Checked: instead of letting the aircraft sit overnight between legs, it
+  // comes home after each one and repositions back out for the next —
+  // bracket every internal gap between consecutive revenue legs with a
+  // repositioning-home and repositioning-back-out pair. The permanent
+  // leading/trailing legs (already unconditional — see buildInitialLegs)
+  // are untouched either way. Unchecked: drop exactly the legs this
+  // inserted (betweenLegs: true), leaving everything else as-is.
+  function toggleReturnsToHomeBase(checked: boolean) {
+    setReturnsToHomeBase(checked);
+    setLegs((prev) => {
+      if (!checked) {
+        return prev.filter((l) => !l.betweenLegs);
+      }
+
+      const revenueRows = prev.filter((l) => l.billAs === "revenue");
+      const result: LegRow[] = [];
+      prev.forEach((leg) => {
+        result.push(leg);
+        if (leg.billAs !== "revenue") return;
+        const revenueIdx = revenueRows.indexOf(leg);
+        const nextLeg = revenueRows[revenueIdx + 1];
+        if (!nextLeg) return; // last revenue leg — trailing leg already handles getting home
+
+        if (leg.arr && needsRepositioning(leg.arr, homeBaseAirport)) {
+          result.push(
+            makeRepoLeg(
+              leg.arr,
+              homeBaseAirport,
+              leg.date,
+              "arr",
+              true,
+              selectedAircraft?.cruiseSpeedKts,
+              defaultBlockTimeBufferHours
+            )
+          );
+        }
+        if (nextLeg.dep && needsRepositioning(homeBaseAirport, nextLeg.dep)) {
+          result.push(
+            makeRepoLeg(
+              homeBaseAirport,
+              nextLeg.dep,
+              nextLeg.date,
+              "dep",
+              true,
+              selectedAircraft?.cruiseSpeedKts,
+              defaultBlockTimeBufferHours
+            )
+          );
+        }
+      });
+      return result;
+    });
+  }
+
+  function updateLeg(id: string, patch: Partial<LegRow>) {
+    setLegs((prev) =>
+      prev.map((leg) => {
+        if (leg.id !== id) return leg;
+        const updated = { ...leg, ...patch };
+        if ("dep" in patch || "arr" in patch) {
+          // A new departure/arrival airport makes this a materially
+          // different leg — any earlier manual ETE/ETA override was for the
+          // old routing and shouldn't silently keep blocking the recompute
+          // below (previously required an explicit Reset click even after
+          // changing the airports entirely).
+          updated.dirty = false;
+          updated.arrTimeDirty = false;
+          const hrs = computeLegHours(
+            updated.dep,
+            updated.arr,
+            selectedAircraft?.cruiseSpeedKts,
+            defaultBlockTimeBufferHours
+          );
+          if (hrs !== null) updated.flightHours = hrs.toFixed(1);
+        }
+        if ("arrTime" in patch) {
+          updated.arrTimeDirty = true;
+          updated.arrDayOffset = 0;
+        } else if (!updated.arrTimeDirty) {
+          const computedArr = computeArrTime(
+            updated.date,
+            updated.depTime,
+            updated.depTimeTBD,
+            updated.flightHours,
+            updated.dep,
+            updated.arr
+          );
+          updated.arrTime = computedArr.time;
+          updated.arrDayOffset = computedArr.dayOffset;
+        }
+        return updated;
+      })
+    );
+  }
+
+  function recalcLeg(id: string) {
+    setLegs((prev) =>
+      prev.map((leg) => {
+        if (leg.id !== id) return leg;
+        const hrs = computeLegHours(
+          leg.dep,
+          leg.arr,
+          selectedAircraft?.cruiseSpeedKts,
+          defaultBlockTimeBufferHours
+        );
+        const flightHours = hrs !== null ? hrs.toFixed(1) : leg.flightHours;
+        if (leg.arrTimeDirty) return { ...leg, dirty: false, flightHours };
+        const computedArr = computeArrTime(leg.date, leg.depTime, leg.depTimeTBD, flightHours, leg.dep, leg.arr);
+        return {
+          ...leg,
+          dirty: false,
+          flightHours,
+          arrTime: computedArr.time,
+          arrDayOffset: computedArr.dayOffset,
+        };
+      })
+    );
+  }
+
+  function resetArrTime(id: string) {
+    setLegs((prev) =>
+      prev.map((leg) => {
+        if (leg.id !== id) return leg;
+        const computedArr = computeArrTime(
+          leg.date,
+          leg.depTime,
+          leg.depTimeTBD,
+          leg.flightHours,
+          leg.dep,
+          leg.arr
+        );
+        return {
+          ...leg,
+          arrTimeDirty: false,
+          arrTime: computedArr.time,
+          arrDayOffset: computedArr.dayOffset,
+        };
+      })
+    );
+  }
+
+  function addLeg() {
+    setLegs((prev) => [
+      ...prev,
+      {
+        id: rowId(),
+        billAs: "revenue",
+        auto: false,
+        homeSide: null,
+        betweenLegs: false,
+        dep: null,
+        arr: null,
+        date: "",
+        flightHours: "",
+        dirty: true,
+        collapsed: false,
+        depTime: "",
+        depTimeTBD: true,
+        arrTime: "",
+        arrTimeDirty: false,
+        arrDayOffset: 0,
+      },
+    ]);
+  }
+
+  function toggleCollapsed(id: string) {
+    setLegs((prev) =>
+      prev.map((leg) => (leg.id === id ? { ...leg, collapsed: !leg.collapsed } : leg))
+    );
+  }
+
+  // Plain array-position swap — doesn't try to re-derive which endpoint of
+  // an auto repositioning leg is "home" (homeSide) or which gap a
+  // between-legs pair brackets (betweenLegs) after the move, since those
+  // are only ever read again by the aircraft-change resync effect and the
+  // "returns to base" toggle, not by rendering itself. Reordering an auto
+  // leg away from its original leading/trailing/bracketing position is an
+  // edge case an operator doing this at all is already choosing to
+  // override by hand.
+  function moveLeg(id: string, direction: -1 | 1) {
+    setLegs((prev) => {
+      const index = prev.findIndex((l) => l.id === id);
+      const target = index + direction;
+      if (index === -1 || target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  // Subtle chevrons rather than full arrow icons/a drag handle, per direct
+  // feedback on earlier attempts — rendered outside the leg card's own
+  // border by the caller (a sibling, not a child, of the bordered div) so
+  // they read as controls on the leg rather than fields within it.
+  function legMoveButtons(id: string, index: number) {
+    return (
+      <div className="flex flex-col">
+        <button
+          type="button"
+          onClick={() => moveLeg(id, -1)}
+          disabled={index === 0}
+          className="text-muted-foreground/60 hover:text-foreground disabled:opacity-20"
+          aria-label="Move leg up"
+        >
+          <ChevronUp className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => moveLeg(id, 1)}
+          disabled={index === legs.length - 1}
+          className="text-muted-foreground/60 hover:text-foreground disabled:opacity-20"
+          aria-label="Move leg down"
+        >
+          <ChevronDown className="size-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  function handleAircraftChange(id: string) {
+    setAircraftId(id);
+    const aircraft = aircraftList.find((a) => a.id === id);
+    if (aircraft) {
+      setHourlyRate(String(aircraft.hourlyRate));
+      setRepoRate(String(aircraft.repoRate ?? aircraft.hourlyRate));
+    }
+  }
+
+  // Switching source strips any auto repositioning legs the other mode
+  // built up — own-fleet's leading/trailing/between-legs legs mean nothing
+  // once there's no home base in the picture, and a brokered option never
+  // had any to begin with. Everything else (revenue legs, fees, discount)
+  // carries over untouched; only the aircraft/rate fields reset since
+  // they're mode-specific.
+  function handleFleetSourceChange(value: "own_fleet" | "brokered") {
+    setFleetSource(value);
+    setLegs((prev) => prev.filter((l) => !(l.auto && l.billAs === "repositioning")));
+    if (value === "brokered") {
+      setReturnsToHomeBase(false);
+      setAircraftId("");
+    } else {
+      setBrokeredAircraftId("");
+      setWholesaleCost("");
+      setMarginValue("");
+    }
+  }
+
+  function updateFee(index: number, patch: Partial<AdditionalFee>) {
+    setAdditionalFees((prev) =>
+      prev.map((f, i) => (i === index ? { ...f, ...patch } : f))
+    );
+  }
+
+  const revenueLegs = legs.filter((l) => l.billAs === "revenue");
+  const repoLegs = legs.filter((l) => l.billAs === "repositioning");
+
+  const flightHours = revenueLegs.reduce((sum, l) => sum + (Number(l.flightHours) || 0), 0);
+  const repoHours = repoLegs.reduce((sum, l) => sum + (Number(l.flightHours) || 0), 0);
+
+  // Sum of gaps in date order, not array order — a leg added or edited out
+  // of chronological sequence (e.g. via "Add leg", or reordering) would
+  // otherwise silently compute a 0-or-negative gap for that pair instead of
+  // the real one, since nightsBetween clamps negative spans to 0.
+  //
+  // Uses every leg's date, not just revenue legs — a repositioning leg (e.g.
+  // flying out the evening before an early-morning revenue departure) is a
+  // real overnight the aircraft sits through, and previously wasn't counted
+  // at all since only revenue-leg dates fed this sum. "Returns to base
+  // between each leg" still zeroes the whole total out below regardless
+  // (that toggle's own all-or-nothing behavior, unrelated to this change).
+  const autoNightsAway = useMemo(() => {
+    const dates = legs.map((l) => l.date).filter(Boolean).sort();
+    let nights = 0;
+    for (let i = 0; i < dates.length - 1; i++) {
+      nights += nightsBetween(dates[i], dates[i + 1]);
+    }
+    return nights;
+  }, [legs]);
+
+  const totalNightsAway = returnsToHomeBase ? 0 : autoNightsAway + (Number(extraNightsAway) || 0);
+  const overnightFee = totalNightsAway * defaultOvernightFee;
+
+  const legsJson = JSON.stringify(
+    legs.map((l) => ({
+      billAs: l.billAs,
+      depAirport: l.dep?.icao ?? null,
+      arrAirport: l.arr?.icao ?? null,
+      date: l.date,
+      flightHours: Number(l.flightHours) || 0,
+      depTime: l.depTimeTBD ? null : l.depTime || null,
+      depTimeTBD: l.depTimeTBD,
+      arrTime: l.arrTime || null,
+    }))
+  );
+
+  // Margin is computed purely from wholesale cost + markup — deliberately
+  // never touches fees, discount, or FET, since none of those are money the
+  // operator actually keeps (FET in particular is collected on the
+  // client's behalf and remitted, not revenue). Percent mode marks up the
+  // wholesale cost itself ("15% over cost"), not the sell price.
+  const wholesaleCostNum = Number(wholesaleCost) || 0;
+  const marginAmount =
+    marginType === "percent" ? wholesaleCostNum * ((Number(marginValue) || 0) / 100) : Number(marginValue) || 0;
+  const marginPercent = wholesaleCostNum > 0 ? (marginAmount / wholesaleCostNum) * 100 : 0;
+  // What the client is actually charged for the flight itself — wholesale
+  // cost plus that markup — fed into calculateQuoteTotals's flatRate mode
+  // exactly like a directly-typed price would be. Fees/discount/tax below
+  // still apply on top of this, same as an owned-fleet option.
+  const brokeredFlightPrice = wholesaleCostNum + marginAmount;
+
+  const totals = useMemo(
+    () =>
+      calculateQuoteTotals({
+        flightHours,
+        hourlyRate: isBrokered ? brokeredFlightPrice : Number(hourlyRate) || 0,
+        repoHours,
+        repoRate: Number(repoRate) || 0,
+        overnightFee,
+        landingFees: Number(landingFees) || 0,
+        handlingFees: Number(handlingFees) || 0,
+        additionalFees,
+        fetTax,
+        discount: Number(discount) || 0,
+        flatRate: isBrokered,
+      }),
+    [
+      flightHours,
+      isBrokered,
+      brokeredFlightPrice,
+      hourlyRate,
+      repoHours,
+      repoRate,
+      overnightFee,
+      landingFees,
+      handlingFees,
+      additionalFees,
+      fetTax,
+      discount,
+    ]
+  );
+
+  // Own-fleet only — checking a brokered tail against JetDeck's own
+  // schedule of accepted bookings doesn't mean anything, since it isn't a
+  // plane this operator's schedule has any claim over.
+  const conflict = useMemo(() => {
+    if (isBrokered) return null;
+    const itineraryForCheck = legs.map((l) => ({
+      billAs: l.billAs,
+      depAirport: l.dep?.icao ?? null,
+      arrAirport: l.arr?.icao ?? null,
+      date: l.date,
+    }));
+    return findConflictingBooking(aircraftId, itineraryForCheck, existingBookings);
+  }, [isBrokered, aircraftId, legs, existingBookings]);
+
+  const discountPercentOfSubtotal =
+    totals.subtotal > 0 ? ((Number(discount) || 0) / totals.subtotal) * 100 : 0;
+  const needsDiscountNote = discountPercentOfSubtotal > 10;
+  const depositAmount = totals.total * depositPercent;
+
+  return (
+    <div className="flex gap-8">
+      <input type="hidden" name={`${namePrefix}aircraftId`} value={aircraftId} />
+      <input type="hidden" name={`${namePrefix}fleetSource`} value={fleetSource} />
+      <input type="hidden" name={`${namePrefix}brokeredAircraftId`} value={brokeredAircraftId} />
+      <input type="hidden" name={`${namePrefix}additionalFeesJson`} value={JSON.stringify(additionalFees)} />
+      <input type="hidden" name={`${namePrefix}fetTax`} value={fetTax ? "on" : ""} />
+      <input type="hidden" name={`${namePrefix}returnsToHomeBase`} value={returnsToHomeBase ? "on" : ""} />
+      <input type="hidden" name={`${namePrefix}overnightNights`} value={totalNightsAway} />
+      <input type="hidden" name={`${namePrefix}flightHours`} value={flightHours} />
+      <input type="hidden" name={`${namePrefix}repoHours`} value={repoHours} />
+      <input type="hidden" name={`${namePrefix}legsJson`} value={legsJson} />
+
+      <div className="flex flex-1 flex-col gap-6">
+        <fieldset disabled={locked} className="contents">
+        {priceSuggestionPromise && (
+          <Suspense fallback={<PriceSuggestionSkeleton />}>
+            <PriceSuggestionCard promise={priceSuggestionPromise} />
+          </Suspense>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <Label>Source</Label>
+          <div className="flex gap-1 rounded-md bg-muted p-1 text-sm">
+            <button
+              type="button"
+              onClick={() => handleFleetSourceChange("own_fleet")}
+              className={cn(
+                "flex-1 rounded-md px-3 py-1.5 font-medium transition-colors",
+                !isBrokered ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              My Fleet
+            </button>
+            <button
+              type="button"
+              onClick={() => handleFleetSourceChange("brokered")}
+              className={cn(
+                "flex-1 rounded-md px-3 py-1.5 font-medium transition-colors",
+                isBrokered ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Brokered
+            </button>
+          </div>
+        </div>
+
+        {isBrokered ? (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`${namePrefix}brokeredAircraftId-select`}>Brokered aircraft</Label>
+            <Select value={brokeredAircraftId} onValueChange={setBrokeredAircraftId}>
+              <SelectTrigger id={`${namePrefix}brokeredAircraftId-select`}>
+                <SelectValue placeholder="Select a brokered aircraft" />
+              </SelectTrigger>
+              <SelectContent>
+                {brokeredAircraftList.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.tailNumber} — {[a.make, a.model].filter(Boolean).join(" ") || "Unknown model"}{" "}
+                    ({a.preferredOperator.name})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {brokeredAircraftList.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No brokered aircraft on file yet —{" "}
+                <a href="/settings?tab=sourcing" target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
+                  add a preferred operator and their tails
+                </a>{" "}
+                first.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`${namePrefix}aircraftId-select`}>Aircraft</Label>
+            <Select value={aircraftId} onValueChange={handleAircraftChange}>
+              <SelectTrigger id={`${namePrefix}aircraftId-select`}>
+                <SelectValue placeholder="Select aircraft" />
+              </SelectTrigger>
+              <SelectContent>
+                {aircraftList.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.tailNumber} — {a.make} {a.model}
+                    {!a.cruiseSpeedKts && " (no cruise speed set)"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {conflict && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+            <p className="font-medium text-destructive">⚠️ Possible double-booking</p>
+            <p className="mt-1">
+              This aircraft is already away{" "}
+              {conflict.startDate === conflict.endDate
+                ? formatIsoDate(conflict.startDate)
+                : `${formatIsoDate(conflict.startDate)} – ${formatIsoDate(conflict.endDate)}`}{" "}
+              via{" "}
+              <a
+                href={`/quotes/${conflict.booking.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-4"
+              >
+                {conflict.booking.quoteNumber}
+              </a>
+              :
+            </p>
+            {/* Full leg-by-leg breakdown, not just the collapsed first-dep →
+                last-arr route — a multi-leg conflicting trip (e.g. KSNA →
+                KMYL → KSNA) previously collapsed to "KSNA → KSNA", hiding
+                exactly the detail needed to judge whether/how to adjust this
+                quote around it without clicking through. */}
+            <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
+              {revenueLegsOf(conflict.booking.itinerary).map((leg, i) => (
+                <span key={i}>
+                  {leg.depAirport} → {leg.arrAirport} — {legDate(leg)}
+                </span>
+              ))}
+            </div>
+            <p className="mt-2 text-sm">
+              Pick a different aircraft, or adjust this trip&apos;s dates to avoid the overlap.
+            </p>
+          </div>
+        )}
+
+        {isBrokered ? (
+          <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}wholesaleCost`}>Wholesale cost ($)</Label>
+              <Input
+                id={`${namePrefix}wholesaleCost`}
+                name={`${namePrefix}wholesaleCost`}
+                type="number"
+                min={0}
+                step="0.01"
+                value={wholesaleCost}
+                onChange={(e) => setWholesaleCost(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                What {selectedBrokeredAircraft?.preferredOperator.name ?? "the source operator"}{" "}
+                quoted you — never shown to the client, tracked for your own margin only.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}marginValue`}>Margin</Label>
+              <div className="flex gap-2">
+                <Input
+                  id={`${namePrefix}marginValue`}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={marginValue}
+                  onChange={(e) => setMarginValue(e.target.value)}
+                  className="flex-1"
+                />
+                <div className="flex gap-1 rounded-md bg-muted p-1 text-sm">
+                  <button
+                    type="button"
+                    onClick={() => setMarginType("percent")}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 font-medium transition-colors",
+                      marginType === "percent"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    %
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMarginType("flat")}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 font-medium transition-colors",
+                      marginType === "flat"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    $
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {marginType === "percent"
+                  ? "Applied on top of wholesale cost."
+                  : "A flat dollar amount added on top of wholesale cost."}{" "}
+                Fees/discount/tax below still apply on top of the resulting price — margin itself
+                never includes them, so it isn&apos;t inflated by tax you&apos;re just collecting
+                and passing through.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-0.5 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Price to client (flight)</span>
+                <span className="font-medium">{formatCurrency(brokeredFlightPrice)}</span>
+              </div>
+              {wholesaleCostNum > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Margin</span>
+                  <span className={marginAmount < 0 ? "text-destructive" : undefined}>
+                    {formatCurrency(marginAmount)} ({marginPercent.toFixed(1)}%)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <input type="hidden" name={`${namePrefix}hourlyRate`} value={brokeredFlightPrice} />
+            <input type="hidden" name={`${namePrefix}repoRate`} value="0" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}hourlyRate`}>Hourly rate ($)</Label>
+              <Input
+                id={`${namePrefix}hourlyRate`}
+                name={`${namePrefix}hourlyRate`}
+                type="number"
+                min={0}
+                step="0.01"
+                value={hourlyRate}
+                onChange={(e) => setHourlyRate(e.target.value)}
+                required
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}repoRate`}>Repositioning rate ($)</Label>
+              <Input
+                id={`${namePrefix}repoRate`}
+                name={`${namePrefix}repoRate`}
+                type="number"
+                min={0}
+                step="0.01"
+                value={repoRate}
+                onChange={(e) => setRepoRate(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <Label>Legs</Label>
+          {legs.map((leg, i) => {
+            const isRepositioning = leg.billAs === "repositioning";
+
+            if (isRepositioning && leg.collapsed) {
+              return (
+                <div key={leg.id} className="flex items-center gap-1.5">
+                  {legMoveButtons(leg.id, i)}
+                  <div className="flex flex-1 items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(leg.id)}
+                      className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronRight className="size-3.5" />
+                      <span className="text-xs font-medium tracking-wide uppercase">Reposition</span>
+                    </button>
+                    <span className="text-muted-foreground">
+                      {leg.dep?.icao ?? "?"} → {leg.arr?.icao ?? "?"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {leg.depTimeTBD ? "TBD" : leg.depTime || "TBD"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {leg.flightHours ? `${leg.flightHours} hrs` : "— hrs"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(leg.id)}
+                      className="ml-auto text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div key={leg.id} className="flex items-start gap-1.5">
+                <div className="flex h-9 items-center">{legMoveButtons(leg.id, i)}</div>
+                <div className="flex flex-1 flex-wrap items-end gap-3 rounded-md border border-border p-2.5">
+                <div className="flex h-9 items-center gap-2">
+                  {isRepositioning ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(leg.id)}
+                      className="flex items-center gap-1 text-xs font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground"
+                    >
+                      <ChevronDown className="size-3.5" />
+                      Reposition
+                    </button>
+                  ) : (
+                    <span className="text-xs font-medium tracking-wide text-accent uppercase">
+                      Leg {i + 1}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">From</Label>
+                  <AirportCombobox
+                    value={leg.dep}
+                    className="w-24"
+                    onSelect={(airport) => updateLeg(leg.id, { dep: airport })}
+                  />
+                </div>
+                <ArrowRight className="mb-2.5 size-4 shrink-0 text-muted-foreground" />
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">To</Label>
+                  <AirportCombobox
+                    value={leg.arr}
+                    className="w-24"
+                    onSelect={(airport) => updateLeg(leg.id, { arr: airport })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">Date</Label>
+                  <Input
+                    type="date"
+                    className="w-36"
+                    value={leg.date}
+                    onChange={(e) => updateLeg(leg.id, { date: e.target.value })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">Departs</Label>
+                  {leg.depTimeTBD ? (
+                    <div className="flex h-9 w-24 items-center text-sm text-muted-foreground">TBD</div>
+                  ) : (
+                    <Input
+                      type="time"
+                      className="w-24"
+                      value={leg.depTime}
+                      onChange={(e) => updateLeg(leg.id, { depTime: e.target.value })}
+                    />
+                  )}
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className="size-3.5 rounded border-input"
+                      checked={leg.depTimeTBD}
+                      onChange={(e) =>
+                        updateLeg(leg.id, { depTimeTBD: e.target.checked, depTime: "" })
+                      }
+                    />
+                    TBD
+                  </label>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">
+                    Arrives
+                    {leg.arrDayOffset !== 0 && (
+                      <span
+                        className="ml-1 text-accent"
+                        title={
+                          leg.arrDayOffset > 0
+                            ? `Lands ${leg.arrDayOffset === 1 ? "the next" : `${leg.arrDayOffset} days`} calendar day${leg.arrDayOffset === 1 ? "" : "s"} later`
+                            : "Lands a calendar day earlier"
+                        }
+                      >
+                        {leg.arrDayOffset > 0 ? `+${leg.arrDayOffset}d` : `${leg.arrDayOffset}d`}
+                      </span>
+                    )}
+                  </Label>
+                  <Input
+                    type="time"
+                    className="w-24"
+                    value={leg.arrTime}
+                    onChange={(e) => updateLeg(leg.id, { arrTime: e.target.value })}
+                  />
+                  {leg.arrTimeDirty && !leg.depTimeTBD && leg.depTime && (
+                    <button
+                      type="button"
+                      onClick={() => resetArrTime(leg.id)}
+                      className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">Hours</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.1"
+                      className="w-20 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      value={leg.flightHours}
+                      onChange={(e) =>
+                        updateLeg(leg.id, { flightHours: e.target.value, dirty: true })
+                      }
+                    />
+                    {leg.dirty && (leg.dep as LegAirport)?.lat && (leg.arr as LegAirport)?.lat && (
+                      <button
+                        type="button"
+                        onClick={() => recalcLeg(leg.id)}
+                        className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-1 rounded-lg bg-muted p-1">
+                  {(["revenue", "repositioning"] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => updateLeg(leg.id, { billAs: option })}
+                      className={cn(
+                        "rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                        leg.billAs === option
+                          ? "bg-background text-foreground shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {option === "revenue" ? "Revenue" : "Reposition"}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setLegs((prev) => prev.filter((l) => l.id !== leg.id))}
+                  className="mb-2.5 ml-auto text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                >
+                  Remove
+                </button>
+                </div>
+              </div>
+            );
+          })}
+          <Button type="button" variant="outline" size="sm" className="self-start" onClick={addLeg}>
+            Add leg
+          </Button>
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+          {!isBrokered && (
+            <div className="flex items-center gap-2">
+              <input
+                id={`${namePrefix}returnsToHomeBaseCheckbox`}
+                type="checkbox"
+                className="size-4 rounded border-input"
+                checked={returnsToHomeBase}
+                onChange={(e) => toggleReturnsToHomeBase(e.target.checked)}
+              />
+              <Label htmlFor={`${namePrefix}returnsToHomeBaseCheckbox`}>
+                Aircraft returns to base between each leg (no overnight stays)
+              </Label>
+            </div>
+          )}
+          {returnsToHomeBase ? (
+            <p className="pl-6 text-sm text-muted-foreground">
+              Repositioning legs added between each leg instead of overnight fees — the aircraft
+              comes home and goes back out for every one.
+            </p>
+          ) : (
+            <div className={cn("flex flex-col gap-2", !isBrokered && "pl-6")}>
+              {autoNightsAway > 0 && (
+                <p className="text-sm text-muted-foreground">
+                  {autoNightsAway} night{autoNightsAway === 1 ? "" : "s"} away calculated from leg
+                  dates
+                </p>
+              )}
+              <Label htmlFor={`${namePrefix}extraNightsAwayInput`}>Additional nights away</Label>
+              <Input
+                id={`${namePrefix}extraNightsAwayInput`}
+                type="number"
+                min={0}
+                step="1"
+                className="w-32"
+                value={extraNightsAway}
+                onChange={(e) => setExtraNightsAway(e.target.value)}
+              />
+              <p className="text-sm text-muted-foreground">
+                {totalNightsAway} night{totalNightsAway === 1 ? "" : "s"} total ×{" "}
+                {formatCurrency(defaultOvernightFee)}/night — rate set in Settings
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`${namePrefix}landingFees`}>Landing fees ($)</Label>
+            <Input
+              id={`${namePrefix}landingFees`}
+              name={`${namePrefix}landingFees`}
+              type="number"
+              min={0}
+              step="0.01"
+              value={landingFees}
+              onChange={(e) => setLandingFees(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`${namePrefix}handlingFees`}>Handling fees ($)</Label>
+            <Input
+              id={`${namePrefix}handlingFees`}
+              name={`${namePrefix}handlingFees`}
+              type="number"
+              min={0}
+              step="0.01"
+              value={handlingFees}
+              onChange={(e) => setHandlingFees(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label>Additional fees</Label>
+          {additionalFees.map((fee, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Input
+                placeholder="Catering"
+                value={fee.label}
+                onChange={(e) => updateFee(i, { label: e.target.value })}
+              />
+              <Input
+                type="number"
+                min={0}
+                step="0.01"
+                className="w-32"
+                placeholder="0.00"
+                value={fee.amount || ""}
+                onChange={(e) => updateFee(i, { amount: Number(e.target.value) || 0 })}
+              />
+              <button
+                type="button"
+                onClick={() => setAdditionalFees((prev) => prev.filter((_, idx) => idx !== i))}
+                className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={() => setAdditionalFees((prev) => [...prev, { label: "", amount: 0 }])}
+          >
+            Add fee
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            id={`${namePrefix}fetTaxCheckbox`}
+            type="checkbox"
+            className="size-4 rounded border-input"
+            checked={fetTax}
+            onChange={(e) => setFetTax(e.target.checked)}
+          />
+          <Label htmlFor={`${namePrefix}fetTaxCheckbox`}>FET tax (7.5%, US domestic)</Label>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`${namePrefix}discount`}>Discount ($)</Label>
+          <Input
+            id={`${namePrefix}discount`}
+            name={`${namePrefix}discount`}
+            type="number"
+            min={0}
+            step="0.01"
+            value={discount}
+            onChange={(e) => setDiscount(e.target.value)}
+          />
+          {totals.subtotal > 0 && Number(discount) > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {discountPercentOfSubtotal.toFixed(1)}% of subtotal
+            </p>
+          )}
+          {needsDiscountNote && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`${namePrefix}discountNote`}>Reason for discount (required, &gt;10%)</Label>
+              <Input
+                id={`${namePrefix}discountNote`}
+                name={`${namePrefix}discountNote`}
+                value={discountNote}
+                onChange={(e) => setDiscountNote(e.target.value)}
+                required
+              />
+            </div>
+          )}
+          {!needsDiscountNote && (
+            <input type="hidden" name={`${namePrefix}discountNote`} value={discountNote} />
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`${namePrefix}clientNotes`}>Notes for client</Label>
+          <Textarea
+            id={`${namePrefix}clientNotes`}
+            name={`${namePrefix}clientNotes`}
+            rows={3}
+            defaultValue={initialValues.clientNotes}
+            placeholder="Shown on the client's quote page for this option — e.g. catering, ground transport, special instructions"
+          />
+        </div>
+        </fieldset>
+      </div>
+
+      <div className="w-72 shrink-0">
+        <div className="sticky top-6 flex flex-col gap-2 rounded-md border border-border p-4 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Flight ({flightHours.toFixed(1)} hrs)</span>
+            <span>{formatCurrency(totals.flightCost)}</span>
+          </div>
+          {!isBrokered && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Repositioning ({repoHours.toFixed(1)} hrs)</span>
+              <span>{formatCurrency(totals.repoCost)}</span>
+            </div>
+          )}
+          {overnightFee > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Overnight fee</span>
+              <span>{formatCurrency(overnightFee)}</span>
+            </div>
+          )}
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Fees</span>
+            <span>
+              {formatCurrency(
+                Number(landingFees || 0) + Number(handlingFees || 0) + totals.feesTotal
+              )}
+            </span>
+          </div>
+          {Number(discount) > 0 && (
+            <div className="flex justify-between text-destructive">
+              <span>Discount</span>
+              <span>-{formatCurrency(Number(discount))}</span>
+            </div>
+          )}
+          {fetTax && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">FET (7.5%)</span>
+              <span>{formatCurrency(totals.fetAmount)}</span>
+            </div>
+          )}
+          <div className="mt-2 flex justify-between border-t border-border pt-2 font-semibold">
+            <span>Total</span>
+            <span>{formatCurrency(totals.total)}</span>
+          </div>
+          <div className="flex justify-between text-muted-foreground">
+            <span>Deposit ({Math.round(depositPercent * 100)}%)</span>
+            <span>{formatCurrency(depositAmount)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function optionLabel(index: number) {
+  return `Option ${String.fromCharCode(65 + index)}`;
+}
+
+export function QuoteBuilderForm({
+  routeSummaryText,
+  requestorLine,
+  aircraftList,
+  brokeredAircraftList,
+  airportsByIcao,
+  positionByAircraftId,
+  trailingPositionByAircraftId,
+  existingBookings,
+  initialOptions,
+  priceSuggestionPromise,
+  depositPercent,
+  defaultOvernightFee,
+  defaultBlockTimeBufferHours,
+  isAccepted,
+  internalNotes,
+  validUntil,
+  action,
+  submitLabel,
+}: {
+  routeSummaryText: string;
+  requestorLine: string;
+  aircraftList: Aircraft[];
+  brokeredAircraftList: BrokeredAircraftOption[];
+  airportsByIcao: Record<string, AirportOption>;
+  // Where each aircraft is actually expected to be on this trip's first
+  // date (see lib/aircraft-schedule.ts) — falls back to home base per
+  // aircraft when omitted or when an aircraft has no entry.
+  positionByAircraftId?: Record<string, string>;
+  // Where each aircraft should reposition to right after this trip ends —
+  // falls back to home base same as positionByAircraftId.
+  trailingPositionByAircraftId?: Record<string, string>;
+  // Other operator bookings already accepted or awaiting confirmation — fed
+  // into a live, purely client-side overlap check (see
+  // findConflictingBooking) so a double-booking surfaces the moment the
+  // operator picks the aircraft/dates, not just when the client accepts.
+  existingBookings: ConflictCandidate[];
+  // One or more priced itinerary variations ("Options") — most quotes have
+  // exactly one.
+  initialOptions: QuoteOptionValues[];
+  // Only ever shown alongside the first option — the AI suggestion is tied
+  // to the underlying trip request, not to any one option's pricing.
+  priceSuggestionPromise: Promise<PriceSuggestion>;
+  depositPercent: number;
+  defaultOvernightFee: number;
+  defaultBlockTimeBufferHours: number;
+  isAccepted?: boolean;
+  internalNotes: string;
+  validUntil: string;
+  action: (formData: FormData) => Promise<void>;
+  submitLabel: string;
+}) {
+  const [unlocked, setUnlocked] = useState(!isAccepted);
+  const locked = Boolean(isAccepted) && !unlocked;
+
+  const [options, setOptions] = useState(() =>
+    initialOptions.map((iv, i) => ({
+      key: rowId(),
+      label: iv.label || optionLabel(i),
+      initialValues: iv,
+    }))
+  );
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  // What a brand-new option starts from: the same customer-requested legs
+  // every option is ultimately answering, normalized out of either shape
+  // QuoteOptionValues can arrive in (a fresh quote's requestedLegs, or an
+  // existing quote's already-saved legs) so "Add Option" always seeds a
+  // real itinerary instead of a blank one.
+  const baseRequestedLegs = useMemo((): QuoteLegInput[] => {
+    const first = initialOptions[0];
+    if (first?.legs && first.legs.length > 0) {
+      return first.legs
+        .filter((l) => l.billAs === "revenue")
+        .map((l) => ({
+          dep: l.dep,
+          arr: l.arr,
+          date: l.date,
+          flightHours: l.flightHours,
+          depTime: l.depTime,
+          depTimeTBD: l.depTimeTBD,
+          arrTime: l.arrTime,
+        }));
+    }
+    return first?.requestedLegs ?? [];
+  }, [initialOptions]);
+
+  function addOption() {
+    setOptions((prev) => [
+      ...prev,
+      {
+        key: rowId(),
+        label: optionLabel(prev.length),
+        initialValues: {
+          aircraftId: null,
+          fleetSource: "own_fleet",
+          brokeredAircraftId: null,
+          wholesaleCost: null,
+          requestedLegs: baseRequestedLegs,
+          hourlyRate: 0,
+          repoRate: 0,
+          returnsToHomeBase: false,
+          extraNightsAway: 0,
+          landingFees: 0,
+          handlingFees: 0,
+          additionalFees: [],
+          fetTax: true,
+          discount: 0,
+          discountNote: "",
+          clientNotes: "",
+        },
+      },
+    ]);
+    setActiveIndex(options.length);
+  }
+
+  function removeOption(index: number) {
+    if (options.length <= 1) return;
+    setOptions((prev) => prev.filter((_, i) => i !== index));
+    setActiveIndex((prev) => (prev >= index ? Math.max(0, prev - 1) : prev));
+  }
+
+  function renameOption(index: number, label: string) {
+    setOptions((prev) => prev.map((o, i) => (i === index ? { ...o, label } : o)));
+  }
+
+  return (
+    <form action={action} className="flex flex-col gap-6">
+      {isAccepted && (
+        <div className="rounded-md border border-amber-400/50 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
+          {locked ? (
+            <>
+              <p className="font-medium">
+                The client has already taken action on this quote (requested to book, been
+                approved, or accepted).
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "The client has already taken action on this quote. Are you sure you want to change the pricing?"
+                    )
+                  ) {
+                    setUnlocked(true);
+                  }
+                }}
+                className="mt-1 text-sm underline underline-offset-4 hover:text-foreground"
+              >
+                Unlock to edit pricing
+              </button>
+            </>
+          ) : (
+            <p className="font-medium">
+              Pricing unlocked — the client has already taken action on this quote, so
+              double-check any changes before saving.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div>
+        <p className="font-medium">{routeSummaryText}</p>
+        <p className="text-sm text-muted-foreground">{requestorLine}</p>
+      </div>
+
+      <input type="hidden" name="optionCount" value={options.length} />
+
+      {options.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1 border-b border-border">
+          {options.map((opt, i) => (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => setActiveIndex(i)}
+              className={cn(
+                "rounded-t-md px-3 py-1.5 text-sm font-medium transition-colors",
+                i === activeIndex
+                  ? "border-b-2 border-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {options.map((opt, i) => (
+        <div key={opt.key} className={i === activeIndex ? "flex flex-col gap-4" : "hidden"}>
+          {options.length > 1 && (
+            <div className="flex items-center justify-between gap-3">
+              <Input
+                value={opt.label}
+                onChange={(e) => renameOption(i, e.target.value)}
+                className="h-8 w-48 text-sm font-medium"
+              />
+              <input type="hidden" name={`option_${i}_label`} value={opt.label} />
+              <button
+                type="button"
+                onClick={() => removeOption(i)}
+                className="text-xs text-muted-foreground underline underline-offset-4 hover:text-destructive"
+              >
+                Remove option
+              </button>
+            </div>
+          )}
+          <QuoteOptionFields
+            namePrefix={`option_${i}_`}
+            aircraftList={aircraftList}
+            brokeredAircraftList={brokeredAircraftList}
+            airportsByIcao={airportsByIcao}
+            positionByAircraftId={positionByAircraftId}
+            trailingPositionByAircraftId={trailingPositionByAircraftId}
+            existingBookings={existingBookings}
+            initialValues={opt.initialValues}
+            priceSuggestionPromise={i === 0 ? priceSuggestionPromise : undefined}
+            depositPercent={depositPercent}
+            defaultOvernightFee={defaultOvernightFee}
+            defaultBlockTimeBufferHours={defaultBlockTimeBufferHours}
+            locked={locked}
+          />
+        </div>
+      ))}
+
+      <fieldset disabled={locked} className="contents">
+        <Button type="button" variant="outline" size="sm" className="self-start" onClick={addOption}>
+          + Add Option
+        </Button>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="internalNotes">Internal notes</Label>
+          <Textarea
+            id="internalNotes"
+            name="internalNotes"
+            rows={3}
+            defaultValue={internalNotes}
+            placeholder="Not visible to the client"
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="validUntil">Quote valid until</Label>
+          <Input id="validUntil" name="validUntil" type="date" defaultValue={validUntil} required />
+        </div>
+
+        <Button type="submit" size="lg" className="self-start">
+          {submitLabel}
+        </Button>
+      </fieldset>
+    </form>
+  );
+}
