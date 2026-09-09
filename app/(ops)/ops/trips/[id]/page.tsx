@@ -500,12 +500,16 @@ async function markReleasedBrokered(tripId: string) {
 // flight times) — until that app exists, ops marks them directly. Kept as
 // named, single-purpose actions rather than the Board's generic next/back
 // arrow (which explicitly refuses these same three jumps) so each one can
-// carry its own meaning — and, for Landed, its own data entry.
+// carry its own meaning — and, for Landed, its own data entry. Shared by
+// both pipelines — a brokered trip reaches this same Preflight stage from
+// Released (Brokered) instead of Ready for Release, per the operator's own
+// request to track a brokered trip's actual departure/landing too, not
+// just stop tracking once it's released to the client.
 async function markAtAircraft(tripId: string) {
   "use server";
 
   const scoped = await getScopedTrip(tripId);
-  if (!scoped || scoped.trip.status !== "ready_for_release") return;
+  if (!scoped || !["ready_for_release", "released_brokered"].includes(scoped.trip.status)) return;
 
   await prisma.trip.update({ where: { id: tripId }, data: { status: "pre_flight" } });
   redirect(`/ops/trips/${tripId}?saved=preflight`);
@@ -657,10 +661,11 @@ export default async function TripDetailPage({
   const markDepartedWithId = markDeparted.bind(null, trip.id);
   const markLandedWithId = markLanded.bind(null, trip.id);
 
-  // "Flagged if released [sitting in Ready for Release] and the flight
-  // hasn't entered Preflight 45 minutes prior to departure" — per the
-  // operator's own spec. Computed live rather than stored, so it's always
-  // accurate to the current time regardless of when the page loads.
+  // "Flagged if released [sitting in Ready for Release, or its brokered
+  // equivalent Released (Brokered)] and the flight hasn't entered Preflight
+  // 45 minutes prior to departure" — per the operator's own spec. Computed
+  // live rather than stored, so it's always accurate to the current time
+  // regardless of when the page loads.
   const firstLeg = legs[0];
   const firstLegDeparture =
     firstLeg?.date && !firstLeg.depTimeTBD && firstLeg.depTime
@@ -670,7 +675,9 @@ export default async function TripDetailPage({
     ? (firstLegDeparture.getTime() - new Date().getTime()) / 60000
     : null;
   const releaseFlagged =
-    trip.status === "ready_for_release" && minutesToDeparture !== null && minutesToDeparture <= RELEASE_FLAG_MINUTES;
+    ["ready_for_release", "released_brokered"].includes(trip.status) &&
+    minutesToDeparture !== null &&
+    minutesToDeparture <= RELEASE_FLAG_MINUTES;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
@@ -868,7 +875,7 @@ export default async function TripDetailPage({
         </div>
       )}
 
-      {trip.status === "ready_for_release" && (
+      {["ready_for_release", "released_brokered"].includes(trip.status) && (
         <div className="mt-6 rounded-md border border-border p-4">
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Release</h2>

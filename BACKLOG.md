@@ -3591,3 +3591,82 @@ JetDeck and emailing the client separately.
   first time in this app, so it's HTML-escaped and newline-converted
   (`escapeHtml` in the same file) rather than interpolated verbatim
   the way this file's other, non-free-typed email fields are.
+
+## Quote tool notes: option ordering, aircraft category, deliverability, layout
+
+Four small operator notes handled together — none touched the same
+file as another, but all came in as one batch.
+
+- ~~**Client quote options auto-sorted by price — shipped**~~
+  (`app/q/[token]/page.tsx`): the "Choose an option" list's query
+  changed from `orderBy: { createdAt: "asc" }` (whatever order ops
+  happened to build them in) to `orderBy: { total: "asc" }`, cheapest
+  first. `QuoteOption.sortOrder` exists in the schema but was never
+  actually set or read anywhere in the app, so there was no manual
+  ordering to preserve or conflict with.
+- ~~**Aircraft category shown on the client quote — shipped**~~
+  (`components/quote/client-page-ui.tsx`): `aircraftLabelFor` — the
+  shared helper behind both the option picker and the itinerary
+  section, on the client quote page and the passenger manifest page
+  alike — now appends the category ("— Super-Midsize") using the
+  existing `categoryLabel` helper, for both owned-fleet and brokered
+  aircraft. Make/model/tail number alone doesn't tell most clients
+  what size of jet they're booking; category does.
+- ~~**"+ Add Option" moved to the top of the quote builder — shipped**~~
+  (`components/quote/quote-builder-form.tsx`): previously sat below
+  the *entire* currently-active option's form (itinerary, pricing,
+  everything), so adding a second or third option meant scrolling past
+  all of it every time. Now lives in the same row as the option tabs,
+  at the top of the builder, visible regardless of how long the active
+  option's form has grown. Still disabled while pricing is locked,
+  same as before.
+- ~~**Email deliverability diagnostics — shipped**~~ (`lib/email.ts`,
+  `app/(app)/settings/page.tsx`): "many of my quotes... do not get to
+  the client or go to spam." The most likely cause, by far: an
+  operator's From address sits on a domain that was never added/fully
+  verified in Resend, which fails SPF/DKIM and reads as a strong
+  spam/spoofing signal to Gmail, Outlook, etc. — this operator has no
+  way to see that status today short of checking the Resend dashboard
+  directly. New `checkDomainStatus` calls Resend's own Domains API for
+  whatever domain the From address would actually send from (operator
+  override or the app default) and surfaces it right on the Settings
+  email tab — verified (green), added-but-not-verified with its actual
+  status (red), or not found in Resend at all (red). Separately, every
+  outbound email now also carries a plain-text alternative
+  (`htmlToText`, a tag-stripper — every email body in this app is
+  simple hand-written markup, not a real document, so a full parser
+  isn't warranted) alongside the HTML — HTML-only email is itself a
+  spam-score signal most providers penalize, independent of domain
+  verification. Both fixes ship now; whether the domain-status check
+  actually flags a problem depends on this operator's real Resend
+  account state, which isn't visible from here — check Settings →
+  Email after this deploys.
+
+## Brokered trips continue past Released (Brokered)
+
+Operator: "need to be able to move the brokered trips into the
+preflight, inflight, and landed." A reversal of the reasoning behind
+last round's change (brokered trips terminating at Released
+(Brokered) since Preflight/Inflight/Landed were assumed to be the
+source operator's own concern) — this operator does want to track a
+brokered flight's actual departure and landing after all, not just
+stop once the itinerary is out the door.
+
+- ~~**`stagesForFleetSource("brokered")` extended to six stages —
+  shipped**~~ (`lib/trip.ts`): now `confirmed -> ops_review ->
+  released_brokered -> pre_flight -> in_flight -> completed` — Released
+  (Brokered) takes the same structural role Ready for Release plays
+  for owned fleet (its own narrower gate — Ops Review checklist +
+  itinerary sent, no payment/crew-ack — is unchanged), then both
+  pipelines rejoin the same three remaining stages. `TRIP_STAGES`
+  (the board's flat column list) already had `released_brokered`
+  positioned right before `pre_flight`, so no reordering was needed
+  there.
+- ~~**`markAtAircraft` accepts either prior stage — shipped**~~
+  (`app/(ops)/ops/trips/[id]/page.tsx`): now fires from
+  `ready_for_release` OR `released_brokered`; `markDeparted`/
+  `markLanded` needed no change since they already key off
+  `pre_flight`/`in_flight` regardless of fleet source. The trip
+  detail page's "Release" panel (Mark At Aircraft) and the "flagged if
+  not yet Preflight 45 minutes before departure" checks on both the
+  detail page and the Ops Board now also key off either status.

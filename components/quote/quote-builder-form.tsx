@@ -1715,25 +1715,39 @@ export function QuoteBuilderForm({
 
       <input type="hidden" name="optionCount" value={options.length} />
 
-      {options.length > 1 && (
-        <div className="flex flex-wrap items-center gap-1 border-b border-border">
-          {options.map((opt, i) => (
-            <button
-              key={opt.key}
-              type="button"
-              onClick={() => setActiveIndex(i)}
-              className={cn(
-                "rounded-t-md px-3 py-1.5 text-sm font-medium transition-colors",
-                i === activeIndex
-                  ? "border-b-2 border-accent text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border">
+        {options.length > 1 ? (
+          <div className="flex flex-wrap items-center gap-1">
+            {options.map((opt, i) => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setActiveIndex(i)}
+                className={cn(
+                  "rounded-t-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  i === activeIndex
+                    ? "border-b-2 border-accent text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span />
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mb-1 self-end"
+          disabled={locked}
+          onClick={addOption}
+        >
+          + Add Option
+        </Button>
+      </div>
 
       {options.map((opt, i) => (
         <div key={opt.key} className={i === activeIndex ? "flex flex-col gap-4" : "hidden"}>
@@ -1773,10 +1787,6 @@ export function QuoteBuilderForm({
       ))}
 
       <fieldset disabled={locked} className="contents">
-        <Button type="button" variant="outline" size="sm" className="self-start" onClick={addOption}>
-          + Add Option
-        </Button>
-
         <div className="flex flex-col gap-2">
           <Label htmlFor="internalNotes">Internal notes</Label>
           <Textarea

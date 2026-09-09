@@ -25,9 +25,12 @@ async function getQuoteByToken(token: string) {
       tripRequest: true,
       contact: true,
       selectedOption: { include: { aircraft: true, brokeredAircraft: true } },
+      // Cheapest first — the client picks an option to compare price, so
+      // the order it's presented in should already be doing that work
+      // rather than reflecting whatever order ops happened to build them in.
       options: {
         include: { aircraft: true, brokeredAircraft: true },
-        orderBy: { createdAt: "asc" },
+        orderBy: { total: "asc" },
       },
       trip: {
         include: {

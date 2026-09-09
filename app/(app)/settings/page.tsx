@@ -17,6 +17,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { CopyLinkButton } from "@/components/quote/copy-link-button";
 import { SettingsTabProvider, SettingsTabPanel } from "@/components/settings/settings-tabs";
 import { EMAIL_TEMPLATES, type EmailTemplateKey } from "@/lib/email-templates";
+import { checkDomainStatus } from "@/lib/email";
+import { cn } from "@/lib/utils";
 
 async function startStripeOnboarding() {
   "use server";
@@ -136,6 +138,15 @@ export default async function SettingsPage({
     include: { _count: { select: { brokeredAircraft: true } } },
     orderBy: { name: "asc" },
   });
+
+  // What every outbound email actually sends from once the fallback chain
+  // in lib/email.ts's sendEmail runs — checked against Resend's own domain
+  // records so a deliverability problem (unverified SPF/DKIM, the single
+  // most common reason a quote never reaches the client or lands in spam)
+  // shows up here instead of only being visible by digging into the Resend
+  // dashboard directly.
+  const effectiveFromEmail = operator.fromEmail || process.env.EMAIL_FROM || "noreply@jetdeck.app";
+  const domainStatus = await checkDomainStatus(effectiveFromEmail);
 
   const templateFieldNames: Record<EmailTemplateKey, { subject: string; body: string }> = {
     quote_sent: { subject: "quoteSentSubject", body: "quoteSentBody" },
@@ -414,6 +425,22 @@ export default async function SettingsPage({
                   operator name, and replies go to the Reply-to address below regardless of what
                   this is set to. Leave blank to use the app default.
                 </p>
+                {domainStatus && (
+                  <p
+                    className={cn(
+                      "rounded-md px-3 py-2 text-sm",
+                      domainStatus.found && domainStatus.status === "verified" && domainStatus.sendingEnabled
+                        ? "bg-accent/10 text-accent"
+                        : "bg-destructive/10 text-destructive"
+                    )}
+                  >
+                    {domainStatus.found
+                      ? domainStatus.status === "verified" && domainStatus.sendingEnabled
+                        ? `✓ ${domainStatus.domain} is verified in Resend — sending is enabled.`
+                        : `${domainStatus.domain} is added in Resend but not fully verified (status: ${domainStatus.status}) — check its DNS records in your Resend dashboard. Until it's verified, emails sent from this address may fail or land in spam.`
+                      : `${domainStatus.domain} wasn't found in Resend — add and verify it in your Resend dashboard, or emails sent from this address will fail or land in spam.`}
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col gap-2">

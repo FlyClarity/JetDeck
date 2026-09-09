@@ -4,6 +4,7 @@
 // same building blocks, rather than each page keeping its own near-copy.
 
 import { mapsSearchUrl } from "@/lib/itinerary";
+import { categoryLabel } from "@/lib/aircraft";
 
 export function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
@@ -30,23 +31,32 @@ export function Row({
   );
 }
 
-// "Bombardier Challenger 300 (N251FT)" — a client identifies the actual
-// aircraft at the FBO by tail number, not make/model alone, so it's
-// included for a brokered aircraft too (BrokeredAircraft.tailNumber is
-// always set, unlike make/model which can be blank for a not-yet-fully-
-// detailed source), not just an owned-fleet one.
+// "Bombardier Challenger 300 (N251FT) — Super-Midsize" — a client
+// identifies the actual aircraft at the FBO by tail number, not make/model
+// alone, so it's included for a brokered aircraft too (BrokeredAircraft.
+// tailNumber is always set, unlike make/model which can be blank for a
+// not-yet-fully-detailed source), not just an owned-fleet one. Category is
+// appended when known — it's what actually tells a client what size/type
+// of jet they're booking, since make/model alone means little to most
+// people.
 export function aircraftLabelFor(option: {
-  aircraft: { make: string; model: string; tailNumber: string } | null;
-  brokeredAircraft: { make: string | null; model: string | null; tailNumber: string } | null;
+  aircraft: { make: string; model: string; tailNumber: string; category: string } | null;
+  brokeredAircraft: {
+    make: string | null;
+    model: string | null;
+    tailNumber: string;
+    category: string | null;
+  } | null;
 }): string {
   if (option.aircraft) {
-    return `${option.aircraft.make} ${option.aircraft.model} (${option.aircraft.tailNumber})`;
+    return `${option.aircraft.make} ${option.aircraft.model} (${option.aircraft.tailNumber}) — ${categoryLabel(option.aircraft.category)}`;
   }
   if (option.brokeredAircraft) {
     const makeModel = `${option.brokeredAircraft.make ?? ""} ${option.brokeredAircraft.model ?? ""}`.trim();
-    return makeModel
+    const base = makeModel
       ? `${makeModel} (${option.brokeredAircraft.tailNumber})`
       : option.brokeredAircraft.tailNumber;
+    return option.brokeredAircraft.category ? `${base} — ${categoryLabel(option.brokeredAircraft.category)}` : base;
   }
   return "Aircraft to be confirmed";
 }

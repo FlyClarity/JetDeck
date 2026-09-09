@@ -11,14 +11,18 @@
 // not as its own separate one) -> Ready for Release (checklist passed,
 // itinerary sent, payment secured, crew acknowledged) -> Preflight (crew at
 // the aircraft) -> Inflight (crew departed) -> Landed (crew landed,
-// block/flight time recorded). Brokered trips instead terminate at Released
-// (Brokered) — see stagesForFleetSource below for each fleetSource's own
-// (shorter) stage list, used to drive the trip detail page's stepper; this
-// flat list is only for the board's column layout. Every transition from
-// Ready for Release/Released (Brokered) onward is a crew-app event in the
-// operator's eventual vision; since that app doesn't exist yet, each one
-// has an explicit ops-side "Mark ..." override action instead of a bare
-// next/back arrow — see app/(ops)/ops/trips/[id]/page.tsx.
+// block/flight time recorded). Brokered trips take their own gate —
+// Released (Brokered), itinerary-sent + Ops Review checklist only, no
+// payment/crew-ack — in place of Ready for Release, then rejoin the same
+// Preflight/Inflight/Landed stages as owned fleet (the operator does want
+// visibility into a brokered flight's actual departure/landing, not just a
+// stop once it's released to the client). See stagesForFleetSource below
+// for each fleetSource's own stage list, used to drive the trip detail
+// page's stepper; this flat list is only for the board's column layout.
+// Every transition from Ready for Release/Released (Brokered) onward is a
+// crew-app event in the operator's eventual vision; since that app doesn't
+// exist yet, each one has an explicit ops-side "Mark ..." override action
+// instead of a bare next/back arrow — see app/(ops)/ops/trips/[id]/page.tsx.
 export const TRIP_STAGES = [
   "confirmed",
   "ops_review",
@@ -30,12 +34,12 @@ export const TRIP_STAGES = [
 ] as const;
 
 // Per-fleetSource stage list, in order, for the trip detail page's progress
-// stepper — a brokered trip never has Ready for Release/Preflight/Inflight/
-// Landed stages, since JetDeck's responsibility as broker ends once the
-// itinerary is released to the client.
+// stepper — a brokered trip takes Released (Brokered) where an owned-fleet
+// trip takes Ready for Release, then both continue through the same
+// Preflight/Inflight/Landed stages.
 export function stagesForFleetSource(fleetSource: string): readonly string[] {
   return fleetSource === "brokered"
-    ? (["confirmed", "ops_review", "released_brokered"] as const)
+    ? (["confirmed", "ops_review", "released_brokered", "pre_flight", "in_flight", "completed"] as const)
     : (["confirmed", "ops_review", "ready_for_release", "pre_flight", "in_flight", "completed"] as const);
 }
 

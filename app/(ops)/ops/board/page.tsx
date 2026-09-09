@@ -125,7 +125,7 @@ export default async function OpsBoardPage() {
                     ? (firstLegDeparture.getTime() - new Date().getTime()) / 60000
                     : null;
                   const flagged =
-                    t.status === "ready_for_release" &&
+                    ["ready_for_release", "released_brokered"].includes(t.status) &&
                     minutesToDeparture !== null &&
                     minutesToDeparture <= RELEASE_FLAG_MINUTES;
 
