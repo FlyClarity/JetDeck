@@ -3708,3 +3708,45 @@ switching back to Sales mode first.
   separate copy per mode) — Ops just didn't surface them. Fleet stays
   gated behind the same `showFleet` (non-broker) check the Sales side
   already uses, consistent with how Fleet is hidden there too.
+
+## SaveButton rollout, round two: Quote Builder, Settings, Fleet, Crew, Contacts
+
+Finishing what an earlier round explicitly left as a "first pass, not
+full app": the dirty/saved `SaveButton` (grayed out "Saved" until a
+field changes, active again the moment one does) was only live on the
+ops trip detail page. This round rolls it out to every remaining
+*edit* form the operator named — Quote Builder, Settings, Fleet, Crew,
+Contacts — while deliberately leaving every *creation* form (new
+quote, new aircraft, new crew member) on a plain always-enabled
+submit, since "starts disabled, nothing to save yet" is the wrong
+story for a form with nothing saved at all.
+
+- ~~**Quote Builder — shipped**~~ (`components/quote/quote-builder-form.tsx`):
+  new `dirtyTracking` prop, on only for `/quotes/[id]` (editing an
+  existing quote) and off for `/quotes/new` (creation). This form
+  turned out to be the real test of SaveButton's "listen for bubbled
+  input/change events" design — several of its edits are onClick array
+  mutations or toggles with no native DOM event of their own (add/
+  remove option, add/remove leg, reorder a leg, add/remove a fee,
+  Revenue/Reposition toggle, own-fleet/brokered toggle, percent/flat
+  margin toggle), so each of those now explicitly dispatches a
+  synthetic bubbling `change` event to mark the form dirty — either
+  from the mutating function itself (`notifyDirty()`, added once per
+  function) or, for `QuoteBuilderForm`'s own add/remove-option buttons,
+  from a `formRef`. Confirmed the aircraft/role `Select` components
+  didn't need this treatment — Radix's own `Select` already dispatches
+  a real bubbling `change` event on its hidden native `<select>`
+  whenever the value changes, which is how aircraft swaps were already
+  going to be caught without any extra wiring.
+- ~~**Settings — shipped**~~ (`app/(app)/settings/page.tsx`): the one
+  big cross-tab settings form's final "Save" button. Preferred
+  Operators' own add/edit forms live on separate `/sourcing` routes,
+  out of scope here (not one of the five areas named).
+- ~~**Fleet — shipped**~~ (`app/(app)/fleet/[id]/page.tsx`): the
+  aircraft edit form's "Save Changes". Per-photo actions (set cover,
+  remove, upload) stayed plain buttons — those are immediate one-off
+  actions, not part of a batch of edits waiting to be saved.
+- ~~**Crew — shipped**~~ (`app/(ops)/ops/crew/[id]/page.tsx`): the
+  crew member edit form's "Save".
+- ~~**Contacts — shipped**~~ (`app/(app)/contacts/[id]/page.tsx`): the
+  contact edit form's "Save Changes".

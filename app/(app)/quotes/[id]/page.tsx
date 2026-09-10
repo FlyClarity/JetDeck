@@ -888,6 +888,7 @@ export default async function QuotePage({
           isAccepted={["pending_confirmation", "approved", "accepted"].includes(quote.status)}
           action={updateQuoteWithId}
           submitLabel="Save Changes"
+          dirtyTracking
         />
       </div>
     </div>

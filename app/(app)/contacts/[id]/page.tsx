@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
-import { Button } from "@/components/ui/button";
+import { SaveButton } from "@/components/ui/save-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -153,9 +153,7 @@ export default async function ContactDetailPage({
           />
         </div>
 
-        <Button type="submit" className="self-start">
-          Save Changes
-        </Button>
+        <SaveButton className="self-start">Save Changes</SaveButton>
       </form>
     </div>
   );

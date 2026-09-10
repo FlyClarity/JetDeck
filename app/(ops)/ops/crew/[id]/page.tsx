@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Button } from "@/components/ui/button";
+import { SaveButton } from "@/components/ui/save-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -188,9 +189,7 @@ export default async function CrewMemberPage({
           </div>
         </div>
 
-        <Button type="submit" className="self-start">
-          Save
-        </Button>
+        <SaveButton className="self-start">Save</SaveButton>
       </form>
 
       <details className="mt-8 text-sm">

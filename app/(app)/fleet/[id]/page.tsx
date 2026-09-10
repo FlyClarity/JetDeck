@@ -6,6 +6,7 @@ import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
 import { Button } from "@/components/ui/button";
+import { SaveButton } from "@/components/ui/save-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -453,7 +454,7 @@ export default async function EditAircraftPage({
         </div>
 
         <div className="flex items-center gap-3">
-          <Button type="submit">Save Changes</Button>
+          <SaveButton>Save Changes</SaveButton>
         </div>
       </form>
 

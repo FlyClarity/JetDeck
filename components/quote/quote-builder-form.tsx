@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronUp, ChevronDown, ChevronRight } from "lucide-react";
 import type { Aircraft } from "@/lib/generated/prisma/client";
 import { calculateQuoteTotals, formatCurrency, type AdditionalFee } from "@/lib/quote";
@@ -21,6 +21,7 @@ import {
   type PriceSuggestion,
 } from "@/components/quote/price-suggestion-card";
 import { Button } from "@/components/ui/button";
+import { SaveButton } from "@/components/ui/save-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -334,6 +335,18 @@ function QuoteOptionFields({
   defaultBlockTimeBufferHours: number;
   locked: boolean;
 }) {
+  // A handful of state changes here happen through onClick array/toggle
+  // mutations (reorder a leg, switch Revenue/Reposition, switch fleet
+  // source) rather than a typed input, so they fire no native DOM input/
+  // change event of their own for the enclosing form's SaveButton (when
+  // dirtyTracking is on) to notice. This dispatches one manually from the
+  // component's own root node, which still bubbles up to the form same as
+  // a real one would.
+  const rootRef = useRef<HTMLDivElement>(null);
+  function notifyDirty() {
+    rootRef.current?.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   const [fleetSource, setFleetSource] = useState<"own_fleet" | "brokered">(
     initialValues.fleetSource
   );
@@ -572,6 +585,7 @@ function QuoteOptionFields({
   }
 
   function updateLeg(id: string, patch: Partial<LegRow>) {
+    notifyDirty();
     setLegs((prev) =>
       prev.map((leg) => {
         if (leg.id !== id) return leg;
@@ -613,6 +627,7 @@ function QuoteOptionFields({
   }
 
   function recalcLeg(id: string) {
+    notifyDirty();
     setLegs((prev) =>
       prev.map((leg) => {
         if (leg.id !== id) return leg;
@@ -637,6 +652,7 @@ function QuoteOptionFields({
   }
 
   function resetArrTime(id: string) {
+    notifyDirty();
     setLegs((prev) =>
       prev.map((leg) => {
         if (leg.id !== id) return leg;
@@ -659,6 +675,7 @@ function QuoteOptionFields({
   }
 
   function addLeg() {
+    notifyDirty();
     setLegs((prev) => [
       ...prev,
       {
@@ -697,6 +714,7 @@ function QuoteOptionFields({
   // edge case an operator doing this at all is already choosing to
   // override by hand.
   function moveLeg(id: string, direction: -1 | 1) {
+    notifyDirty();
     setLegs((prev) => {
       const index = prev.findIndex((l) => l.id === id);
       const target = index + direction;
@@ -752,6 +770,7 @@ function QuoteOptionFields({
   // carries over untouched; only the aircraft/rate fields reset since
   // they're mode-specific.
   function handleFleetSourceChange(value: "own_fleet" | "brokered") {
+    notifyDirty();
     setFleetSource(value);
     setLegs((prev) => prev.filter((l) => !(l.auto && l.billAs === "repositioning")));
     if (value === "brokered") {
@@ -878,7 +897,7 @@ function QuoteOptionFields({
   const depositAmount = totals.total * depositPercent;
 
   return (
-    <div className="flex gap-8">
+    <div ref={rootRef} className="flex gap-8">
       <input type="hidden" name={`${namePrefix}aircraftId`} value={aircraftId} />
       <input type="hidden" name={`${namePrefix}fleetSource`} value={fleetSource} />
       <input type="hidden" name={`${namePrefix}brokeredAircraftId`} value={brokeredAircraftId} />
@@ -1040,7 +1059,10 @@ function QuoteOptionFields({
                 <div className="flex gap-1 rounded-md bg-muted p-1 text-sm">
                   <button
                     type="button"
-                    onClick={() => setMarginType("percent")}
+                    onClick={() => {
+                      notifyDirty();
+                      setMarginType("percent");
+                    }}
                     className={cn(
                       "rounded-md px-2.5 py-1 font-medium transition-colors",
                       marginType === "percent"
@@ -1052,7 +1074,10 @@ function QuoteOptionFields({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setMarginType("flat")}
+                    onClick={() => {
+                      notifyDirty();
+                      setMarginType("flat");
+                    }}
                     className={cn(
                       "rounded-md px-2.5 py-1 font-medium transition-colors",
                       marginType === "flat"
@@ -1309,7 +1334,10 @@ function QuoteOptionFields({
 
                 <button
                   type="button"
-                  onClick={() => setLegs((prev) => prev.filter((l) => l.id !== leg.id))}
+                  onClick={() => {
+                    notifyDirty();
+                    setLegs((prev) => prev.filter((l) => l.id !== leg.id));
+                  }}
                   className="mb-2.5 ml-auto text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
                 >
                   Remove
@@ -1416,7 +1444,10 @@ function QuoteOptionFields({
               />
               <button
                 type="button"
-                onClick={() => setAdditionalFees((prev) => prev.filter((_, idx) => idx !== i))}
+                onClick={() => {
+                  notifyDirty();
+                  setAdditionalFees((prev) => prev.filter((_, idx) => idx !== i));
+                }}
                 className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
               >
                 Remove
@@ -1428,7 +1459,10 @@ function QuoteOptionFields({
             variant="outline"
             size="sm"
             className="self-start"
-            onClick={() => setAdditionalFees((prev) => [...prev, { label: "", amount: 0 }])}
+            onClick={() => {
+              notifyDirty();
+              setAdditionalFees((prev) => [...prev, { label: "", amount: 0 }]);
+            }}
           >
             Add fee
           </Button>
@@ -1566,6 +1600,11 @@ export function QuoteBuilderForm({
   validUntil,
   action,
   submitLabel,
+  // Editing an existing quote (submitLabel "Save Changes") gets the
+  // dirty/saved SaveButton treatment; the fresh-quote creation flow keeps a
+  // plain always-enabled submit, since "starts disabled, nothing to save
+  // yet" is the wrong story for a form that's never been saved at all.
+  dirtyTracking,
 }: {
   routeSummaryText: string;
   requestorLine: string;
@@ -1598,9 +1637,11 @@ export function QuoteBuilderForm({
   validUntil: string;
   action: (formData: FormData) => Promise<void>;
   submitLabel: string;
+  dirtyTracking?: boolean;
 }) {
   const [unlocked, setUnlocked] = useState(!isAccepted);
   const locked = Boolean(isAccepted) && !unlocked;
+  const formRef = useRef<HTMLFormElement>(null);
 
   const [options, setOptions] = useState(() =>
     initialOptions.map((iv, i) => ({
@@ -1634,7 +1675,16 @@ export function QuoteBuilderForm({
     return first?.requestedLegs ?? [];
   }, [initialOptions]);
 
+  // SaveButton (when dirtyTracking is on) only sees real DOM input/change
+  // events bubbling from the form — which a plain onClick button add/remove
+  // never fires — so these three explicitly dispatch one on the form
+  // itself to mark the same "unsaved change" state a typed edit would.
+  function markDirty() {
+    formRef.current?.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   function addOption() {
+    markDirty();
     setOptions((prev) => [
       ...prev,
       {
@@ -1665,6 +1715,7 @@ export function QuoteBuilderForm({
 
   function removeOption(index: number) {
     if (options.length <= 1) return;
+    markDirty();
     setOptions((prev) => prev.filter((_, i) => i !== index));
     setActiveIndex((prev) => (prev >= index ? Math.max(0, prev - 1) : prev));
   }
@@ -1674,7 +1725,7 @@ export function QuoteBuilderForm({
   }
 
   return (
-    <form action={action} className="flex flex-col gap-6">
+    <form ref={formRef} action={action} className="flex flex-col gap-6">
       {isAccepted && (
         <div className="rounded-md border border-amber-400/50 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
           {locked ? (
@@ -1803,9 +1854,15 @@ export function QuoteBuilderForm({
           <Input id="validUntil" name="validUntil" type="date" defaultValue={validUntil} required />
         </div>
 
-        <Button type="submit" size="lg" className="self-start">
-          {submitLabel}
-        </Button>
+        {dirtyTracking ? (
+          <SaveButton size="lg" className="self-start">
+            {submitLabel}
+          </SaveButton>
+        ) : (
+          <Button type="submit" size="lg" className="self-start">
+            {submitLabel}
+          </Button>
+        )}
       </fieldset>
     </form>
   );

@@ -11,6 +11,7 @@ import {
   createConnectDashboardLoginLink,
 } from "@/lib/stripe";
 import { Button } from "@/components/ui/button";
+import { SaveButton } from "@/components/ui/save-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -592,9 +593,7 @@ export default async function SettingsPage({
               </div>
             </SettingsTabPanel>
 
-            <Button type="submit" className="self-start">
-              Save
-            </Button>
+            <SaveButton className="self-start">Save</SaveButton>
           </form>
         </SettingsTabProvider>
       </div>
