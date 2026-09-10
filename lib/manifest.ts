@@ -8,6 +8,18 @@ import { departureInstantUtc } from "@/lib/time";
 
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 
+// Disabled per the operator's own testing feedback: a client already gets
+// several emails right after booking (confirmation, itinerary, etc.), and
+// the one asking them to fill in passenger info was frequently the one
+// that got missed. For now ops enters passenger details directly instead
+// (the inline editor on the trip detail page) rather than relying on the
+// client to respond to an email. The self-service /manifest/[token] link
+// this still generates keeps working if ops wants to share it manually
+// with a client who'd rather do it themselves (CopyLinkButton) — it's just
+// not sent or nagged automatically anymore. Flip this back on to restore
+// both the initial request email and the reminder cadence below.
+const MANIFEST_EMAILS_ENABLED = false;
+
 // Ops Build Brief, Module 2 — reprioritized ahead of Crew Assignment
 // (Step 24), so the trigger here is Trip creation itself rather than the
 // brief's original "CREW_ASSIGNED" status change: there's no crew module
@@ -60,7 +72,7 @@ export async function createManifestForTrip(tripId: string): Promise<void> {
     },
   });
 
-  if (!leadEmail) return;
+  if (!MANIFEST_EMAILS_ENABLED || !leadEmail) return;
 
   const legs = revenueLegsOf(quote.selectedOption.itinerary);
   const firstLeg = legs[0];
@@ -95,6 +107,8 @@ const REMINDER_THRESHOLDS: { type: string; hours: number }[] = [
 // instead of not firing at all, since this always checks actual
 // hours-until-departure rather than assuming how recently it last ran.
 export async function sendManifestReminders(): Promise<{ sent: number }> {
+  if (!MANIFEST_EMAILS_ENABLED) return { sent: 0 };
+
   const trips = await prisma.trip.findMany({
     where: {
       status: { notIn: ["completed", "invoiced", "closed", "cancelled", "cancelled_by_operator"] },

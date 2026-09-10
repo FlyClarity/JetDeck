@@ -3670,3 +3670,27 @@ stop once the itinerary is out the door.
   detail page's "Release" panel (Mark At Aircraft) and the "flagged if
   not yet Preflight 45 minutes before departure" checks on both the
   detail page and the Ops Board now also key off either status.
+
+## Manifest collection emails turned off
+
+Operator, after real-world testing: "I think for the time being it is
+best that the operator enter all details from the passengers rather
+than send an email for manifest collection... too many emails once
+booking a trip" — the passenger-info-request email was frequently the
+one a client missed among everything else they get right after
+booking.
+
+- ~~**`MANIFEST_EMAILS_ENABLED = false` — shipped**~~ (`lib/manifest.ts`):
+  a single switch gating both `createManifestForTrip`'s initial
+  request email and `sendManifestReminders`' entire 72/48/24/12-hour
+  cadence. Nothing else changed — the lead Passenger row is still
+  created automatically on booking (so ops has something to fill in
+  and a manifest link exists if they ever want it), the client
+  self-service `/manifest/[token]` page still works if ops chooses to
+  share it manually (`CopyLinkButton`, already prominent on the trip
+  page per an earlier round), and the ops-side inline passenger editor
+  — already fully capable of entering every field — is now the
+  expected primary path. `/ops/trips` and the Ops Board already show
+  "X/Y submitted" per trip, so ops has visibility into what still
+  needs entering without an email nudge. Flipping the one boolean back
+  restores the old behavior exactly if this changes again.
