@@ -1,0 +1,722 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Operator {
+  id               String   @id @default(cuid())
+  clerkOrgId       String   @unique
+  slug             String   @unique // used in intake URL: /intake/[slug]
+  name             String
+  logoUrl          String?
+  wireInstructions String? // shown on confirmed booking
+  termsText        String? // shown on client quote page (clickwrap)
+  termsVersion     String? // hash of current terms, stored on acceptance
+  notifyEmail      String? // internal notification address
+  replyToEmail     String? // operator's charter inbox — Reply-To header on outbound quote emails, routes client replies back through triage
+  fromEmail        String? // "From" address on outbound email — must be on a domain verified in Resend, else falls back to EMAIL_FROM
+  depositPercent   Float    @default(0.25) // 25% card hold default
+  inboundEmail     String? // e.g. requests-clarity@inbound.jetdeck.app
+
+  // Stripe Connect — each operator has their own connected Express
+  // account (Stripe-hosted onboarding), so client card holds route
+  // directly to the operator's own account rather than JetDeck's
+  // platform account. stripeChargesEnabled mirrors Stripe's own
+  // account.charges_enabled flag (updated via the account.updated
+  // webhook) — onboarding can be started (stripeAccountId set) without
+  // being complete, so this is what actually gates whether a checkout
+  // session can be created for this operator.
+  stripeAccountId      String?
+  stripeChargesEnabled Boolean @default(false)
+  // % surcharge added to the deposit when a client pays by credit card
+  // instead of wire — offsets card processing costs. 0 disables it.
+  ccProcessingFeePercent Float @default(3.0)
+
+  // Quote Builder pricing defaults — editable per operator
+  defaultBlockTimeBufferHours Float @default(0.2) // added per leg on top of raw distance/cruise-speed time (climb/descent/taxi)
+  defaultOvernightFee         Float @default(1500) // $/night when the aircraft doesn't return to home base after the trip
+
+  // Editable client-email templates — null means "use the built-in
+  // default" (see lib/email-templates.ts), so an operator who never
+  // touches these keeps getting the same email everyone always got.
+  // Subject/body are stored as-is with {{variable}} placeholders,
+  // substituted at send time — same trust level as wireInstructions/
+  // termsText above (an operator's own words sent to their own clients),
+  // not sanitized any differently.
+  quoteSentSubject        String?
+  quoteSentBody           String?
+  bookingConfirmedSubject String?
+  bookingConfirmedBody    String?
+  bookingCancelledSubject String?
+  bookingCancelledBody    String?
+
+  // Operator type controls which modules and UI are shown
+  operatorType String @default("part135")
+  // "part135" -- owns/manages aircraft, full platform
+  // "broker"  -- no fleet, sources third-party aircraft only
+  // "hybrid"  -- owns fleet AND brokers when unavailable (Clarity Aviation model)
+
+  createdAt DateTime @default(now())
+
+  aircraft           Aircraft[]
+  contacts           Contact[]
+  tripRequests       TripRequest[]
+  quotes             Quote[]
+  trips              Trip[]
+  preferredOperators PreferredOperator[]
+  inboundEmails      InboundEmail[]
+  crewMembers        CrewMember[]
+  aircraftDowntimes  AircraftDowntime[]
+}
+
+model Contact {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  firstName  String
+  lastName   String
+  email      String
+  phone      String?
+  company    String?
+  type       String // "direct" | "broker"
+  notes      String?
+
+  // "standard" -- normal card-hold-on-acceptance flow
+  // "cash_on_account" -- trusted/invoiced client; skip the card hold
+  // requirement entirely at booking time (finalizeBooking treats it like
+  // no deposit is due)
+  paymentTerms String @default("standard")
+
+  createdAt  DateTime @default(now())
+
+  tripRequests TripRequest[]
+  quotes       Quote[]
+}
+
+model Aircraft {
+  id             String   @id @default(cuid())
+  operatorId     String
+  operator       Operator @relation(fields: [operatorId], references: [id])
+  tailNumber     String
+  make           String
+  model          String
+  category       String // "light" | "midsize" | "super_midsize" | "heavy" | "ultra_long"
+  seats          Int
+  homeBase       String // ICAO
+  currentBase    String? // updated as trips complete (for positioning)
+  hourlyRate     Float
+  repoRate       Float? // if different from hourly (often discounted)
+  minHoursPerDay Float    @default(2.0)
+  rangeNm        Int?
+  cruiseSpeedKts Float? // true cruise airspeed — manufacturer spec, entered once per aircraft; drives flight-time estimation
+  yearOfManufacture   Int?
+  yearOfRefurbishment Int?
+  status         String   @default("active")
+  createdAt      DateTime @default(now())
+
+  // Photo gallery (Vercel Blob URLs, public access) and a flexible amenity
+  // list (see AIRCRAFT_AMENITIES in lib/aircraft.ts) — replaces the old
+  // single hasWifi boolean, which didn't scale to "what's actually on this
+  // plane" for the client quote page. Managed in the Fleet section, shown
+  // to the client on /q/[token].
+  photos    String[] @default([])
+  amenities String[] @default([])
+
+  quoteOptions QuoteOption[]
+  downtimes    AircraftDowntime[]
+}
+
+// A scheduled or ongoing maintenance window — the Ops Review checklist's
+// "aircraft available" check reads this alongside the existing booking-
+// conflict check (findConflictingBooking), which only ever knew about
+// other trips, never actual maintenance. Dated as a range (not a simple
+// Aircraft.status flag) so a future window can be entered in advance
+// ("down next Tuesday for a 100-hour") and checked against a specific
+// trip's dates, not just "is it down right now."
+model AircraftDowntime {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  aircraftId String
+  aircraft   Aircraft @relation(fields: [aircraftId], references: [id])
+
+  startDate String // ISO date (YYYY-MM-DD), same convention as leg dates
+  endDate   String // inclusive
+  reason    String?
+
+  createdAt DateTime @default(now())
+}
+
+// Reference data for flight-time/distance calculations. Empty until a real
+// airport dataset (e.g. OurAirports/FAA) is imported — see BACKLOG.md.
+model Airport {
+  icao      String   @id
+  iata      String?
+  name      String
+  lat       Float
+  lon       Float
+  elevation Int? // feet
+  timezone  String? // IANA tz name, e.g. "America/New_York"
+  city      String? // OurAirports "municipality"
+  state     String? // OurAirports "iso_region", country prefix stripped (e.g. "CA", not "US-CA")
+  createdAt DateTime @default(now())
+}
+
+model TripRequest {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  contactId  String?
+  contact    Contact? @relation(fields: [contactId], references: [id])
+
+  // Source
+  source       String // "email_inbound" | "intake_form" | "manual"
+  rawEmailBody String? // original email text (for email_inbound)
+  rawEmailFrom String? // sender email address
+
+  // Requestor info
+  requestorName    String
+  requestorEmail   String
+  requestorPhone   String?
+  requestorCompany String?
+  requestorType    String // "direct" | "broker"
+
+  // Trip details (AI-extracted or form-entered)
+  tripType        String // "one_way" | "round_trip" | "multi_leg"
+  legs            Json // [{ depAirport, arrAirport, date, timePref, timeFlexible, passengerCount }]
+  aircraftPref    String?
+  budgetMentioned Float?
+  specialRequests String?
+  urgency         String? // "asap" | "normal" | "flexible"
+
+  // AI scoring
+  opportunityScore  String? // "high" | "medium" | "low" | "pass"
+  scoreReason       String?
+  positioningNote   String?
+  historyNote       String?
+  recommendedAction String? // "quote_now" | "review" | "pass"
+  aiProcessedAt     DateTime?
+
+  // AI price suggestion shown on /quotes/new — computed once and cached
+  // here so reloading/revisiting that page doesn't re-bill the AI call.
+  aiPriceSuggestion Float?
+
+  status String @default("new")
+  // "new" | "scoring" | "ready" | "quoted" | "passed" | "expired" | "closed"
+  // "expired" is set by a daily cron sweep (lib/expire-stale.ts) for
+  // requests still sitting in "new"/"ready" — never even quoted — whose
+  // last requested leg date has passed with no action taken.
+
+  createdAt DateTime @default(now())
+  quotes    Quote[]
+}
+
+model Quote {
+  id            String       @id @default(cuid())
+  operatorId    String
+  operator      Operator     @relation(fields: [operatorId], references: [id])
+  quoteNumber   String // "Q-2024-0042"
+  tripRequestId String?
+  tripRequest   TripRequest? @relation(fields: [tripRequestId], references: [id])
+  contactId     String?
+  contact       Contact?     @relation(fields: [contactId], references: [id])
+
+  // "Options" — one quote can hold multiple priced itinerary variations
+  // (e.g. same trip from a different departure airport, or a different
+  // aircraft) that the client chooses between. Every quote has at least
+  // one QuoteOption; selectedOptionId points at whichever one is "active"
+  // for booking purposes — the sole option for a legacy single-option
+  // quote, or whichever one the client picked once there's more than one.
+  // Everything downstream that used to read pricing/itinerary/aircraft
+  // straight off Quote (booking, Stripe, conflict-checking, the client
+  // page) now reads it off quote.selectedOption instead.
+  options          QuoteOption[] @relation("QuoteOptions")
+  selectedOptionId String?
+  selectedOption   QuoteOption?  @relation("SelectedOption", fields: [selectedOptionId], references: [id])
+
+  internalNotes String? // operator-only, never shown to the client — shared across all options, not option-specific
+  validUntil    DateTime
+
+  // Snapshotted from Operator.termsText the moment the quote is sent (see
+  // sendQuote in app/(app)/quotes/[id]/page.tsx) — the client-facing page
+  // and acceptedTermsHash both read this instead of the live, editable
+  // Operator.termsText, so an operator editing their charter terms in
+  // Settings after a quote goes out can't retroactively change what a
+  // given quote's client is shown or what they're recorded as having
+  // agreed to. Null for quotes sent before this field existed; those fall
+  // back to the live Operator.termsText, same as always.
+  termsTextSnapshot String?
+
+  // Non-revenue trips created directly (bypassing the client quoting
+  // pipeline entirely) — owner flights, maintenance ferries, etc. Null for
+  // every normal client-facing quote.
+  tripPurpose String? // "owner" | "maintenance" | "repositioning" | "other"
+
+  // Client-facing
+  token  String @unique @default(cuid())
+  status String @default("draft")
+  // "draft" | "sent" | "pending_confirmation" | "approved" | "accepted"
+  // | "declined" | "expired" | "converted" | "cancelled"
+  // "expired" is set two ways: computed live on /q/[token] from validUntil
+  // (the pricing offer's own shelf life) without ever being stored, or set
+  // for real by the daily cron sweep (lib/expire-stale.ts) for a
+  // draft/sent/pending_confirmation/approved quote whose selected option's
+  // last leg date has passed with no acceptance — a different trigger
+  // (the flight date, not the quote's validity window) than the live check.
+  // Two-step booking: client clicks "Request to Book" (non-binding, no
+  // terms/signature yet) -> pending_confirmation, requestedAt set. Operator
+  // reviews (same-aircraft conflict check runs automatically as advisory
+  // context) and either declines, or confirms -> approved, approvedAt set,
+  // client emailed to come finalize. Only then does the client see the
+  // legal "I Accept — Book This Charter" terms/signature step -> accepted
+  // (via finalizeBooking: Trip, Stripe hold, confirmation email). A fresh
+  // conflict check re-runs at that final signature too, as a safety net for
+  // the rare case something else got booked in between operator approval
+  // and client signature — if one turns up, it drops back to
+  // pending_confirmation instead of finalizing. See lib/booking-server.ts.
+
+  sentAt      DateTime?
+  requestedAt DateTime? // client clicked "Request to Book"
+  approvedAt  DateTime? // operator confirmed availability
+
+  // Legal acceptance record — set only at the final "I Accept" signature
+  // step (status approved -> accepted), not at the earlier non-binding
+  // "Request to Book" click.
+  acceptedAt        DateTime?
+  acceptedByName    String? // name the client typed to confirm they read the terms
+  acceptedIp        String?
+  acceptedUserAgent String?
+  acceptedTermsHash String? // hash of exact terms shown at acceptance
+
+  declinedAt DateTime?
+
+  // Set when requesting to book (or, on the rare re-check, finalizing) finds
+  // another accepted/pending quote on the same aircraft with overlapping
+  // dates — surfaced to the operator as advisory context for their
+  // availability decision, not a hard gate (the review step is now
+  // unconditional either way).
+  conflictWarning String?
+
+  // Set when the operator cancels an already-accepted booking (aircraft/crew
+  // no longer available, etc.)
+  cancelledAt     DateTime?
+  cancellationNote String?
+
+  // Payment method — chosen by the client at the signature step, alongside
+  // acceptedAt/acceptedByName. Independent of cardHoldStatus: a card hold is
+  // authorized either way (unless the linked Contact is cash-on-account,
+  // which skips Stripe entirely) — "wire" and "ach" both just mean the hold
+  // is a backup rather than how the flight actually gets paid for. See
+  // finalizeBooking and markWireReceived in lib/booking-server.ts.
+  paymentMethod String? // "wire" | "credit_card" | "ach"
+
+  // ACH bank debit — a second, separate Stripe Checkout Session/PaymentIntent
+  // from the card hold above (ACH can't share a manual-capture hold session
+  // the way a card can; it's a real direct debit with its own multi-day
+  // settlement window). The client starts this from /q/[token] once the
+  // card hold is done — see startAchPayment in lib/booking-server.ts.
+  // Confirmed automatically via the payment_intent.succeeded webhook
+  // (app/api/webhooks/stripe/route.ts), unlike wire which has no bank feed
+  // and needs the operator to manually mark it received.
+  achPaymentIntentId String?
+  achPaymentStatus   String? // "pending" | "processing" | "succeeded" | "failed"
+  achConfirmedAt     DateTime?
+
+  // The actual dollar amount held via Stripe — equals the option's
+  // depositAmount for a wire payer, or depositAmount plus the operator's
+  // ccProcessingFeePercent surcharge for a credit-card payer (the fee only
+  // ever applies when the card itself is how the flight gets paid for).
+  // Null until a hold is actually created (no hold at all for cash-on-
+  // account). Snapshotted here rather than recomputed later so it stays
+  // accurate even if the operator changes ccProcessingFeePercent afterward.
+  cardHoldAmount Float?
+
+  // Set by the operator (Mark Wire Received, on the quote detail page) once
+  // an actual wire payment shows up — the trigger that flips the linked
+  // Trip to "confirmed" and releases the backup card hold, since it's no
+  // longer needed. Stays null for a credit-card payer (their card hold IS
+  // the payment) and for cash-on-account (no hold to release).
+  wireConfirmedAt DateTime?
+
+  // Stripe
+  stripePaymentIntentId String?
+  cardHoldStatus        String? // "pending" | "authorized" | "released" | "captured"
+
+  // Set once the client-facing "you're confirmed" email actually goes out —
+  // guards against double-sending, since when a deposit is due that email
+  // now fires from the checkout.session.completed webhook (see
+  // sendBookingConfirmationEmail in lib/booking-server.ts), and Stripe
+  // webhooks can redeliver the same event.
+  confirmationEmailSentAt DateTime?
+
+  createdBy String // Clerk user ID
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  trip Trip?
+}
+
+// A single priced itinerary variation on a Quote. Most quotes have exactly
+// one (created alongside the Quote itself); "Options" lets an operator add
+// more (e.g. same trip from a more efficient departure airport, or a
+// different aircraft) so the client can compare and pick. Quote.
+// selectedOptionId points at whichever one is currently "active" — see the
+// comment on Quote.options.
+model QuoteOption {
+  id      String @id @default(cuid())
+  quoteId String
+  quote   Quote  @relation("QuoteOptions", fields: [quoteId], references: [id], onDelete: Cascade)
+
+  // Shown to the client when a quote has more than one option (e.g.
+  // "Option A"); irrelevant/hidden for the common single-option case.
+  label     String @default("Option A")
+  sortOrder Int    @default(0)
+
+  aircraftId String?
+  aircraft   Aircraft? @relation(fields: [aircraftId], references: [id])
+
+  // Own fleet vs brokered
+  fleetSource String @default("own_fleet")
+  // "own_fleet" -- aircraft from operator's own managed fleet
+  // "brokered"  -- third-party aircraft sourced for this trip
+  brokeredAircraftId String?
+  brokeredAircraft   BrokeredAircraft? @relation(fields: [brokeredAircraftId], references: [id])
+
+  // Itinerary
+  itinerary Json // [{ depAirport, arrAirport, depDt, arrDt, flightHours }]
+
+  // Pricing
+  flightHours       Float
+  hourlyRate        Float
+  repoHours         Float   @default(0)
+  repoRate          Float   @default(0)
+  returnsToHomeBase Boolean @default(true) // if false, overnightFee applies instead of a return repositioning leg
+  overnightNights   Int     @default(0)
+  overnightFee      Float   @default(0) // computed: overnightNights * operator.defaultOvernightFee at time of quote
+  landingFees       Float   @default(0)
+  handlingFees      Float   @default(0)
+  additionalFees    Json    @default("[]") // [{ label, amount }]
+  fetTax            Float   @default(0)
+  discount          Float   @default(0)
+  discountNote      String?
+  subtotal          Float
+  total             Float
+  depositAmount     Float? // calculated from total * operator.depositPercent
+
+  // Brokered trip cost tracking (only populated when fleetSource = "brokered")
+  wholesaleCost Float? // what operator pays the third-party operator
+  brokerMargin  Float? // total - wholesaleCost (calculated, stored for reporting)
+
+  // AI pricing recommendation
+  aiPriceSuggestion Float?
+  aiPriceReasoning  String?
+
+  // Shown on the client-facing quote page (/q/[token]) for this specific
+  // option — e.g. catering, ground transport, aircraft-specific notes.
+  // Distinct from Quote.internalNotes, which is operator-only and shared
+  // across all options on the quote.
+  clientNotes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  selectedForQuote Quote[] @relation("SelectedOption")
+}
+
+model Trip {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  tripNumber String // mirrors Quote.quoteNumber (e.g. "Q-2026-0007") — one
+  // identifier for the whole lifecycle rather than a separate trip sequence,
+  // so sales, ops, and the client can all reference the same number
+  quoteId    String   @unique
+  quote      Quote    @relation(fields: [quoteId], references: [id])
+
+  status String @default("confirmed")
+  // Two different paths depending on the selected option's fleetSource
+  // (see lib/trip.ts's stagesForFleetSource) — an owned-fleet trip is
+  // JetDeck's own operation end to end; a brokered trip's actual flying is
+  // the source operator's responsibility, so it exits the pipeline much
+  // earlier.
+  //
+  // Owned fleet: "confirmed" (just sent from sales to Ops) -> "ops_review"
+  // ("In Review" — Ops Review checklist: aircraft/crew/duty-time
+  // compliance, passenger manifest, FBOs; crew gets assigned during this
+  // stage, not as a separate one) -> "ready_for_release" (checklist
+  // passed, itinerary sent, payment secured, crew acknowledged — see
+  // evaluateReleaseReadiness) -> "pre_flight" ("Preflight" — crew marked
+  // at the aircraft) -> "in_flight" ("Inflight" — crew marked departing)
+  // -> "completed" ("Landed" — crew marked landed, block/actual flight
+  // time recorded).
+  //
+  // Brokered: "confirmed" -> "ops_review" ("In Review" — ops handles
+  // requested changes, catering/transportation, notes, verifies the
+  // itinerary matches the source operator's own; crew is captured as free
+  // text — brokeredCaptainName/brokeredCoPilotName/brokeredCabinHostName
+  // — not a real CrewMember assignment) -> "released_brokered" ("Released
+  // (Brokered)" — itinerary sent to the client; this is the end of
+  // JetDeck's own pipeline for that trip, since Preflight/Inflight/Landed
+  // are the source operator's to track, not this operator's).
+  //
+  // Both paths can also reach "invoiced" | "closed" |
+  // "cancelled_by_operator" (cascaded from Quote.status when an operator
+  // cancels an already-accepted booking — "cancelled_by_client" and
+  // "cancelled_weather" are reserved for when those flows exist, nothing
+  // sets them yet).
+  //
+  // Historical values no longer reachable, kept here so old data reads
+  // sensibly: "crew_assigned" (used to be its own stage between ops_review
+  // and pre_flight; the operator folded crew assignment into "In Review"
+  // instead — existing rows were migrated to "ops_review") and
+  // "ops_approved" (renamed to "ready_for_release" once the gate to reach
+  // it grew beyond just the Ops Review checklist — existing rows migrated).
+  // "awaiting_payment" USED to be the first stage here — removed: payment
+  // is no longer a pipeline stage, it's tracked separately (derived from
+  // the linked Quote, see lib/trip.ts's isTripPaid) and now gates
+  // "ready_for_release" instead of gating entry into Ops at all.
+
+  // Gates visibility on the Ops Board/Trips list/Calendar — a Trip exists
+  // the moment the client signs and the hold is placed (same as always),
+  // but Ops doesn't see it until sales reviews it from the Needs Review
+  // queue and clicks "Send to Ops". Existing trips were backfilled to true
+  // by the migration that added this column, so nothing already visible in
+  // Ops disappeared — only new trips require the explicit handoff.
+  sentToOps Boolean @default(false)
+
+  // Free-text stand-in for real crew assignment on a brokered trip — the
+  // actual crew are the source operator's employees, not this operator's
+  // own roster, so there's no CrewMember row to assign and no compliance
+  // to check (that's the source operator's responsibility). Separate
+  // named fields (not one blob) per the operator's own request. Only
+  // ever shown/used when the selected option's fleetSource is "brokered".
+  brokeredCaptainName    String?
+  brokeredCoPilotName    String?
+  brokeredCabinHostName  String?
+
+  // Ready-for-release prerequisites beyond the Ops Review checklist itself
+  // (see evaluateReleaseReadiness in lib/ops-review.ts) — payment is
+  // derived live from the Quote (isTripPaid), not stored here, since it
+  // can change independently of anything ops does on this page.
+  itinerarySentAt    DateTime? // set by sendItinerary
+  crewAcknowledgedAt DateTime? // ops-side stand-in for the not-yet-built crew app's acknowledgment
+
+  // Entered by ops when marking a trip Landed — stands in for the crew app
+  // actually recording this. Distinct from the itinerary's planned
+  // flightHours (lib/itinerary.ts) — this is what was actually flown.
+  actualBlockHours   Float?
+  actualFlightHours  Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  passengers        Passenger[]
+  manifestReminders ManifestReminder[]
+  crewAssignments   TripCrewAssignment[]
+}
+
+// One row per passenger on a Trip, including the lead passenger. Every
+// passenger — lead or additional — gets their own unique token so the lead
+// can forward an individual link rather than sharing their own; isLead
+// just controls which capabilities the /manifest/[token] page exposes for
+// that row (the lead can add/see the whole trip's roster, others can only
+// see and edit themselves).
+model Passenger {
+  id         String @id @default(cuid())
+  operatorId String
+  tripId     String
+  trip       Trip   @relation(fields: [tripId], references: [id])
+  token      String @unique @default(cuid())
+
+  // Identity
+  firstName   String?
+  lastName    String?
+  dateOfBirth DateTime?
+  weightLbs   Int?
+
+  // ID
+  idType   String? // "passport" | "drivers_license" | "government_id"
+  idNumber String?
+  idExpiry DateTime?
+  idImageUrl String? // uploaded to Vercel Blob, same pattern as Aircraft.photos
+
+  // Which legs this passenger actually flies — empty means every revenue
+  // leg (the common case: most passengers fly the whole trip). Indices are
+  // positions in the itinerary's full stored array, same indexing
+  // revenueLegsWithIndex/updateLegFbos already use, so a passenger doesn't
+  // need its own leg model just to reference one.
+  legIndexes Int[] @default([])
+
+  // Optional
+  specialRequests String?
+
+  // Status
+  isLead      Boolean   @default(false)
+  submittedAt DateTime?
+  verifiedAt  DateTime?
+  verifiedBy  String? // Clerk user ID
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Tracks which reminder thresholds have already fired for a trip, so the
+// cron sweep (lib/manifest.ts) never sends the same one twice. One row per
+// threshold, created lazily by the sweep itself the first time it applies
+// (not pre-created when the trip is booked), since which thresholds even
+// make sense depends on how much runway there is before departure.
+model ManifestReminder {
+  id         String    @id @default(cuid())
+  operatorId String
+  tripId     String
+  trip       Trip      @relation(fields: [tripId], references: [id])
+  type       String // "72hr" | "48hr" | "24hr" | "12hr"
+  sentAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([tripId, type])
+}
+
+// The operator's pilots/crew. Deliberately minimal — the brief explicitly
+// defers full duty-time/currency tracking, type ratings, and a scheduling
+// calendar as their own later modules; this is just enough to assign a
+// name to a trip.
+model CrewMember {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+
+  name  String
+  role  String // "captain" | "first_officer" | "flight_attendant" | "other"
+  email String?
+  phone String?
+  active Boolean @default(true)
+
+  // Only meaningful for pilot roles (captain/first_officer) — a flight
+  // attendant or "other" crew member isn't subject to FAR 135 Subpart F
+  // flight/duty rules and isn't gated by the Ops Review checklist (per the
+  // operator: cabin attendants are "no different than a passenger" for
+  // compliance purposes). "qualified" is a deliberate manual sign-off by
+  // the Chief Pilot — not derived purely from the expiry dates below —
+  // since it's meant to capture their actual judgment (company-required
+  // training, overall currency), with the dates serving as an automatic
+  // safety net so an expired certificate still blocks Ops Review even if
+  // nobody remembered to uncheck this.
+  qualified      Boolean   @default(false)
+  medicalExpiry  DateTime?
+  trainingExpiry DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments TripCrewAssignment[]
+}
+
+// roleOnTrip snapshots CrewMember.role at assignment time rather than
+// always reading the live role — someone's normal role can change (or
+// they could crew a trip in a different seat than usual) without rewriting
+// history on trips they already flew.
+model TripCrewAssignment {
+  id         String     @id @default(cuid())
+  operatorId String
+  tripId     String
+  trip       Trip       @relation(fields: [tripId], references: [id])
+  crewId     String
+  crew       CrewMember @relation(fields: [crewId], references: [id])
+  roleOnTrip String
+
+  createdAt DateTime @default(now())
+
+  @@unique([tripId, crewId])
+}
+
+// Trusted third-party operators — the operator's sourcing network
+model PreferredOperator {
+  id           String   @id @default(cuid())
+  operatorId   String
+  operator     Operator @relation(fields: [operatorId], references: [id])
+
+  name         String // Company name, e.g. "East Coast Jets"
+  contactName  String?
+  contactEmail String
+  contactPhone String?
+  notes        String? // e.g. "Great King Airs, reliable, responds fast"
+  isActive     Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+
+  brokeredAircraft BrokeredAircraft[]
+}
+
+// A specific tail sourced from a preferred operator for a brokered trip
+model BrokeredAircraft {
+  id                  String            @id @default(cuid())
+  operatorId          String // the JetDeck tenant doing the brokering
+  preferredOperatorId String
+  preferredOperator   PreferredOperator @relation(fields: [preferredOperatorId], references: [id])
+
+  tailNumber String
+  make       String?
+  model      String?
+  category   String? // "light" | "midsize" | etc.
+  seats      Int?
+  homeBase   String?
+  // Same shape as Aircraft.photos/amenities — shown on the client quote
+  // page exactly like an owned-fleet aircraft's would be.
+  photos     String[] @default([])
+  amenities  String[] @default([])
+
+  createdAt DateTime @default(now())
+
+  quoteOptions QuoteOption[]
+}
+
+model InboundEmail {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+
+  // Postmark's own message id for this delivery — used to dedupe webhook
+  // retries so a slow response doesn't cause the same email to be
+  // reprocessed (and re-billed to the AI) multiple times.
+  postmarkMessageId String? @unique
+
+  // Raw email data from Postmark
+  fromEmail    String
+  fromName     String?
+  // Distinct from fromEmail — feeds like NBAA relay mail through a shared
+  // sender address (e.g. "Charter Airmail") but set Reply-To to the real
+  // client/broker. Treated as the effective contact email when present.
+  replyToEmail String?
+  toEmail      String
+  subject      String?
+  bodyText     String
+  bodyHtml     String?
+  receivedAt   DateTime
+
+  // AI triage result
+  classification           String
+  classificationConfidence String? // "high" | "medium" | "low"
+  classificationReason     String?
+  aiProcessedAt            DateTime?
+
+  // Action taken
+  status String @default("processing")
+  // "processing" | "trip_request_created" | "attached_to_quote"
+  // | "logged_as_inquiry" | "discarded" | "needs_review" | "manually_resolved"
+
+  // Links to what was created/matched
+  tripRequestId String?
+  quoteId       String?
+
+  // Human correction if AI misclassified
+  reviewedBy      String? // Clerk user ID
+  reviewedAt      DateTime?
+  correctedAction String?
+
+  createdAt DateTime @default(now())
+}
