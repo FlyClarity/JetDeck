@@ -3694,3 +3694,17 @@ booking.
   "X/Y submitted" per trip, so ops has visibility into what still
   needs entering without an email nudge. Flipping the one boolean back
   restores the old behavior exactly if this changes again.
+
+## Ops nav gets Fleet, Contacts, Settings
+
+Operator: "Ops dashboard needs access to contacts, settings, fleet."
+These already exist under the Sales side nav; Ops previously only had
+Board/Calendar/Trips/Crew, so getting to any of the three meant
+switching back to Sales mode first.
+
+- ~~**Added to `opsItems` — shipped**~~ (`components/app-header.tsx`):
+  Fleet and Contacts/Settings are the same routes the Sales nav
+  already links to (this app has one Fleet/Contacts/Settings, not a
+  separate copy per mode) — Ops just didn't surface them. Fleet stays
+  gated behind the same `showFleet` (non-broker) check the Sales side
+  already uses, consistent with how Fleet is hidden there too.

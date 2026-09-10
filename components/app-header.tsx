@@ -31,9 +31,12 @@ export function AppHeader({
   ];
   const opsItems: { href: string; label: string; badge?: number }[] = [
     { href: "/ops/board", label: "Board" },
+    ...(showFleet ? [{ href: "/fleet", label: "Fleet" }] : []),
     ...(showFleet ? [{ href: "/ops/calendar", label: "Calendar" }] : []),
     { href: "/ops/trips", label: "Trips" },
     { href: "/ops/crew", label: "Crew" },
+    { href: "/contacts", label: "Contacts" },
+    { href: "/settings", label: "Settings" },
   ];
   const items = mode === "sales" ? salesItems : opsItems;
 
