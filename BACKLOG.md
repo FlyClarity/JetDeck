@@ -3779,12 +3779,35 @@ and high-contrast directly over it.
   all when no aircraft is selected on the quote yet (nothing to show).
   Make/model and passenger/YOM/refurbishment specs moved to a plain
   line just below the photo.
-- ~~**Gallery no longer repeats the hero photo — shipped**~~: the
-  existing lower "Aircraft" section (additional photos + amenities)
-  now skips the first photo, since it's already shown large in the new
-  hero — showing the same image twice on one page read as a mistake,
-  not extra care.
+- ~~**Gallery folded into the hero — shipped**~~: the lower "Aircraft"
+  section is amenity badges only now — every photo cycles through the
+  hero carousel (below), so a second gallery repeating the same images
+  would just be showing the client the same photos twice.
 - **Not done**: `/manifest/[token]` (the passenger self-service page)
   has the same narrow container and the same tiny aircraft caption —
   a natural next candidate for the identical treatment, not touched
   this round since it wasn't part of what was reviewed.
+
+## Aircraft hero: carousel + smaller mobile overlay
+
+Two follow-ups on the hero above, from actually looking at it: "make
+the hero section a carousel with the photos of the airplane," and on
+mobile "the tail number and aircraft type tag take up too much of the
+photo."
+
+- ~~**Photo carousel — shipped**~~ (new `components/quote/aircraft-hero.tsx`,
+  split out of `client-page-ui.tsx` and marked `"use client"` since a
+  carousel needs interactive state — everything else on this page
+  stays a server component). Left/right arrow buttons, dot indicators,
+  and touch-swipe support; falls back to the single static photo (or
+  the branded placeholder) when there's only one, with no arrows/dots
+  cluttering a photo that can't go anywhere. The lower "Aircraft"
+  section no longer shows any photos at all — every one of them is now
+  in the carousel, so a separate gallery would only ever repeat what's
+  already shown above.
+- ~~**Smaller overlay on mobile — shipped**~~: the tail number
+  (`text-2xl` → `sm:text-5xl`), category badge, and the gradient
+  padding that makes room for them all shrink down at mobile widths —
+  a 48px tail number and a tall gradient reach were eating a real
+  fraction of a short mobile hero's actual photo. Desktop sizing is
+  unchanged.

@@ -15,7 +15,8 @@ import { crewRoleLabel } from "@/lib/crew";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
-import { SectionHeading, Row, LegItineraryCard, AircraftHero, aircraftLabelFor } from "@/components/quote/client-page-ui";
+import { SectionHeading, Row, LegItineraryCard, aircraftLabelFor } from "@/components/quote/client-page-ui";
+import { AircraftHero } from "@/components/quote/aircraft-hero";
 
 async function getQuoteByToken(token: string) {
   return prisma.quote.findUnique({
@@ -371,8 +372,6 @@ export default async function ClientQuotePage({
   const requestChangesWithToken = requestChanges.bind(null, token);
   const startAchWithToken = startAch.bind(null, token);
 
-  const aircraftLabel = aircraftLabelFor(option);
-
   // Only relevant before the client has committed to anything — once
   // they've requested to book, the pick is locked in and the rest of the
   // flow (operator review, signature, Stripe) proceeds against whatever
@@ -539,43 +538,28 @@ export default async function ClientQuotePage({
           </section>
 
           {(() => {
-            // Own-fleet and brokered aircraft carry the same photos/
-            // amenities shape — show whichever one this option actually has
-            // rather than only ever reading option.aircraft. The first photo
-            // already appears large in the AircraftHero above, so this
-            // gallery only needs the rest — showing the same image twice on
-            // one page reads as a mistake, not as extra care.
+            // Own-fleet and brokered aircraft carry the same amenities
+            // shape — show whichever one this option actually has rather
+            // than only ever reading option.aircraft. Every photo already
+            // cycles through the AircraftHero carousel above, so this
+            // section is amenities only now — repeating the same images in
+            // a second gallery would just be showing the client the same
+            // photos twice.
             const media = option.aircraft ?? option.brokeredAircraft;
-            const galleryPhotos = media?.photos.slice(1) ?? [];
-            if (!media || (galleryPhotos.length === 0 && media.amenities.length === 0)) return null;
+            if (!media || media.amenities.length === 0) return null;
             return (
               <section className="mt-8 sm:mt-11">
                 <SectionHeading>Aircraft</SectionHeading>
-                {galleryPhotos.length > 0 && (
-                  <div className="mt-3 flex gap-2 overflow-x-auto">
-                    {galleryPhotos.map((url) => (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        key={url}
-                        src={url}
-                        alt={aircraftLabel}
-                        className="h-32 w-48 shrink-0 rounded-xl border border-border/70 object-cover"
-                      />
-                    ))}
-                  </div>
-                )}
-                {media.amenities.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {media.amenities.map((a) => (
-                      <span
-                        key={a}
-                        className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground"
-                      >
-                        {amenityLabel(a)}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {media.amenities.map((a) => (
+                    <span
+                      key={a}
+                      className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground"
+                    >
+                      {amenityLabel(a)}
+                    </span>
+                  ))}
+                </div>
               </section>
             );
           })()}
