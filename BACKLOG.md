@@ -3811,3 +3811,16 @@ photo."
   a 48px tail number and a tall gradient reach were eating a real
   fraction of a short mobile hero's actual photo. Desktop sizing is
   unchanged.
+- ~~**Fixed: carousel arrows didn't respond to clicks**~~
+  (`components/quote/aircraft-hero.tsx`): the bottom gradient overlay
+  (tail number + badge) sits later in the DOM than the arrow buttons,
+  so with no explicit stacking it painted on top of them and silently
+  swallowed clicks wherever the two boxes overlapped — e.g. the badge
+  wrapping under the tail number on a narrower photo. Fixed two ways:
+  the overlay is `pointer-events-none` (it has nothing clickable in
+  it, so there's nothing lost) and the arrow buttons got an explicit
+  `z-10`, so this can't silently regress the same way again even if
+  the overlay's content changes later.
+- ~~**"Aircraft" → "Aircraft Amenities" — shipped**~~: the lower
+  section's heading, since it's amenity badges only now that every
+  photo lives in the hero carousel.

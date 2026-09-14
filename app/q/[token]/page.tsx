@@ -549,7 +549,7 @@ export default async function ClientQuotePage({
             if (!media || media.amenities.length === 0) return null;
             return (
               <section className="mt-8 sm:mt-11">
-                <SectionHeading>Aircraft</SectionHeading>
+                <SectionHeading>Aircraft Amenities</SectionHeading>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {media.amenities.map((a) => (
                     <span

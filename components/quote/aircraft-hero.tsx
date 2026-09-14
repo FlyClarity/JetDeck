@@ -126,7 +126,7 @@ export function AircraftHero({
               type="button"
               onClick={() => go(-1)}
               aria-label="Previous photo"
-              className="absolute top-1/2 left-2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55 sm:left-3 sm:h-9 sm:w-9"
+              className="absolute top-1/2 left-2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55 sm:left-3 sm:h-9 sm:w-9"
             >
               <ChevronIcon direction="left" className="h-4 w-4" />
             </button>
@@ -134,7 +134,7 @@ export function AircraftHero({
               type="button"
               onClick={() => go(1)}
               aria-label="Next photo"
-              className="absolute top-1/2 right-2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55 sm:right-3 sm:h-9 sm:w-9"
+              className="absolute top-1/2 right-2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55 sm:right-3 sm:h-9 sm:w-9"
             >
               <ChevronIcon direction="right" className="h-4 w-4" />
             </button>
@@ -144,8 +144,12 @@ export function AircraftHero({
         {/* Kept small and tight to the bottom edge on mobile — this sits on
             top of the photo the client actually wants to look at, so it
             shouldn't compete with it for space the way a larger, taller
-            overlay would on a short mobile hero. */}
-        <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-2 bg-gradient-to-t from-black/70 via-black/30 to-transparent px-3 pt-8 pb-2.5 sm:px-7 sm:pt-20 sm:pb-6">
+            overlay would on a short mobile hero. pointer-events-none since
+            it has nothing clickable in it — without it, this being later
+            in the DOM than the arrow buttons let it silently swallow their
+            clicks whenever the two boxes overlapped (e.g. the badge
+            wrapping under the tail number on a narrower photo). */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-2 bg-gradient-to-t from-black/70 via-black/30 to-transparent px-3 pt-8 pb-2.5 sm:px-7 sm:pt-20 sm:pb-6">
           <span className="text-2xl leading-none font-extrabold tracking-wide text-white [text-shadow:0_1px_12px_rgba(0,0,0,0.35)] sm:text-5xl">
             {media.tailNumber}
           </span>
