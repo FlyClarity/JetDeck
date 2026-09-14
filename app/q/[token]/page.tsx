@@ -15,7 +15,7 @@ import { crewRoleLabel } from "@/lib/crew";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TermsAcceptGate } from "@/components/quote/terms-accept-gate";
-import { SectionHeading, Row, LegItineraryCard, aircraftLabelFor } from "@/components/quote/client-page-ui";
+import { SectionHeading, Row, LegItineraryCard, AircraftHero, aircraftLabelFor } from "@/components/quote/client-page-ui";
 
 async function getQuoteByToken(token: string) {
   return prisma.quote.findUnique({
@@ -409,7 +409,7 @@ export default async function ClientQuotePage({
 
   return (
     <div className="min-h-screen bg-muted/30">
-      <div className="mx-auto w-full max-w-xl px-6 py-16">
+      <div className="mx-auto w-full max-w-[44rem] px-6 py-16">
         <header className="flex items-center gap-3">
           {operator.logoUrl && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -420,7 +420,7 @@ export default async function ClientQuotePage({
           </span>
         </header>
 
-        <div className="mt-6 rounded-2xl border border-border bg-background p-7 shadow-sm sm:p-9">
+        <div className="mt-6 rounded-2xl border border-border bg-background p-8 shadow-sm sm:p-12">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">{quote.quoteNumber}</h1>
@@ -441,8 +441,10 @@ export default async function ClientQuotePage({
             </span>
           </div>
 
+          <AircraftHero option={option} pax={pax} />
+
           {showOptionPicker && (
-            <section className="mt-7">
+            <section className="mt-8 sm:mt-11">
               <SectionHeading>Choose an option</SectionHeading>
               <div className="mt-3 flex flex-col gap-2">
                 {quote.options.map((o) => {
@@ -483,7 +485,7 @@ export default async function ClientQuotePage({
             </section>
           )}
 
-          <section className="mt-7">
+          <section className="mt-8 sm:mt-11">
             <SectionHeading>Itinerary</SectionHeading>
             <div className="mt-3 flex flex-col gap-2">
               {legs.map((leg, i) => {
@@ -534,26 +536,24 @@ export default async function ClientQuotePage({
                 );
               })}
             </div>
-            <p className="mt-3 text-sm text-muted-foreground">
-              {aircraftLabel}
-              {pax !== null && ` · ${pax} passengers`}
-              {option.aircraft?.yearOfManufacture && ` · YOM ${option.aircraft.yearOfManufacture}`}
-              {option.aircraft?.yearOfRefurbishment && ` · YOR ${option.aircraft.yearOfRefurbishment}`}
-            </p>
           </section>
 
           {(() => {
             // Own-fleet and brokered aircraft carry the same photos/
             // amenities shape — show whichever one this option actually has
-            // rather than only ever reading option.aircraft.
+            // rather than only ever reading option.aircraft. The first photo
+            // already appears large in the AircraftHero above, so this
+            // gallery only needs the rest — showing the same image twice on
+            // one page reads as a mistake, not as extra care.
             const media = option.aircraft ?? option.brokeredAircraft;
-            if (!media || (media.photos.length === 0 && media.amenities.length === 0)) return null;
+            const galleryPhotos = media?.photos.slice(1) ?? [];
+            if (!media || (galleryPhotos.length === 0 && media.amenities.length === 0)) return null;
             return (
-              <section className="mt-7">
+              <section className="mt-8 sm:mt-11">
                 <SectionHeading>Aircraft</SectionHeading>
-                {media.photos.length > 0 && (
+                {galleryPhotos.length > 0 && (
                   <div className="mt-3 flex gap-2 overflow-x-auto">
-                    {media.photos.map((url) => (
+                    {galleryPhotos.map((url) => (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         key={url}
@@ -581,7 +581,7 @@ export default async function ClientQuotePage({
           })()}
 
           {isConfirmed && quote.trip && quote.trip.passengers.length > 0 && (
-            <section className="mt-7">
+            <section className="mt-8 sm:mt-11">
               <SectionHeading>Passengers</SectionHeading>
               <div className="mt-3 flex flex-wrap gap-2">
                 {quote.trip.passengers.map((p) => (
@@ -595,7 +595,7 @@ export default async function ClientQuotePage({
           )}
 
           {isConfirmed && quote.trip && quote.trip.crewAssignments.length > 0 && (
-            <section className="mt-7">
+            <section className="mt-8 sm:mt-11">
               <SectionHeading>Crew</SectionHeading>
               <div className="mt-3 flex flex-wrap gap-2">
                 {quote.trip.crewAssignments.map((a) => (
@@ -613,7 +613,7 @@ export default async function ClientQuotePage({
             );
             if (notes.length === 0) return null;
             return (
-              <section className="mt-7">
+              <section className="mt-8 sm:mt-11">
                 <SectionHeading>Notes</SectionHeading>
                 <div className="mt-3 flex flex-col gap-1.5 text-sm">
                   {notes.map((note, i) => (
@@ -627,7 +627,7 @@ export default async function ClientQuotePage({
           })()}
 
           {!isConfirmed && (
-            <section className="mt-7">
+            <section className="mt-8 sm:mt-11">
               <SectionHeading>Pricing</SectionHeading>
               <div className="mt-3 flex flex-col gap-2 text-sm">
                 {legs.map((leg, i) => (
@@ -664,7 +664,7 @@ export default async function ClientQuotePage({
           )}
 
           {termsText && !pendingDecision && quote.status !== "pending_confirmation" && !isConfirmed && (
-            <section className="mt-7">
+            <section className="mt-8 sm:mt-11">
               <SectionHeading>Charter Terms</SectionHeading>
               <div className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-border/70 p-4 text-sm whitespace-pre-wrap text-muted-foreground">
                 {termsText}

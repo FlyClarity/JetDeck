@@ -3750,3 +3750,41 @@ story for a form with nothing saved at all.
   crew member edit form's "Save".
 - ~~**Contacts — shipped**~~ (`app/(app)/contacts/[id]/page.tsx`): the
   contact edit form's "Save Changes".
+
+## Client quote page: wider, roomier, aircraft made prominent
+
+Operator: "the container is a bit small, information feels compact...
+the aircraft information such as tail number are hard to find, that
+should be prominent... needs to be more roomy and luxurious." Colors
+and type stayed exactly as they were — this was a layout/prominence
+pass, not a re-skin. Mocked as a toggleable before/after artifact
+first (desktop and mobile) before touching real code, then refined
+once more after feedback ("tail number still not obvious, pictures
+bigger") into a full-width hero photo with the tail number set large
+and high-contrast directly over it.
+
+- ~~**Wider container + roomier spacing — shipped**~~
+  (`app/q/[token]/page.tsx`): `max-w-xl` (576px) → `max-w-[44rem]`
+  (704px); card padding `p-7 sm:p-9` → `p-8 sm:p-12`; every section's
+  `mt-7` → `mt-8 sm:mt-11`. Itinerary and pricing content untouched —
+  same information, more air around it.
+- ~~**New `AircraftHero` — shipped**~~ (`components/quote/client-page-ui.tsx`):
+  replaces the old muted one-line caption ("Bombardier Challenger 300
+  (N251FT) — Super-Midsize · 9 passengers...") with a full-width photo
+  (first aircraft/brokered-aircraft photo, `object-cover`) and the tail
+  number set large and bold directly over it in a bottom gradient
+  overlay, plus a category badge — right after the header, before
+  anything else. Falls back to a branded gradient + jet glyph when no
+  photo is uploaded yet rather than showing nothing; renders nothing at
+  all when no aircraft is selected on the quote yet (nothing to show).
+  Make/model and passenger/YOM/refurbishment specs moved to a plain
+  line just below the photo.
+- ~~**Gallery no longer repeats the hero photo — shipped**~~: the
+  existing lower "Aircraft" section (additional photos + amenities)
+  now skips the first photo, since it's already shown large in the new
+  hero — showing the same image twice on one page read as a mistake,
+  not extra care.
+- **Not done**: `/manifest/[token]` (the passenger self-service page)
+  has the same narrow container and the same tiny aircraft caption —
+  a natural next candidate for the identical treatment, not touched
+  this round since it wasn't part of what was reviewed.

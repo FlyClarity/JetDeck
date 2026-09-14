@@ -61,6 +61,128 @@ export function aircraftLabelFor(option: {
   return "Aircraft to be confirmed";
 }
 
+// A generic side-profile jet glyph — shown when an aircraft has no photos
+// uploaded yet, so the hero section below still reads as "an aircraft"
+// rather than an empty gradient. Same shape Fleet's own placeholder could
+// reuse later; kept local here since this is its only user today.
+function AircraftGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2.5 1.5V22l4-1 4 1v-1.5L13 19v-5.5l8 2.5z" />
+    </svg>
+  );
+}
+
+// The single most important thing on this page for a client trying to
+// actually find their plane: the tail number. Previously a small muted
+// caption line buried after the itinerary — now a full-width photo (or a
+// branded placeholder when none is uploaded yet) with the tail number set
+// large and high-contrast directly over it, right after the header. Skips
+// rendering entirely when no aircraft is selected yet (nothing to show).
+export function AircraftHero({
+  option,
+  pax,
+}: {
+  option: {
+    aircraft: {
+      make: string;
+      model: string;
+      tailNumber: string;
+      category: string;
+      seats: number;
+      yearOfManufacture: number | null;
+      yearOfRefurbishment: number | null;
+      photos: string[];
+    } | null;
+    brokeredAircraft: {
+      make: string | null;
+      model: string | null;
+      tailNumber: string;
+      category: string | null;
+      seats: number | null;
+      photos: string[];
+    } | null;
+  };
+  pax: number | null;
+}) {
+  const media = option.aircraft ?? option.brokeredAircraft;
+  if (!media) return null;
+
+  const makeModel = option.aircraft
+    ? `${option.aircraft.make} ${option.aircraft.model}`
+    : `${option.brokeredAircraft?.make ?? ""} ${option.brokeredAircraft?.model ?? ""}`.trim();
+  const category = option.aircraft ? option.aircraft.category : option.brokeredAircraft?.category;
+  const seats = option.aircraft ? option.aircraft.seats : option.brokeredAircraft?.seats;
+  const photo = media.photos[0];
+
+  return (
+    <section className="mt-8 sm:mt-11">
+      <div className="relative aspect-[16/9] w-full overflow-hidden rounded-2xl bg-foreground sm:aspect-[2/1]">
+        {photo ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photo} alt={makeModel || media.tailNumber} className="h-full w-full object-cover" />
+        ) : (
+          <div
+            className="flex h-full w-full items-center justify-center"
+            style={{
+              background:
+                "radial-gradient(130% 160% at 12% 8%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 55%)," +
+                "linear-gradient(160deg, var(--foreground), color-mix(in srgb, var(--foreground) 76%, #000 24%))",
+            }}
+          >
+            <AircraftGlyph className="h-[34%] max-h-[220px] w-[34%] max-w-[220px] text-accent/90" />
+          </div>
+        )}
+        <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 bg-gradient-to-t from-black/70 via-black/35 to-transparent px-5 pt-14 pb-4 sm:px-7 sm:pt-20 sm:pb-6">
+          <span className="text-4xl leading-none font-extrabold tracking-wide text-white [text-shadow:0_1px_12px_rgba(0,0,0,0.35)] sm:text-5xl">
+            {media.tailNumber}
+          </span>
+          {category && (
+            <span className="rounded-full bg-accent px-2.5 py-1 text-xs font-bold tracking-wide text-accent-foreground uppercase">
+              {categoryLabel(category)}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        {makeModel && <p className="font-medium">{makeModel}</p>}
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+          {seats !== null && seats !== undefined && (
+            <span>
+              <strong className="font-medium text-foreground">{seats}</strong> passengers
+            </span>
+          )}
+          {pax !== null && (
+            <span>
+              <strong className="font-medium text-foreground">{pax}</strong> traveling
+            </span>
+          )}
+          {option.aircraft?.yearOfManufacture && (
+            <span>
+              YOM <strong className="font-medium text-foreground">{option.aircraft.yearOfManufacture}</strong>
+            </span>
+          )}
+          {option.aircraft?.yearOfRefurbishment && (
+            <span>
+              Refurbished{" "}
+              <strong className="font-medium text-foreground">{option.aircraft.yearOfRefurbishment}</strong>
+            </span>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 type LegEndpoint = {
   timeLabel: string;
   airportName: string;
