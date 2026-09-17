@@ -293,7 +293,13 @@ export default async function ClientQuotePage({
   // back to the live text for quotes sent before this field existed.
   const termsText = quote.termsTextSnapshot ?? operator.termsText;
   const legs = revenueLegsOf(option.itinerary);
-  const pax = tripRequest ? paxCount(tripRequest.legs) : null;
+  // Once a trip exists, its actual passenger manifest is the source of
+  // truth for who's traveling — the client-requested count from intake is
+  // a stale estimate the moment the manifest starts getting filled in
+  // (passengers added/removed, more or fewer than originally asked for).
+  // Only fall back to the requested estimate before a trip exists at all,
+  // since there's no manifest yet to reflect.
+  const pax = quote.trip ? quote.trip.passengers.length : tripRequest ? paxCount(tripRequest.legs) : null;
 
   // Client-facing page, no operator session — query Airport directly
   // (global reference data, not tenant-scoped) rather than going through

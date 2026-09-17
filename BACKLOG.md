@@ -3824,3 +3824,20 @@ photo."
 - ~~**"Aircraft" → "Aircraft Amenities" — shipped**~~: the lower
   section's heading, since it's amenity badges only now that every
   photo lives in the hero carousel.
+
+## Fixed: "traveling" count showed the original request, not the manifest
+
+Operator: "when it shows how many people are traveling it doesn't
+represent what the itinerary actually has loaded, it shows what was
+requested." Correct — the `AircraftHero`'s pax count (`app/q/[token]/page.tsx`)
+was always `paxCount(tripRequest.legs)`, a frozen snapshot of what the
+client asked for at intake. Once a trip exists, the actual passenger
+manifest is the real, ops-maintained answer to "how many are
+traveling" — it can grow, shrink, or just differ from the original ask
+by the time anyone's looking at this page again, and the old code
+never looked at it.
+
+- ~~**Fixed — shipped**~~: `pax` now reads `quote.trip.passengers.length`
+  whenever a trip exists, falling back to the intake-requested count
+  only pre-booking (before there's a trip or a manifest to have an
+  actual count from).
