@@ -113,6 +113,14 @@ changes existing behavior, it only adds new tables and new pages.
   existing app as a prerequisite step would be a large, risky,
   low-value-on-its-own change to do before anything depends on it.
   Widen it as later phases add actions worth auditing.
+- **Open question carried over from earlier ops-brief discussion,
+  never resolved**: should crew qualification/certificate fields be
+  editable by anyone who can already edit Crew today (matches every
+  other model in this app — no role system below "operator admin"
+  exists), or does this need a real Chief-Pilot-restricted permission
+  tier? Building a proper role system is its own small project: decide
+  before this phase ships fields whose accuracy the certificate
+  depends on, not after.
 
 ### Phase 2 — Real flight/duty logging + engine
 *Brief steps ≈27–30 + H, reordered ahead of the crew portal.*
@@ -134,6 +142,15 @@ most. Build it ops-web-entered first:
   per-trip duty-period math is still useful as the *pre-assignment
   estimate* before a flight happens, so keep it for that, not as the
   post-flight record of truth.
+- **Regulatory nuance the accumulator can't solve alone**: the 500/
+  quarter, 800/2-quarter, 1,400/year "all commercial flying" caps
+  (135.261/.267) count hours flown for *any* operator, not just
+  JetDeck-booked trips — `FlightLog` only ever sees the latter. Needs
+  a Chief-Pilot-maintained baseline/adjustment per crew member
+  (self-reported other commercial flying) that JetDeck-tracked hours
+  accrue on top of, not an assumption that all of a pilot's flying
+  goes through this system. Surface it as a field on `CrewMember` or
+  its own small model in Phase 1, read by the accumulator here.
 - `CrewCurrency` + `lib/compliance/currency.ts` (instrument approaches,
   day/night landings/takeoffs) and `TrainingRecord` due-date engine —
   both read the same `FlightLog`/certificate data this phase and Phase
