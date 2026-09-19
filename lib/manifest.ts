@@ -231,7 +231,7 @@ export async function applyPassengerFormUpdate(passengerId: string, formData: Fo
   // all of them.
   const trip = await prisma.trip.findUnique({
     where: { id: target.tripId },
-    select: { quote: { select: { selectedOption: { select: { itinerary: true } } } } },
+    select: { quote: { select: { contactId: true, selectedOption: { select: { itinerary: true } } } } },
   });
   const allLegIndexes = revenueLegsWithIndex(trip?.quote.selectedOption?.itinerary).map((l) => l.index);
   const checkedLegIndexes = formData
@@ -262,13 +262,14 @@ export async function applyPassengerFormUpdate(passengerId: string, formData: Fo
   // special requests) is nice-to-have but shouldn't block a passenger from
   // being considered "done."
   const complete = Boolean(firstName && lastName && dobRaw);
+  const dateOfBirth = dobRaw ? new Date(`${dobRaw}T00:00:00`) : null;
 
   await prisma.passenger.update({
     where: { id: target.id },
     data: {
       firstName: firstName || null,
       lastName: lastName || null,
-      dateOfBirth: dobRaw ? new Date(`${dobRaw}T00:00:00`) : null,
+      dateOfBirth,
       weightLbs: weightRaw ? Number(weightRaw) : null,
       idType,
       idNumber,
@@ -277,6 +278,124 @@ export async function applyPassengerFormUpdate(passengerId: string, formData: Fo
       specialRequests,
       legIndexes,
       submittedAt: complete ? new Date() : target.submittedAt,
+    },
+  });
+
+  // Remembered under the client this passenger flew as a guest of, so ops
+  // doesn't have to retype the same info next time this person books again
+  // — see SavedPassenger's schema comment. Only once there's a complete
+  // name+DOB to key on, and only when this trip actually has a client
+  // attached (an internal trip has no Contact to save under). Best-effort:
+  // never worth failing the passenger save itself over.
+  if (complete && dateOfBirth && trip?.quote.contactId) {
+    try {
+      await prisma.savedPassenger.upsert({
+        where: {
+          operatorId_contactId_firstName_lastName_dateOfBirth: {
+            operatorId: target.operatorId,
+            contactId: trip.quote.contactId,
+            firstName,
+            lastName,
+            dateOfBirth,
+          },
+        },
+        create: {
+          operatorId: target.operatorId,
+          contactId: trip.quote.contactId,
+          firstName: firstName || null,
+          lastName: lastName || null,
+          dateOfBirth,
+          weightLbs: weightRaw ? Number(weightRaw) : null,
+          idType,
+          idNumber,
+          idExpiry: idExpiryRaw ? new Date(`${idExpiryRaw}T00:00:00`) : null,
+          idImageUrl,
+        },
+        update: {
+          weightLbs: weightRaw ? Number(weightRaw) : null,
+          idType,
+          idNumber,
+          idExpiry: idExpiryRaw ? new Date(`${idExpiryRaw}T00:00:00`) : null,
+          idImageUrl,
+        },
+      });
+    } catch (err) {
+      console.error(`Failed to save passenger ${target.id} for reuse`, err);
+    }
+  }
+}
+
+export type SavedPassengerResult = {
+  id: string;
+  name: string;
+  dateOfBirth: Date | null;
+  clientLabel: string | null;
+};
+
+// Operator-wide, not scoped to the trip's own client — the same person can
+// show up as a guest of a different client than the one who's traveled
+// with them before, and ops still wants to find them. `clientLabel` (which
+// contact this particular record is saved under) is shown alongside the
+// result precisely so ops can tell whether it's really the same person or
+// just a name coincidence before picking one.
+export async function searchSavedPassengers(
+  operatorId: string,
+  query: string
+): Promise<SavedPassengerResult[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+
+  const results = await prisma.savedPassenger.findMany({
+    where: {
+      operatorId,
+      OR: [
+        { firstName: { contains: q, mode: "insensitive" } },
+        { lastName: { contains: q, mode: "insensitive" } },
+      ],
+    },
+    include: { contact: { select: { firstName: true, lastName: true } } },
+    orderBy: { updatedAt: "desc" },
+    take: 8,
+  });
+
+  return results.map((r) => ({
+    id: r.id,
+    name: `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "Unnamed",
+    dateOfBirth: r.dateOfBirth,
+    clientLabel: r.contact ? `${r.contact.firstName} ${r.contact.lastName}`.trim() || null : null,
+  }));
+}
+
+// Copies a remembered passenger onto a new trip as its own independent
+// Passenger row — editing it here doesn't rewrite history on any other
+// trip it came from, and completing it (or changing anything) re-saves the
+// SavedPassenger record the normal way via applyPassengerFormUpdate above.
+// Marked already-submitted since the data's already complete; never
+// verified — that's still a real per-trip check ops makes deliberately,
+// not something reusing old data should imply.
+export async function createPassengerFromSaved(
+  operatorId: string,
+  tripId: string,
+  savedPassengerId: string
+): Promise<void> {
+  const saved = await prisma.savedPassenger.findFirst({
+    where: { id: savedPassengerId, operatorId },
+  });
+  if (!saved) return;
+
+  await prisma.passenger.create({
+    data: {
+      operatorId,
+      tripId,
+      firstName: saved.firstName,
+      lastName: saved.lastName,
+      dateOfBirth: saved.dateOfBirth,
+      weightLbs: saved.weightLbs,
+      idType: saved.idType,
+      idNumber: saved.idNumber,
+      idExpiry: saved.idExpiry,
+      idImageUrl: saved.idImageUrl,
+      submittedAt: new Date(),
     },
   });
 }

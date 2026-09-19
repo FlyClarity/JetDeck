@@ -152,6 +152,16 @@ were moved there rather than duplicated.
   aircraft caption instead of the photo-carousel hero. Natural next
   candidate for the identical redesign.
 
+## Passengers & manifests
+
+- **Saved passengers have no manual edit/delete UI**: a record is
+  entirely auto-maintained from completed manifests (see
+  `SavedPassenger` in `prisma/schema.prisma`), so a typo entered once
+  (wrong DOB, misspelled name) sticks around under the Contact's
+  "Saved Passengers" list until another completed manifest happens to
+  reuse the exact same first/last name and overwrites it. Fine as a
+  v1; a correction/delete affordance would close this.
+
 ## Small infrastructure fix
 
 - **`/contacts` is missing from `middleware.ts`'s protected-route

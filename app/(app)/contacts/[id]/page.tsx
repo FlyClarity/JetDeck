@@ -68,6 +68,11 @@ export default async function ContactDetailPage({
   });
   if (!contact) notFound();
 
+  const savedPassengers = await prisma.savedPassenger.findMany({
+    where: { operatorId: operator.id, contactId: contact.id },
+    orderBy: { updatedAt: "desc" },
+  });
+
   const updateWithId = updateContact.bind(null, contact.id);
 
   return (
@@ -155,6 +160,36 @@ export default async function ContactDetailPage({
 
         <SaveButton className="self-start">Save Changes</SaveButton>
       </form>
+
+      <div className="mt-10 border-t border-border pt-6">
+        <h2 className="text-lg font-semibold tracking-tight">Saved Passengers</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Remembered automatically from past manifests, so ops doesn&apos;t have to retype the
+          same info next time this passenger flies with {contact.firstName}.
+        </p>
+        {savedPassengers.length === 0 ? (
+          <p className="mt-4 text-sm text-muted-foreground">
+            No saved passengers yet — these appear once a manifest is completed for a trip
+            booked under this contact.
+          </p>
+        ) : (
+          <ul className="mt-4 flex flex-col gap-2">
+            {savedPassengers.map((p) => (
+              <li
+                key={p.id}
+                className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm"
+              >
+                <span className="font-medium">
+                  {p.firstName} {p.lastName}
+                </span>
+                <span className="text-muted-foreground">
+                  {p.dateOfBirth ? `DOB ${p.dateOfBirth.toLocaleDateString()}` : "DOB —"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

@@ -93,8 +93,9 @@ model Contact {
 
   createdAt  DateTime @default(now())
 
-  tripRequests TripRequest[]
-  quotes       Quote[]
+  tripRequests    TripRequest[]
+  quotes          Quote[]
+  savedPassengers SavedPassenger[]
 }
 
 model Aircraft {
@@ -562,6 +563,41 @@ model Passenger {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// A passenger's info remembered under the client they flew as a guest of,
+// so ops doesn't have to retype the same name/DOB/ID every time the same
+// person books again. Auto-maintained, not manually curated: whenever a
+// trip's own Passenger row is completed (see applyPassengerFormUpdate in
+// lib/manifest.ts) and that trip's Quote has a linked Contact, this table
+// gets upserted from it — no separate "save this passenger" action to
+// remember to click. Keyed per-contact (the same name under two different
+// clients is two rows, not merged — there's no reliable identity match
+// beyond name+DOB, and conflating two different people who happen to share
+// both would be worse than a harmless duplicate), but searchable operator-
+// wide when adding a passenger to a new trip, regardless of which contact
+// it's saved under.
+model SavedPassenger {
+  id         String @id @default(cuid())
+  operatorId String
+  contactId  String?
+  contact    Contact? @relation(fields: [contactId], references: [id])
+
+  firstName   String?
+  lastName    String?
+  dateOfBirth DateTime?
+  weightLbs   Int?
+
+  idType     String?
+  idNumber   String?
+  idExpiry   DateTime?
+  idImageUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([operatorId, contactId, firstName, lastName, dateOfBirth])
+  @@index([operatorId, lastName])
 }
 
 // Tracks which reminder thresholds have already fired for a trip, so the

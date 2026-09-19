@@ -4,13 +4,15 @@ import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
+import { markWireReceived } from "@/lib/booking-server";
 import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
 import { resolveAirportTimezone } from "@/lib/geo";
 import { addHoursAcrossTimezones, departureInstantUtc, to12Hour, tzAbbreviation } from "@/lib/time";
 import { STATUS_LABELS, STATUS_SHORT_LABELS, stagesForFleetSource, isTripPaid } from "@/lib/trip";
 import { crewRoleLabel } from "@/lib/crew";
-import { createManifestForTrip, applyPassengerFormUpdate } from "@/lib/manifest";
+import { createManifestForTrip, applyPassengerFormUpdate, searchSavedPassengers, createPassengerFromSaved } from "@/lib/manifest";
 import { PassengerForm } from "@/components/manifest/passenger-form";
+import { PassengerPicker } from "@/components/manifest/passenger-picker";
 import { evaluateOpsReview, evaluateReleaseReadiness, evaluateBrokeredReleaseReadiness } from "@/lib/ops-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -298,6 +300,33 @@ async function addPassengerOps(tripId: string) {
   revalidatePath(`/ops/trips/${tripId}`);
 }
 
+// Powers the "search saved passengers" picker next to "+ Add Passenger" —
+// operator-wide (see searchSavedPassengers' own comment), not scoped to
+// this trip's own client, since the same person can turn up as a guest of
+// a different client than the one who's flown with them before.
+async function searchSavedPassengersFromOps(tripId: string, query: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return [];
+
+  return searchSavedPassengers(scoped.operator.id, query);
+}
+
+async function addSavedPassengerOps(tripId: string, savedPassengerId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+  const { trip, operator } = scoped;
+
+  const seatCap = trip.quote.selectedOption?.aircraft?.seats ?? trip.quote.selectedOption?.brokeredAircraft?.seats ?? null;
+  if (seatCap !== null && trip.passengers.length >= seatCap) return;
+
+  await createPassengerFromSaved(operator.id, tripId, savedPassengerId);
+  revalidatePath(`/ops/trips/${tripId}`);
+}
+
 // Default wording for the editable message paragraph below — shown as the
 // textarea's placeholder-via-defaultValue so ops sees exactly what would
 // send if they touch nothing, and can tweak it (add a note, adjust the
@@ -436,6 +465,22 @@ async function updateBrokeredCrew(tripId: string, formData: FormData) {
   });
 
   redirect(`/ops/trips/${tripId}?saved=crew`);
+}
+
+// Same shared logic the sales-side quote detail page's "Mark Wire
+// Received" button uses (lib/booking-server.ts) — surfaced here too so
+// ops doesn't need to leave the trip page just to record a wire that
+// showed up. Doesn't touch Trip.status (see that function's own comment)
+// — payment isn't a pipeline stage, just one of evaluateReleaseReadiness's
+// gates, so this can't regress whatever stage the trip is actually in.
+async function markWireReceivedFromOps(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+
+  await markWireReceived(scoped.operator.id, scoped.trip.quoteId);
+  redirect(`/ops/trips/${tripId}?saved=wire-received`);
 }
 
 // Re-verifies the Ops Review checklist server-side before actually
@@ -702,6 +747,21 @@ export default async function TripDetailPage({
           </span>
         </div>
       </div>
+
+      {!paid && trip.quote.paymentMethod === "wire" && !trip.quote.wireConfirmedAt && (
+        <div className="mt-3 flex items-center justify-end">
+          <form action={markWireReceivedFromOps.bind(null, trip.id)}>
+            <ConfirmSubmitButton
+              size="sm"
+              variant="outline"
+              confirmMessage="Confirm the wire payment has actually landed in your account? This marks the trip as paid."
+            >
+              Mark Wire Received
+            </ConfirmSubmitButton>
+          </form>
+        </div>
+      )}
+      <SavedBanner show={saved === "wire-received"} message="Wire payment recorded." />
 
       {stageIndex !== -1 && (
         <div className="mt-6 flex items-start">
@@ -1266,6 +1326,10 @@ export default async function TripDetailPage({
         <div className="flex shrink-0 items-center gap-2">
           {trip.passengers.length > 0 ? (
             <>
+              <PassengerPicker
+                onSearch={searchSavedPassengersFromOps.bind(null, trip.id)}
+                onSelect={addSavedPassengerOps.bind(null, trip.id)}
+              />
               <form action={addPassengerOps.bind(null, trip.id)}>
                 <Button type="submit" size="sm" variant="outline">
                   + Add Passenger

@@ -361,16 +361,18 @@ export async function resendCardHoldLink(operatorId: string, quoteId: string) {
 }
 
 // Called by the operator (a "Mark Wire Received" button on the quote detail
-// page) once a wire payment actually shows up in their account — JetDeck has
-// no bank feed to detect this automatically. Only meaningful for a wire
-// payer: their card hold was always just backup security, not the payment
-// itself, so once the real payment is in hand the hold can be released and
-// the Trip can move to "confirmed" for dispatch/ops purposes. A credit-card
-// payer's hold already IS the payment — nothing to do here for them.
+// page and the ops trip page) once a wire payment actually shows up in
+// their account — JetDeck has no bank feed to detect this automatically.
+// Only meaningful for a wire payer: their card hold was always just backup
+// security, not the payment itself, so once the real payment is in hand the
+// hold can be released. Doesn't touch Trip.status — payment isn't a
+// pipeline stage (see Trip.status's schema comment), just one of
+// evaluateReleaseReadiness's gates via isTripPaid; forcing the trip back to
+// "confirmed" here would silently undo any ops progress already made on a
+// trip sitting in a later stage while payment was still pending.
 export async function markWireReceived(operatorId: string, quoteId: string) {
   const quote = await prisma.quote.findFirst({
     where: { id: quoteId, operatorId },
-    include: { trip: true },
   });
   if (!quote || quote.status !== "accepted") return false;
   if (quote.paymentMethod !== "wire" || quote.wireConfirmedAt) return false;
@@ -386,10 +388,6 @@ export async function markWireReceived(operatorId: string, quoteId: string) {
     where: { id: quote.id },
     data: { wireConfirmedAt: new Date() },
   });
-
-  if (quote.trip) {
-    await prisma.trip.update({ where: { id: quote.trip.id }, data: { status: "confirmed" } });
-  }
 
   return true;
 }
@@ -436,12 +434,13 @@ export async function startAchPayment(quoteId: string): Promise<{ achPaymentUrl:
 // clears (3-5 business days after the client submits it, unlike a card
 // hold's instant authorization) — fully automatic, unlike wire's manual
 // "Mark Wire Received" button, since Stripe itself is the bank feed here.
-// Releases the now-unneeded backup card hold and moves the Trip to
-// "confirmed", same as markWireReceived does for a wire payer.
+// Releases the now-unneeded backup card hold. Doesn't touch Trip.status —
+// see markWireReceived's comment; the same reasoning applies here, and this
+// one firing from a webhook makes an unconditional status reset even more
+// dangerous, since it happens with no human review at all.
 export async function confirmAchPayment(achPaymentIntentId: string) {
   const quote = await prisma.quote.findFirst({
     where: { achPaymentIntentId },
-    include: { trip: true },
   });
   if (!quote || quote.achConfirmedAt) return;
 
@@ -456,10 +455,6 @@ export async function confirmAchPayment(achPaymentIntentId: string) {
     where: { id: quote.id },
     data: { achConfirmedAt: new Date(), achPaymentStatus: "succeeded" },
   });
-
-  if (quote.trip) {
-    await prisma.trip.update({ where: { id: quote.trip.id }, data: { status: "confirmed" } });
-  }
 }
 
 // Shared by both places a pending_confirmation request gets resolved: the
