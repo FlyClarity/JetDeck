@@ -86,22 +86,26 @@ than assuming mobile-first the way the brief's step order does.
 ### Phase 1 — Compliance data foundation
 *Brief steps ≈21, 23–25, reordered; no mobile, no engine logic yet.*
 
-**Status: in progress.** Shipped so far: a lightweight `AuditLog` +
-`logAction()` helper; `CrewMember` extended with a full profile
-(address, emergency contact, employment type, hire/termination) and an
-"other commercial flying" self-reported baseline for Phase 2's
-all-operator hour caps; `CrewCertificate` (additive multi-certificate
-list, alongside the still-unchanged `medicalExpiry`/`trainingExpiry`
-pair) and `CrewQualification` (per-aircraft-category, data-only —
-not yet read by Ops Review) both with CRUD on the crew detail page.
-Also shipped: `AircraftCompliance` (one row per aircraft — hours/cycles,
-OpSpec paragraphs, insurance, registration; a blank row is created
-lazily on first save) and `MaintenanceItem` (manual due/done log, due
-by hours and/or date), both with CRUD on the fleet detail page.
-Remaining: `Document`/`DocumentVersion`/`ManualAcknowledgment`. Edit
-permissions decision: no new role system — same as every other model
-today, anyone who can edit a crew/aircraft record can edit its
-qualifications/certificates/compliance data.
+**Status: complete.** Shipped: a lightweight `AuditLog` + `logAction()`
+helper; `CrewMember` extended with a full profile (address, emergency
+contact, employment type, hire/termination) and an "other commercial
+flying" self-reported baseline for Phase 2's all-operator hour caps;
+`CrewCertificate` (additive multi-certificate list, alongside the
+still-unchanged `medicalExpiry`/`trainingExpiry` pair) and
+`CrewQualification` (per-aircraft-category, data-only — not yet read
+by Ops Review), both with CRUD on the crew detail page;
+`AircraftCompliance` (one row per aircraft — hours/cycles, OpSpec
+paragraphs, insurance, registration; a blank row is created lazily on
+first save) and `MaintenanceItem` (manual due/done log, due by hours
+and/or date), both with CRUD on the fleet detail page; and a new
+`/ops/documents` route (list, add, detail) for `Document`/
+`DocumentVersion`/`ManualAcknowledgment` — version history per
+document, and (for documents flagged as requiring it) a per-active-
+crew-member acknowledgment tracker, recorded as a manual ops override
+until Module A gives crew their own login. Edit permissions decision:
+no new role system — same as every other model today, anyone who can
+edit a crew/aircraft/document record can edit its
+qualifications/certificates/compliance/acknowledgment data.
 
 Pure schema + CRUD, ops-web-only (no crew login required for any of
 this — ops enters and maintains it, same as crew records work today).
@@ -257,9 +261,11 @@ than introducing a new architecture alongside it.
 
 ## Recommended next step
 
-Start with **Phase 1** (compliance data foundation) as its own
-migration and set of CRUD pages — it's the largest single risk
-reduction for the least behavioral change to the app you're already
-running day to day, and every later phase depends on it existing.
-Confirm this ordering (or redirect it) before that migration starts,
-given its size.
+**Phase 1 (compliance data foundation) is complete** — see its status
+note above. Next up is **Phase 2** (real flight/duty logging + engine):
+the regulatory heart of the brief, and the one place accuracy matters
+most. It's a bigger lift than Phase 1 since it involves real behavior
+changes (a new source of truth replacing `Trip.actualBlockHours`/
+`actualFlightHours`, and a pre-assignment check that gets stricter),
+not just additive schema — worth confirming scope/sequencing before
+starting, same as Phase 1 was.

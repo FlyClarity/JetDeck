@@ -73,6 +73,7 @@ model Operator {
   aircraftDowntimes  AircraftDowntime[]
   aircraftCompliance AircraftCompliance[]
   maintenanceItems   MaintenanceItem[]
+  documents          Document[]
 }
 
 model Contact {
@@ -757,9 +758,10 @@ model CrewMember {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  assignments    TripCrewAssignment[]
-  certificates   CrewCertificate[]
-  qualifications CrewQualification[]
+  assignments     TripCrewAssignment[]
+  certificates    CrewCertificate[]
+  qualifications  CrewQualification[]
+  acknowledgments ManualAcknowledgment[]
 }
 
 // A single certificate/rating held by a crew member, each with its own
@@ -947,4 +949,77 @@ model AuditLog {
 
   @@index([operatorId, entityType, entityId])
   @@index([operatorId, createdAt])
+}
+
+// A manual/policy/procedure the operator maintains — the container for its
+// version history (DocumentVersion) and, if it's one crew must sign off
+// on, its acknowledgment trail (ManualAcknowledgment). OPS_BUILD_PLAN.md
+// Phase 1: buildable now even with no crew login (Module A), since ops can
+// record "confirmed with James verbally" as a manual override until crew
+// can self-acknowledge.
+model Document {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+
+  title    String
+  category String? // freeform — e.g. "GOM", "Safety Manual", "SOP" — not an enum, so ops can file whatever the operator's manual structure actually uses
+  requiresAcknowledgment Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions        DocumentVersion[]
+  acknowledgments ManualAcknowledgment[]
+}
+
+// One uploaded revision of a Document — versions accumulate rather than
+// overwrite, so there's a real history of what a crew member acknowledged
+// and when, even after the manual is revised again.
+model DocumentVersion {
+  id         String   @id @default(cuid())
+  operatorId String
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id])
+
+  versionLabel String // freeform — e.g. "Rev 4", "2026-01"
+  fileUrl      String // Vercel Blob URL
+  fileName     String?
+  notes        String?
+
+  uploadedBy String // Clerk user ID
+  createdAt  DateTime @default(now())
+
+  acknowledgments ManualAcknowledgment[]
+
+  @@index([operatorId, documentId])
+}
+
+// A crew member's sign-off on a specific document version. Append-only
+// history (no unique constraint) rather than one row per crew/document —
+// a recurring annual review of the same unchanged version is a real,
+// separate acknowledgment event worth its own timestamp, not an update to
+// a prior one. "method" is always "manual_override" until Module A (crew
+// self-service login) exists to let crew acknowledge on their own account;
+// the field is here now so a real "self" value slots in later without a
+// schema change, not because there's a second value to pick from yet.
+model ManualAcknowledgment {
+  id         String   @id @default(cuid())
+  operatorId String
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id])
+  crewId     String
+  crew       CrewMember @relation(fields: [crewId], references: [id])
+  documentVersionId String?
+  documentVersion   DocumentVersion? @relation(fields: [documentVersionId], references: [id])
+
+  acknowledgedAt DateTime @default(now())
+  method         String   @default("manual_override") // "manual_override" | "self"
+  recordedBy     String // Clerk user ID of the ops user who recorded this
+  notes          String?
+
+  createdAt DateTime @default(now())
+
+  @@index([operatorId, documentId])
+  @@index([operatorId, crewId])
 }

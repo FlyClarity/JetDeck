@@ -35,6 +35,7 @@ export function AppHeader({
     ...(showFleet ? [{ href: "/ops/calendar", label: "Calendar" }] : []),
     { href: "/ops/trips", label: "Trips" },
     { href: "/ops/crew", label: "Crew" },
+    { href: "/ops/documents", label: "Documents" },
     { href: "/contacts", label: "Contacts" },
     { href: "/settings", label: "Settings" },
   ];
