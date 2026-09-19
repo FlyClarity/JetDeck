@@ -657,10 +657,84 @@ model CrewMember {
   medicalExpiry  DateTime?
   trainingExpiry DateTime?
 
+  // Full profile fields — OPS_BUILD_PLAN.md Phase 1. Additive alongside
+  // "active" above rather than a replacement for it: "active" still gates
+  // trip-assignment eligibility everywhere it's already read; these are
+  // HR/reference detail that nothing else in the app depends on yet.
+  address               String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  employmentType        String? // "w2" | "1099" | "contract"
+  hireDate              DateTime?
+  terminationDate       DateTime?
+
+  // Self-reported hours flown for *other* commercial operators, maintained
+  // periodically by the Chief Pilot — not derived from anything JetDeck
+  // tracks. Phase 2's real duty/flight-time accumulator needs this: the
+  // 500/quarter, 800/2-quarter, and 1,400/year "all commercial flying"
+  // caps (135.261/.267) count hours flown for *any* operator, but
+  // FlightLog (Phase 2) only ever sees JetDeck-booked trips. The
+  // accumulator will add its own JetDeck-tracked total on top of whichever
+  // of these baselines is still within its window as of asOf — a flat
+  // running total, not itself rolling, since re-entering it periodically
+  // is the only realistic way to capture flying this app never sees.
+  otherCommercialHoursQuarterly Float?
+  otherCommercialHoursAnnual    Float?
+  otherCommercialHoursAsOf      DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  assignments TripCrewAssignment[]
+  assignments    TripCrewAssignment[]
+  certificates   CrewCertificate[]
+  qualifications CrewQualification[]
+}
+
+// A single certificate/rating held by a crew member, each with its own
+// expiry — additive alongside CrewMember's existing medicalExpiry/
+// trainingExpiry (left as-is; they still drive crewQualificationStatus in
+// lib/crew.ts, unchanged this phase) rather than a replacement for them,
+// so this phase adds no new gating behavior, only a place to track
+// whatever else the operator's manual requires (type ratings, first aid,
+// etc.) that today has nowhere to live at all.
+model CrewCertificate {
+  id         String     @id @default(cuid())
+  operatorId String
+  crewId     String
+  crew       CrewMember @relation(fields: [crewId], references: [id])
+
+  certType   String // freeform — e.g. "medical", "type_rating", "first_aid" — not an enum, so ops can track whatever the operator's manual requires without a schema change
+  certNumber String?
+  issuedAt   DateTime?
+  expiry     DateTime?
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([operatorId, crewId])
+}
+
+// A crew member's sign-off to fly a given aircraft category (matches
+// Aircraft.category's values). Data-only this phase — not yet read by
+// evaluateOpsReview or the pre-assignment check (Phase 2's 8-point check
+// is where per-category qualification actually starts gating anything),
+// so adding it can't change today's Ops Review behavior.
+model CrewQualification {
+  id         String     @id @default(cuid())
+  operatorId String
+  crewId     String
+  crew       CrewMember @relation(fields: [crewId], references: [id])
+
+  category    String // "light" | "midsize" | "super_midsize" | "heavy" | "ultra_long"
+  qualifiedAt DateTime?
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([crewId, category])
+  @@index([operatorId, category])
 }
 
 // roleOnTrip snapshots CrewMember.role at assignment time rather than
@@ -766,4 +840,39 @@ model InboundEmail {
   correctedAction String?
 
   createdAt DateTime @default(now())
+}
+
+// A single append-only record of a compliance-relevant action — see
+// logAction (lib/audit.ts). Deliberately thin per OPS_BUILD_PLAN.md's
+// Phase 1: not middleware wrapping every route in the app, just an
+// explicit call from the handful of new server actions each phase adds
+// where an audit trail actually matters (crew record changes, document
+// uploads, compliance overrides). Widen the call sites as later phases
+// add actions worth auditing, rather than retrofitting every existing
+// route as a Phase 1 prerequisite. Never updated or deleted once written
+// — an audit trail that could be edited after the fact wouldn't mean
+// anything — so there's no operator relation object either, matching
+// other append-only/no-relation models like EmailMessage above.
+model AuditLog {
+  id         String @id @default(cuid())
+  operatorId String
+
+  actorId String // Clerk user ID of whoever performed the action
+
+  // Short verb-object slug, e.g. "crew.certificate.update",
+  // "document.upload" — freeform by design (no enum) since new actions
+  // get added as later phases extend the call sites; not meant to be
+  // exhaustively validated, just grep-able.
+  action     String
+  entityType String // e.g. "CrewMember", "Document"
+  entityId   String
+
+  // Freeform snapshot of what changed — shape varies per action, so this
+  // is deliberately untyped rather than a rigid before/after schema.
+  detail Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([operatorId, entityType, entityId])
+  @@index([operatorId, createdAt])
 }

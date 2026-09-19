@@ -86,6 +86,19 @@ than assuming mobile-first the way the brief's step order does.
 ### Phase 1 — Compliance data foundation
 *Brief steps ≈21, 23–25, reordered; no mobile, no engine logic yet.*
 
+**Status: in progress.** Shipped so far: a lightweight `AuditLog` +
+`logAction()` helper; `CrewMember` extended with a full profile
+(address, emergency contact, employment type, hire/termination) and an
+"other commercial flying" self-reported baseline for Phase 2's
+all-operator hour caps; `CrewCertificate` (additive multi-certificate
+list, alongside the still-unchanged `medicalExpiry`/`trainingExpiry`
+pair) and `CrewQualification` (per-aircraft-category, data-only —
+not yet read by Ops Review) both with CRUD on the crew detail page.
+Remaining: `AircraftCompliance`/`MaintenanceItem`, `Document`/
+`DocumentVersion`/`ManualAcknowledgment`. Edit permissions decision:
+no new role system — same as every other model today, anyone who can
+edit a crew record can edit its qualifications/certificates.
+
 Pure schema + CRUD, ops-web-only (no crew login required for any of
 this — ops enters and maintains it, same as crew records work today).
 Lower risk than it looks despite being a large migration: nothing here
