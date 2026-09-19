@@ -28,9 +28,12 @@ export function parseOptionFromFormData(
   // The client already computes the right number of nights for whichever
   // mode the "returns to base between legs" toggle is in (0 when it's on,
   // since gaps become repositioning legs instead of overnight stays) — no
-  // need to re-derive or override it here.
+  // need to re-derive or override it here. Forced to 0 for brokered
+  // regardless of what's submitted, same as the client form no longer even
+  // showing this section for brokered — there's no "our aircraft away
+  // overnight" cost when it isn't the operator's own aircraft.
   const returnsToHomeBase = formData.get(`${prefix}returnsToHomeBase`) === "on";
-  const overnightNights = Number(formData.get(`${prefix}overnightNights`) ?? 0);
+  const overnightNights = isBrokered ? 0 : Number(formData.get(`${prefix}overnightNights`) ?? 0);
   const overnightFee = overnightNights * defaultOvernightFee;
   const landingFees = Number(formData.get(`${prefix}landingFees`) ?? 0);
   const handlingFees = Number(formData.get(`${prefix}handlingFees`) ?? 0);

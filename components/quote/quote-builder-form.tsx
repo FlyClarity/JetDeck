@@ -815,7 +815,13 @@ function QuoteOptionFields({
     return nights;
   }, [legs]);
 
-  const totalNightsAway = returnsToHomeBase ? 0 : autoNightsAway + (Number(extraNightsAway) || 0);
+  // Brokered options never get this fee: the aircraft isn't the operator's
+  // own, so there's no "our plane sitting away from home base overnight"
+  // cost to recover — whatever the third-party operator charges for an
+  // overnight is already inside the wholesale cost they quoted. A broker
+  // can still add one manually via Additional fees below if the wholesale
+  // quote breaks it out separately.
+  const totalNightsAway = isBrokered || returnsToHomeBase ? 0 : autoNightsAway + (Number(extraNightsAway) || 0);
   const overnightFee = totalNightsAway * defaultOvernightFee;
 
   const legsJson = JSON.stringify(
@@ -1351,8 +1357,11 @@ function QuoteOptionFields({
           </Button>
         </div>
 
-        <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-          {!isBrokered && (
+        {/* Not shown for brokered options at all — see totalNightsAway's
+            comment above: there's no "our aircraft away overnight" cost to
+            calculate when it isn't the operator's own aircraft. */}
+        {!isBrokered && (
+          <div className="flex flex-col gap-2 rounded-md border border-border p-3">
             <div className="flex items-center gap-2">
               <input
                 id={`${namePrefix}returnsToHomeBaseCheckbox`}
@@ -1365,37 +1374,37 @@ function QuoteOptionFields({
                 Aircraft returns to base between each leg (no overnight stays)
               </Label>
             </div>
-          )}
-          {returnsToHomeBase ? (
-            <p className="pl-6 text-sm text-muted-foreground">
-              Repositioning legs added between each leg instead of overnight fees — the aircraft
-              comes home and goes back out for every one.
-            </p>
-          ) : (
-            <div className={cn("flex flex-col gap-2", !isBrokered && "pl-6")}>
-              {autoNightsAway > 0 && (
-                <p className="text-sm text-muted-foreground">
-                  {autoNightsAway} night{autoNightsAway === 1 ? "" : "s"} away calculated from leg
-                  dates
-                </p>
-              )}
-              <Label htmlFor={`${namePrefix}extraNightsAwayInput`}>Additional nights away</Label>
-              <Input
-                id={`${namePrefix}extraNightsAwayInput`}
-                type="number"
-                min={0}
-                step="1"
-                className="w-32"
-                value={extraNightsAway}
-                onChange={(e) => setExtraNightsAway(e.target.value)}
-              />
-              <p className="text-sm text-muted-foreground">
-                {totalNightsAway} night{totalNightsAway === 1 ? "" : "s"} total ×{" "}
-                {formatCurrency(defaultOvernightFee)}/night — rate set in Settings
+            {returnsToHomeBase ? (
+              <p className="pl-6 text-sm text-muted-foreground">
+                Repositioning legs added between each leg instead of overnight fees — the aircraft
+                comes home and goes back out for every one.
               </p>
-            </div>
-          )}
-        </div>
+            ) : (
+              <div className="flex flex-col gap-2 pl-6">
+                {autoNightsAway > 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    {autoNightsAway} night{autoNightsAway === 1 ? "" : "s"} away calculated from leg
+                    dates
+                  </p>
+                )}
+                <Label htmlFor={`${namePrefix}extraNightsAwayInput`}>Additional nights away</Label>
+                <Input
+                  id={`${namePrefix}extraNightsAwayInput`}
+                  type="number"
+                  min={0}
+                  step="1"
+                  className="w-32"
+                  value={extraNightsAway}
+                  onChange={(e) => setExtraNightsAway(e.target.value)}
+                />
+                <p className="text-sm text-muted-foreground">
+                  {totalNightsAway} night{totalNightsAway === 1 ? "" : "s"} total ×{" "}
+                  {formatCurrency(defaultOvernightFee)}/night — rate set in Settings
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-2">
