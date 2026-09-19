@@ -94,10 +94,14 @@ all-operator hour caps; `CrewCertificate` (additive multi-certificate
 list, alongside the still-unchanged `medicalExpiry`/`trainingExpiry`
 pair) and `CrewQualification` (per-aircraft-category, data-only —
 not yet read by Ops Review) both with CRUD on the crew detail page.
-Remaining: `AircraftCompliance`/`MaintenanceItem`, `Document`/
-`DocumentVersion`/`ManualAcknowledgment`. Edit permissions decision:
-no new role system — same as every other model today, anyone who can
-edit a crew record can edit its qualifications/certificates.
+Also shipped: `AircraftCompliance` (one row per aircraft — hours/cycles,
+OpSpec paragraphs, insurance, registration; a blank row is created
+lazily on first save) and `MaintenanceItem` (manual due/done log, due
+by hours and/or date), both with CRUD on the fleet detail page.
+Remaining: `Document`/`DocumentVersion`/`ManualAcknowledgment`. Edit
+permissions decision: no new role system — same as every other model
+today, anyone who can edit a crew/aircraft record can edit its
+qualifications/certificates/compliance data.
 
 Pure schema + CRUD, ops-web-only (no crew login required for any of
 this — ops enters and maintains it, same as crew records work today).

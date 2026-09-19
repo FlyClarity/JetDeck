@@ -5,10 +5,12 @@ import { put, del } from "@vercel/blob";
 import { getTenantContext } from "@/lib/auth";
 import { getCurrentOperator } from "@/lib/operator";
 import { prisma } from "@/lib/prisma";
+import { logAction } from "@/lib/audit";
 import { Button } from "@/components/ui/button";
 import { SaveButton } from "@/components/ui/save-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -105,6 +107,148 @@ async function removeDowntime(aircraftId: string, downtimeId: string) {
   if (!operatorId) return;
 
   await prisma.aircraftDowntime.deleteMany({ where: { id: downtimeId, aircraftId, operatorId } });
+  revalidatePath(`/fleet/${aircraftId}`);
+}
+
+// AircraftCompliance is one row per aircraft — upsert rather than a
+// separate create/update pair, since the form always shows a single
+// section whether or not a row exists yet (see AircraftCompliance's
+// schema comment: a blank row isn't created until ops actually fills
+// this in). Data-only this phase — nothing reads it yet.
+async function updateAircraftCompliance(aircraftId: string, formData: FormData) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+  const aircraft = await prisma.aircraft.findFirst({ where: { id: aircraftId, operatorId } });
+  if (!aircraft) return;
+
+  const airframeHoursRaw = String(formData.get("airframeHours") ?? "");
+  const airframeCyclesRaw = String(formData.get("airframeCycles") ?? "");
+  const engineNotes = String(formData.get("engineNotes") ?? "").trim() || null;
+  const opSpecs = String(formData.get("opSpecs") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const insuranceExpiryRaw = String(formData.get("insuranceExpiry") ?? "");
+  const registrationExpiryRaw = String(formData.get("registrationExpiry") ?? "");
+
+  const data = {
+    airframeHours: airframeHoursRaw ? Number(airframeHoursRaw) : null,
+    airframeCycles: airframeCyclesRaw ? Number(airframeCyclesRaw) : null,
+    engineNotes,
+    hoursAsOf: airframeHoursRaw || airframeCyclesRaw || engineNotes ? new Date() : null,
+    opSpecs,
+    insuranceCarrier: String(formData.get("insuranceCarrier") ?? "").trim() || null,
+    insurancePolicyNumber: String(formData.get("insurancePolicyNumber") ?? "").trim() || null,
+    insuranceExpiry: insuranceExpiryRaw ? new Date(`${insuranceExpiryRaw}T00:00:00`) : null,
+    registrationExpiry: registrationExpiryRaw ? new Date(`${registrationExpiryRaw}T00:00:00`) : null,
+    notes: String(formData.get("complianceNotes") ?? "").trim() || null,
+  };
+
+  const compliance = await prisma.aircraftCompliance.upsert({
+    where: { aircraftId },
+    create: { operatorId, aircraftId, ...data },
+    update: data,
+  });
+
+  await logAction({
+    operatorId,
+    action: "aircraft.compliance.update",
+    entityType: "AircraftCompliance",
+    entityId: compliance.id,
+    detail: { aircraftId },
+  });
+
+  revalidatePath(`/fleet/${aircraftId}`);
+}
+
+async function addMaintenanceItem(aircraftId: string, formData: FormData) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+  const aircraft = await prisma.aircraft.findFirst({ where: { id: aircraftId, operatorId } });
+  if (!aircraft) return;
+
+  const title = String(formData.get("title") ?? "").trim();
+  if (!title) return;
+  const dueAtHoursRaw = String(formData.get("dueAtHours") ?? "");
+  const dueAtDateRaw = String(formData.get("dueAtDate") ?? "");
+
+  const item = await prisma.maintenanceItem.create({
+    data: {
+      operatorId,
+      aircraftId,
+      title,
+      dueAtHours: dueAtHoursRaw ? Number(dueAtHoursRaw) : null,
+      dueAtDate: dueAtDateRaw ? new Date(`${dueAtDateRaw}T00:00:00`) : null,
+      notes: String(formData.get("notes") ?? "").trim() || null,
+    },
+  });
+
+  await logAction({
+    operatorId,
+    action: "aircraft.maintenance_item.create",
+    entityType: "MaintenanceItem",
+    entityId: item.id,
+    detail: { aircraftId, title },
+  });
+
+  revalidatePath(`/fleet/${aircraftId}`);
+}
+
+async function completeMaintenanceItem(aircraftId: string, itemId: string, formData: FormData) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+  const item = await prisma.maintenanceItem.findFirst({
+    where: { id: itemId, aircraftId, operatorId },
+  });
+  if (!item) return;
+
+  const completedAtHoursRaw = String(formData.get("completedAtHours") ?? "");
+
+  await prisma.maintenanceItem.update({
+    where: { id: itemId },
+    data: {
+      completedAt: new Date(),
+      completedAtHours: completedAtHoursRaw ? Number(completedAtHoursRaw) : null,
+    },
+  });
+
+  await logAction({
+    operatorId,
+    action: "aircraft.maintenance_item.complete",
+    entityType: "MaintenanceItem",
+    entityId: itemId,
+    detail: { aircraftId, title: item.title },
+  });
+
+  revalidatePath(`/fleet/${aircraftId}`);
+}
+
+async function deleteMaintenanceItem(aircraftId: string, itemId: string) {
+  "use server";
+
+  const operatorId = await getScopedOperatorId();
+  if (!operatorId) return;
+  const item = await prisma.maintenanceItem.findFirst({
+    where: { id: itemId, aircraftId, operatorId },
+  });
+  if (!item) return;
+
+  await prisma.maintenanceItem.delete({ where: { id: itemId } });
+
+  await logAction({
+    operatorId,
+    action: "aircraft.maintenance_item.delete",
+    entityType: "MaintenanceItem",
+    entityId: itemId,
+    detail: { aircraftId, title: item.title },
+  });
+
   revalidatePath(`/fleet/${aircraftId}`);
 }
 
@@ -232,7 +376,11 @@ export default async function EditAircraftPage({
 
   const aircraft = await prisma.aircraft.findFirst({
     where: { id, operatorId: operator.id },
-    include: { downtimes: { orderBy: { startDate: "asc" } } },
+    include: {
+      downtimes: { orderBy: { startDate: "asc" } },
+      compliance: true,
+      maintenanceItems: { orderBy: { createdAt: "desc" } },
+    },
   });
 
   if (!aircraft) {
@@ -245,6 +393,10 @@ export default async function EditAircraftPage({
   const removePhotoWithId = removePhoto.bind(null, aircraft.id);
   const setCoverPhotoWithId = setCoverPhoto.bind(null, aircraft.id);
   const addDowntimeWithId = addDowntime.bind(null, aircraft.id);
+  const updateComplianceWithId = updateAircraftCompliance.bind(null, aircraft.id);
+  const addMaintenanceItemWithId = addMaintenanceItem.bind(null, aircraft.id);
+  const openMaintenanceItems = aircraft.maintenanceItems.filter((i) => !i.completedAt);
+  const completedMaintenanceItems = aircraft.maintenanceItems.filter((i) => i.completedAt);
 
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-10">
@@ -497,6 +649,235 @@ export default async function EditAircraftPage({
           <div className="flex flex-1 flex-col gap-1.5">
             <Label htmlFor="reason">Reason</Label>
             <Input id="reason" name="reason" placeholder="e.g. 100-hour inspection" className="h-9" />
+          </div>
+          <Button type="submit" size="sm" variant="outline">
+            Add
+          </Button>
+        </form>
+      </div>
+
+      <div className="mt-8 flex flex-col gap-4 rounded-md border border-border p-4">
+        <div>
+          <p className="text-sm font-medium">Compliance</p>
+          <p className="text-xs text-muted-foreground">
+            Reference data only for now — nothing reads this yet.
+          </p>
+        </div>
+        <form action={updateComplianceWithId} className="flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="airframeHours">Airframe hours</Label>
+              <Input
+                id="airframeHours"
+                name="airframeHours"
+                type="number"
+                step="0.1"
+                min="0"
+                defaultValue={aircraft.compliance?.airframeHours ?? ""}
+                className="h-9"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="airframeCycles">Airframe cycles</Label>
+              <Input
+                id="airframeCycles"
+                name="airframeCycles"
+                type="number"
+                min="0"
+                defaultValue={aircraft.compliance?.airframeCycles ?? ""}
+                className="h-9"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="engineNotes">Engine hours/cycles</Label>
+            <Input
+              id="engineNotes"
+              name="engineNotes"
+              placeholder="e.g. Engine 1: 2,400 hrs / 1,200 cycles; Engine 2: 2,380 / 1,190"
+              defaultValue={aircraft.compliance?.engineNotes ?? ""}
+              className="h-9"
+            />
+          </div>
+          {aircraft.compliance?.hoursAsOf && (
+            <p className="text-xs text-muted-foreground">
+              Hours last updated {aircraft.compliance.hoursAsOf.toLocaleDateString()}.
+            </p>
+          )}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="opSpecs">OpSpec paragraphs</Label>
+            <Input
+              id="opSpecs"
+              name="opSpecs"
+              placeholder="Comma-separated, e.g. A056, B034"
+              defaultValue={aircraft.compliance?.opSpecs.join(", ") ?? ""}
+              className="h-9"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="insuranceCarrier">Insurance carrier</Label>
+              <Input
+                id="insuranceCarrier"
+                name="insuranceCarrier"
+                defaultValue={aircraft.compliance?.insuranceCarrier ?? ""}
+                className="h-9"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="insurancePolicyNumber">Policy number</Label>
+              <Input
+                id="insurancePolicyNumber"
+                name="insurancePolicyNumber"
+                defaultValue={aircraft.compliance?.insurancePolicyNumber ?? ""}
+                className="h-9"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="insuranceExpiry">Insurance expires</Label>
+              <Input
+                id="insuranceExpiry"
+                name="insuranceExpiry"
+                type="date"
+                defaultValue={
+                  aircraft.compliance?.insuranceExpiry
+                    ? aircraft.compliance.insuranceExpiry.toISOString().slice(0, 10)
+                    : ""
+                }
+                className="h-9"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="registrationExpiry">Registration expires</Label>
+              <Input
+                id="registrationExpiry"
+                name="registrationExpiry"
+                type="date"
+                defaultValue={
+                  aircraft.compliance?.registrationExpiry
+                    ? aircraft.compliance.registrationExpiry.toISOString().slice(0, 10)
+                    : ""
+                }
+                className="h-9"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="complianceNotes">Notes</Label>
+            <Textarea
+              id="complianceNotes"
+              name="complianceNotes"
+              rows={2}
+              defaultValue={aircraft.compliance?.notes ?? ""}
+            />
+          </div>
+          <Button type="submit" size="sm" variant="outline" className="self-start">
+            Save Compliance
+          </Button>
+        </form>
+      </div>
+
+      <div className="mt-8 flex flex-col gap-3 rounded-md border border-border p-4">
+        <div>
+          <p className="text-sm font-medium">Maintenance</p>
+          <p className="text-xs text-muted-foreground">
+            Manually tracked inspections/ADs — due by hours, by date, or both. Not the same as
+            Downtime above (an unavailability window); this is just a due/done log.
+          </p>
+        </div>
+
+        {openMaintenanceItems.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {openMaintenanceItems.map((item) => (
+              <form
+                key={item.id}
+                action={completeMaintenanceItem.bind(null, aircraft.id, item.id)}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3 text-sm"
+              >
+                <div>
+                  <p className="font-medium">{item.title}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {item.dueAtDate ? `Due ${item.dueAtDate.toLocaleDateString()}` : ""}
+                    {item.dueAtDate && item.dueAtHours ? " · " : ""}
+                    {item.dueAtHours ? `Due at ${item.dueAtHours} hrs` : ""}
+                    {!item.dueAtDate && !item.dueAtHours ? "No due date/hours set" : ""}
+                    {item.notes ? ` · ${item.notes}` : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    name="completedAtHours"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    placeholder="Hours at completion"
+                    className="h-8 w-40 text-sm"
+                  />
+                  <Button type="submit" size="sm" variant="outline">
+                    Mark Complete
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    variant="ghost"
+                    formAction={deleteMaintenanceItem.bind(null, aircraft.id, item.id)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </form>
+            ))}
+          </div>
+        )}
+
+        {completedMaintenanceItems.length > 0 && (
+          <details className="text-sm">
+            <summary className="cursor-pointer text-muted-foreground">
+              {completedMaintenanceItems.length} completed
+            </summary>
+            <div className="mt-2 flex flex-col gap-2">
+              {completedMaintenanceItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between gap-3 rounded-md border border-border p-3 text-sm"
+                >
+                  <div>
+                    <p className="font-medium">{item.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Completed {item.completedAt!.toLocaleDateString()}
+                      {item.completedAtHours ? ` at ${item.completedAtHours} hrs` : ""}
+                      {item.notes ? ` · ${item.notes}` : ""}
+                    </p>
+                  </div>
+                  <form action={deleteMaintenanceItem.bind(null, aircraft.id, item.id)}>
+                    <Button type="submit" size="sm" variant="ghost">
+                      Remove
+                    </Button>
+                  </form>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+
+        <form action={addMaintenanceItemWithId} className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-1 flex-col gap-1.5">
+            <Label htmlFor="title">Item</Label>
+            <Input id="title" name="title" placeholder="e.g. 100-hour inspection" required className="h-9" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="dueAtDate">Due date</Label>
+            <Input id="dueAtDate" name="dueAtDate" type="date" className="h-9" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="dueAtHours">Due at hours</Label>
+            <Input id="dueAtHours" name="dueAtHours" type="number" step="0.1" min="0" className="h-9 w-32" />
+          </div>
+          <div className="flex flex-1 flex-col gap-1.5">
+            <Label htmlFor="maintenanceNotes">Notes</Label>
+            <Input id="maintenanceNotes" name="notes" className="h-9" />
           </div>
           <Button type="submit" size="sm" variant="outline">
             Add

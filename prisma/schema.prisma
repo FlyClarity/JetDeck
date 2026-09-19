@@ -71,6 +71,8 @@ model Operator {
   inboundEmails      InboundEmail[]
   crewMembers        CrewMember[]
   aircraftDowntimes  AircraftDowntime[]
+  aircraftCompliance AircraftCompliance[]
+  maintenanceItems   MaintenanceItem[]
 }
 
 model Contact {
@@ -129,6 +131,8 @@ model Aircraft {
 
   quoteOptions QuoteOption[]
   downtimes    AircraftDowntime[]
+  compliance   AircraftCompliance?
+  maintenanceItems MaintenanceItem[]
 }
 
 // A scheduled or ongoing maintenance window — the Ops Review checklist's
@@ -150,6 +154,74 @@ model AircraftDowntime {
   reason    String?
 
   createdAt DateTime @default(now())
+}
+
+// One row per aircraft — hours/cycles, OpSpec, insurance, and registration
+// reference data. OPS_BUILD_PLAN.md Phase 1: data-only, manually entered
+// and manually kept current; nothing reads this yet to gate anything (that
+// starts once Phase 3's discrepancy/AOG work and later phases need it).
+// Kept as its own table rather than columns on Aircraft so this phase's
+// migration stays purely additive — no existing Aircraft row needs a
+// backfill, a blank compliance row is created lazily the first time ops
+// fills the form in.
+model AircraftCompliance {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  aircraftId String   @unique
+  aircraft   Aircraft @relation(fields: [aircraftId], references: [id])
+
+  airframeHours  Float?
+  airframeCycles Int?
+  // Freeform for now (e.g. "Engine 1: 2,400 hrs / 1,200 cycles; Engine 2:
+  // 2,380 / 1,190") rather than a structured per-engine model — engine
+  // count varies by airframe and nothing downstream parses this yet, so a
+  // rigid schema here would be speculative. Revisit if a later phase
+  // actually needs to compute against individual engine totals.
+  engineNotes String?
+  hoursAsOf   DateTime? // when airframeHours/airframeCycles/engineNotes were last updated
+
+  // OpSpec paragraph letters this aircraft operates under — freeform list,
+  // not a fixed enum, since these vary by operator/authorization.
+  opSpecs String[] @default([])
+
+  insuranceCarrier      String?
+  insurancePolicyNumber String?
+  insuranceExpiry       DateTime?
+
+  registrationExpiry DateTime?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// A manually-tracked maintenance item (an inspection, an AD, a scheduled
+// overhaul) — due by hours, by date, or both, marked complete when done.
+// Distinct from AircraftDowntime (a date-ranged unavailability window
+// that's already read by Ops Review) and from the richer squawk/MEL
+// Discrepancy model Phase 3 adds: this is a simple due/done log, no
+// lifecycle or AOG enforcement. CAMP CSV import is an explicit Phase-1.5
+// nice-to-have, not built here — manual entry only for now.
+model MaintenanceItem {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id])
+  aircraftId String
+  aircraft   Aircraft @relation(fields: [aircraftId], references: [id])
+
+  title            String
+  dueAtHours       Float?
+  dueAtDate        DateTime?
+  completedAt      DateTime?
+  completedAtHours Float?
+  notes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([operatorId, aircraftId])
 }
 
 // Reference data for flight-time/distance calculations. Empty until a real
