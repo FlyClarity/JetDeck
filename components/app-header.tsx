@@ -1,16 +1,75 @@
 "use client";
 
+import { useEffect, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/command-palette";
 
+// Fleet, Calendar, Contacts, and Settings appear in both salesItems and
+// opsItems below — genuinely shared pages, not owned by either side. The
+// mode shouldn't flip just because their URL happens to fall on one side
+// or the other (Fleet/Contacts/Settings aren't under /ops, Calendar is) —
+// that used to yank someone from Ops into Sales (or vice versa) the moment
+// they opened one, discarding the context they were just in. See NAV_MODE_KEY.
+const SHARED_PATHS = ["/fleet", "/contacts", "/settings", "/ops/calendar"];
+function isSharedPath(pathname: string) {
+  return SHARED_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+// localStorage (a per-browser convenience, not data) holds whichever mode
+// was last derived from a non-shared page, read back on a shared one.
+// useSyncExternalStore rather than a plain useEffect+setState — it's the
+// correct tool for mirroring an external store into React state without
+// the extra render pass or SSR/hydration mismatch a naive read would cause
+// (server has no localStorage, so getServerSnapshot fixes the value it
+// renders with up front instead of guessing). subscribe also picks up
+// another tab changing the mode, via the standard "storage" event, plus a
+// same-tab custom event since "storage" deliberately never fires in the
+// tab that made the write.
+const NAV_MODE_KEY = "jetdeck:navMode";
+const NAV_MODE_EVENT = "jetdeck:navmode-changed";
+
+function readNavMode(): "sales" | "ops" | null {
+  try {
+    const stored = window.localStorage.getItem(NAV_MODE_KEY);
+    return stored === "sales" || stored === "ops" ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeNavMode(mode: "sales" | "ops") {
+  try {
+    window.localStorage.setItem(NAV_MODE_KEY, mode);
+    window.dispatchEvent(new Event(NAV_MODE_EVENT));
+  } catch {
+    // localStorage can throw (private browsing, blocked storage) — a
+    // shared page just falls back to defaulting to Sales.
+  }
+}
+
+function subscribeToNavMode(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener(NAV_MODE_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(NAV_MODE_EVENT, callback);
+  };
+}
+
+function getNavModeServerSnapshot() {
+  return null;
+}
+
 // Shared by both (app) and (ops) layouts — previously each had its own
 // near-duplicate horizontal header. The Sales/Ops split ("mode") is derived
-// straight from the current pathname rather than tracked as separate state
-// — /ops(.*) is the only thing that means "Ops" — which also drives the
-// switcher's active side.
+// from the current pathname on a page that's exclusively one side or the
+// other — /ops(.*) (minus the shared Calendar route) means Ops, everything
+// else means Sales — and that choice is remembered so a shared page can
+// show whichever side the person was last actually working in, instead of
+// guessing wrong from its own URL.
 export function AppHeader({
   needsReviewCount = 0,
   showFleet = true,
@@ -19,7 +78,15 @@ export function AppHeader({
   showFleet?: boolean;
 }) {
   const pathname = usePathname();
-  const mode: "sales" | "ops" = pathname.startsWith("/ops") ? "ops" : "sales";
+  const shared = isSharedPath(pathname);
+  const derivedMode: "sales" | "ops" = pathname.startsWith("/ops") ? "ops" : "sales";
+  const storedMode = useSyncExternalStore(subscribeToNavMode, readNavMode, getNavModeServerSnapshot);
+
+  useEffect(() => {
+    if (!shared) writeNavMode(derivedMode);
+  }, [shared, derivedMode]);
+
+  const mode: "sales" | "ops" = shared ? (storedMode ?? "sales") : derivedMode;
 
   const salesItems: { href: string; label: string; badge?: number }[] = [
     { href: "/dashboard", label: "Dashboard" },
