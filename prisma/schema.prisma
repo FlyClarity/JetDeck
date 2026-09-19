@@ -336,12 +336,23 @@ model Quote {
   // accurate even if the operator changes ccProcessingFeePercent afterward.
   cardHoldAmount Float?
 
-  // Set by the operator (Mark Wire Received, on the quote detail page) once
-  // an actual wire payment shows up — the trigger that flips the linked
-  // Trip to "confirmed" and releases the backup card hold, since it's no
-  // longer needed. Stays null for a credit-card payer (their card hold IS
-  // the payment) and for cash-on-account (no hold to release).
+  // Set by the operator (Mark Wire Received, on the quote/trip detail pages)
+  // once an actual wire payment shows up — releases the backup card hold,
+  // since it's no longer needed. Doesn't touch Trip.status (see isTripPaid
+  // in lib/trip.ts and markWireReceived's own comment in
+  // lib/booking-server.ts — payment isn't a pipeline stage). Stays null for
+  // a credit-card payer (their card hold IS the payment) and for
+  // cash-on-account (no hold to release).
   wireConfirmedAt DateTime?
+
+  // Set by the operator (Mark Paid Manually, on the quote/trip detail
+  // pages) for a quote with no paymentMethod on file at all — i.e. one
+  // booked before online payment tracking existed here, so there's no
+  // wire/ACH/card-hold trail to confirm against. A manual escape hatch
+  // only: markPaymentReceivedManually (lib/booking-server.ts) refuses to
+  // set this once paymentMethod is actually populated, so it can't be used
+  // to bypass a real Stripe-tracked payment.
+  paidManuallyAt DateTime?
 
   // Stripe
   stripePaymentIntentId String?

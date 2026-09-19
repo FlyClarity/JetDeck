@@ -81,9 +81,11 @@ export function isTripPaid(quote: {
   cardHoldStatus: string | null;
   wireConfirmedAt: Date | null;
   achConfirmedAt: Date | null;
+  paidManuallyAt: Date | null;
   contact?: { paymentTerms: string | null } | null;
 }): boolean {
   if (quote.contact?.paymentTerms === "cash_on_account") return true;
+  if (quote.paidManuallyAt) return true;
   if (quote.paymentMethod === "credit_card") return quote.cardHoldStatus === "captured";
   if (quote.paymentMethod === "wire") return !!quote.wireConfirmedAt;
   if (quote.paymentMethod === "ach") return !!quote.achConfirmedAt;

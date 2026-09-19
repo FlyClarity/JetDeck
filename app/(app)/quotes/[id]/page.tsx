@@ -10,6 +10,7 @@ import {
   declinePendingBookingForOperator,
   resendCardHoldLink,
   markWireReceived,
+  markPaymentReceivedManually,
 } from "@/lib/booking-server";
 import { parseOptionFromFormData, parseOptionCount } from "@/lib/quote-option-server";
 import { getAirportsByIcao } from "@/lib/airport-server";
@@ -320,6 +321,20 @@ async function markWireReceivedAction(id: string) {
   redirect(`/quotes/${id}`);
 }
 
+// For a quote with no paymentMethod on file at all — booked before online
+// payment tracking existed here. See markPaymentReceivedManually's own
+// comment (lib/booking-server.ts) for the guardrail against using this to
+// bypass a real Stripe-tracked payment.
+async function markPaidManuallyAction(id: string) {
+  "use server";
+
+  const scoped = await getScopedQuote(id);
+  if (!scoped) return;
+  await markPaymentReceivedManually(scoped.operator.id, id);
+
+  redirect(`/quotes/${id}`);
+}
+
 export default async function QuotePage({
   params,
 }: {
@@ -515,6 +530,7 @@ export default async function QuotePage({
   const declinePendingBookingWithId = declinePendingBooking.bind(null, quote.id);
   const resendCardHoldWithId = resendCardHold.bind(null, quote.id);
   const markWireReceivedWithId = markWireReceivedAction.bind(null, quote.id);
+  const markPaidManuallyWithId = markPaidManuallyAction.bind(null, quote.id);
   const sendFollowUpMessageWithId = sendFollowUpMessage.bind(null, quote.id);
   const clientLink = `${await getAppUrl()}/q/${quote.token}`;
 
@@ -740,7 +756,7 @@ export default async function QuotePage({
             {quote.paymentMethod === "wire" && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {quote.wireConfirmedAt
-                  ? `Wire received ${quote.wireConfirmedAt.toLocaleString()} — trip confirmed.`
+                  ? `Wire received ${quote.wireConfirmedAt.toLocaleString()}.`
                   : "Awaiting wire payment."}
               </p>
             )}
@@ -754,7 +770,7 @@ export default async function QuotePage({
             {quote.paymentMethod === "ach" && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {quote.achConfirmedAt
-                  ? `ACH payment received ${quote.achConfirmedAt.toLocaleString()} — trip confirmed.`
+                  ? `ACH payment received ${quote.achConfirmedAt.toLocaleString()}.`
                   : quote.achPaymentStatus === "processing"
                     ? "ACH payment processing (typically clears in a few business days)."
                     : quote.achPaymentStatus === "failed"
@@ -771,6 +787,20 @@ export default async function QuotePage({
                   </Button>
                 </form>
               )}
+            {!quote.paymentMethod && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {quote.paidManuallyAt
+                  ? `Marked paid manually ${quote.paidManuallyAt.toLocaleString()} — no payment method on file (likely booked before online payment tracking existed).`
+                  : "No payment method on file — likely booked before online payment tracking existed. Mark paid manually once you've confirmed payment some other way."}
+              </p>
+            )}
+            {!quote.paymentMethod && !quote.paidManuallyAt && (
+              <form action={markPaidManuallyWithId} className="mt-2">
+                <Button type="submit" variant="outline" size="sm">
+                  Mark Paid Manually
+                </Button>
+              </form>
+            )}
           </div>
 
           {quote.conflictWarning && (

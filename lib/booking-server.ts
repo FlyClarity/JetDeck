@@ -392,6 +392,27 @@ export async function markWireReceived(operatorId: string, quoteId: string) {
   return true;
 }
 
+// Called by the operator (a "Mark Paid Manually" button on the quote detail
+// page and the ops trip page) for a quote that has no paymentMethod on file
+// at all — one booked before online payment tracking existed here, so
+// there's no wire/ACH/card-hold trail to confirm against. Requires
+// paymentMethod to still be unset as a guardrail: it can't be used to
+// bypass a real Stripe-tracked payment that just hasn't confirmed yet.
+export async function markPaymentReceivedManually(operatorId: string, quoteId: string) {
+  const quote = await prisma.quote.findFirst({
+    where: { id: quoteId, operatorId },
+  });
+  if (!quote || quote.status !== "accepted") return false;
+  if (quote.paymentMethod || quote.paidManuallyAt) return false;
+
+  await prisma.quote.update({
+    where: { id: quote.id },
+    data: { paidManuallyAt: new Date() },
+  });
+
+  return true;
+}
+
 // Called from a "Pay via ACH" button on /q/[token] once the client is back
 // from authorizing their (still-required) backup card hold — can't be
 // bundled into the same Checkout Session as the hold since a session

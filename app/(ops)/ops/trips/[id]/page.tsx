@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
-import { markWireReceived } from "@/lib/booking-server";
+import { markWireReceived, markPaymentReceivedManually } from "@/lib/booking-server";
 import { revenueLegsOf, revenueLegsWithIndex, legDate, mapsSearchUrl, type StoredLeg } from "@/lib/itinerary";
 import { resolveAirportTimezone } from "@/lib/geo";
 import { addHoursAcrossTimezones, departureInstantUtc, to12Hour, tzAbbreviation } from "@/lib/time";
@@ -483,6 +483,22 @@ async function markWireReceivedFromOps(tripId: string) {
   redirect(`/ops/trips/${tripId}?saved=wire-received`);
 }
 
+// Same shared logic the sales-side quote detail page's "Mark Paid
+// Manually" button uses (lib/booking-server.ts) — for a trip booked before
+// online payment tracking existed here, so there's no wire/ACH/card-hold
+// trail on the quote to confirm against. markPaymentReceivedManually
+// refuses to run once paymentMethod is actually set, so this can't be used
+// to skip a real Stripe-tracked payment.
+async function markPaidManuallyFromOps(tripId: string) {
+  "use server";
+
+  const scoped = await getScopedTrip(tripId);
+  if (!scoped) return;
+
+  await markPaymentReceivedManually(scoped.operator.id, scoped.trip.quoteId);
+  redirect(`/ops/trips/${tripId}?saved=paid-manually`);
+}
+
 // Re-verifies the Ops Review checklist server-side before actually
 // advancing the stage — never trusts that the button was disabled
 // correctly client-side, since this is the one transition in the trip
@@ -761,7 +777,21 @@ export default async function TripDetailPage({
           </form>
         </div>
       )}
+      {!paid && !trip.quote.paymentMethod && (
+        <div className="mt-3 flex items-center justify-end">
+          <form action={markPaidManuallyFromOps.bind(null, trip.id)}>
+            <ConfirmSubmitButton
+              size="sm"
+              variant="outline"
+              confirmMessage="This trip has no online payment on file (likely booked before JetDeck tracked payments). Confirm you've verified payment was received some other way — this marks the trip as paid."
+            >
+              Mark Paid Manually
+            </ConfirmSubmitButton>
+          </form>
+        </div>
+      )}
       <SavedBanner show={saved === "wire-received"} message="Wire payment recorded." />
+      <SavedBanner show={saved === "paid-manually"} message="Trip marked as paid." />
 
       {stageIndex !== -1 && (
         <div className="mt-6 flex items-start">
